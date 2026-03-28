@@ -10,6 +10,7 @@ import (
 type RAM struct {
 	base uint32
 	data []byte
+	mmu  *MemoryConfig
 }
 
 func NewRAM(base, size uint32) *RAM {
@@ -31,45 +32,116 @@ func (r *RAM) Bytes() []byte {
 	return r.data
 }
 
+func (r *RAM) SetMemoryConfig(mmu *MemoryConfig) {
+	r.mmu = mmu
+}
+
 func (r *RAM) Contains(address uint32) bool {
-	return address >= r.base && address < r.base+uint32(len(r.data))
+	limit := uint32(len(r.data))
+	if r.mmu != nil {
+		limit = r.mmu.LogicalSize()
+	}
+	return address >= r.base && address < r.base+limit
 }
 
 func (r *RAM) WaitStates(m68kemu.Size, uint32) uint32 {
 	return 0
 }
 
-func (r *RAM) rangeCheck(address uint32, size m68kemu.Size) bool {
-	end := address + uint32(size) - 1
-	return address >= r.base && end < r.base+uint32(len(r.data))
-}
-
 func (r *RAM) Read(size m68kemu.Size, address uint32) (uint32, error) {
-	if !r.rangeCheck(address, size) {
-		return 0, m68kemu.BusError(address)
-	}
-
-	offset := address - r.base
 	switch size {
 	case m68kemu.Byte:
+		offset, err := r.translate(address)
+		if err != nil {
+			return 0, err
+		}
 		return uint32(r.data[offset]), nil
 	case m68kemu.Word:
-		return uint32(readUint16BE(r.data, offset)), nil
+		hi, err := r.translate(address)
+		if err != nil {
+			return 0, err
+		}
+		lo, err := r.translate(address + 1)
+		if err != nil {
+			return 0, err
+		}
+		return uint32(r.data[hi])<<8 | uint32(r.data[lo]), nil
 	case m68kemu.Long:
-		return readUint32BE(r.data, offset), nil
+		b0, err := r.translate(address)
+		if err != nil {
+			return 0, err
+		}
+		b1, err := r.translate(address + 1)
+		if err != nil {
+			return 0, err
+		}
+		b2, err := r.translate(address + 2)
+		if err != nil {
+			return 0, err
+		}
+		b3, err := r.translate(address + 3)
+		if err != nil {
+			return 0, err
+		}
+		return uint32(r.data[b0])<<24 |
+			uint32(r.data[b1])<<16 |
+			uint32(r.data[b2])<<8 |
+			uint32(r.data[b3]), nil
 	default:
 		return 0, fmt.Errorf("unsupported RAM read size %d", size)
 	}
 }
 
-func (r *RAM) Write(size m68kemu.Size, address uint32, value uint32) error {
-	if !r.rangeCheck(address, size) {
-		return m68kemu.BusError(address)
-	}
+func (r *RAM) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+	return r.Read(size, address)
+}
 
-	offset := address - r.base
-	writeBySize(r.data, offset, size, value)
-	return nil
+func (r *RAM) Write(size m68kemu.Size, address uint32, value uint32) error {
+	switch size {
+	case m68kemu.Byte:
+		offset, err := r.translate(address)
+		if err != nil {
+			return err
+		}
+		r.data[offset] = byte(value)
+		return nil
+	case m68kemu.Word:
+		hi, err := r.translate(address)
+		if err != nil {
+			return err
+		}
+		lo, err := r.translate(address + 1)
+		if err != nil {
+			return err
+		}
+		r.data[hi] = byte(value >> 8)
+		r.data[lo] = byte(value)
+		return nil
+	case m68kemu.Long:
+		b0, err := r.translate(address)
+		if err != nil {
+			return err
+		}
+		b1, err := r.translate(address + 1)
+		if err != nil {
+			return err
+		}
+		b2, err := r.translate(address + 2)
+		if err != nil {
+			return err
+		}
+		b3, err := r.translate(address + 3)
+		if err != nil {
+			return err
+		}
+		r.data[b0] = byte(value >> 24)
+		r.data[b1] = byte(value >> 16)
+		r.data[b2] = byte(value >> 8)
+		r.data[b3] = byte(value)
+		return nil
+	default:
+		return fmt.Errorf("unsupported RAM write size %d", size)
+	}
 }
 
 func (r *RAM) LoadAt(address uint32, payload []byte) error {
@@ -77,7 +149,7 @@ func (r *RAM) LoadAt(address uint32, payload []byte) error {
 		return nil
 	}
 	end := address + uint32(len(payload)) - 1
-	if !r.Contains(address) || !r.Contains(end) {
+	if address < r.base || end >= r.base+uint32(len(r.data)) {
 		return m68kemu.BusError(address)
 	}
 
@@ -86,5 +158,30 @@ func (r *RAM) LoadAt(address uint32, payload []byte) error {
 }
 
 func (r *RAM) Reset() {
+	// The 68000 RESET instruction resets external devices but does not erase
+	// system RAM on an Atari ST. Keep RAM contents intact for warm-reset paths.
+}
+
+func (r *RAM) ColdReset() {
 	clear(r.data)
+}
+
+func (r *RAM) translate(address uint32) (uint32, error) {
+	if address < r.base {
+		return 0, m68kemu.BusError(address)
+	}
+
+	logical := address - r.base
+	if r.mmu != nil {
+		offset, ok := r.mmu.TranslateAddress(logical)
+		if !ok || offset >= uint32(len(r.data)) {
+			return 0, m68kemu.BusError(address)
+		}
+		return offset, nil
+	}
+
+	if logical >= uint32(len(r.data)) {
+		return 0, m68kemu.BusError(address)
+	}
+	return logical, nil
 }

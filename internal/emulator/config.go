@@ -15,6 +15,8 @@ type Config struct {
 	Fullscreen bool
 	Headless   bool
 	Trace      string
+	TraceStart uint32
+	TraceEnd   uint32
 	RAMSize    uint32
 	ClockHz    uint64
 	FrameHz    uint64
@@ -22,10 +24,12 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Scale:   2,
-		RAMSize: DefaultRAMSize,
-		ClockHz: DefaultClockHz,
-		FrameHz: DefaultFrameHz,
+		Scale:      2,
+		TraceStart: bootTraceStart,
+		TraceEnd:   bootTraceEnd,
+		RAMSize:    DefaultRAMSize,
+		ClockHz:    DefaultClockHz,
+		FrameHz:    DefaultFrameHz,
 	}
 }
 

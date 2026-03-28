@@ -55,6 +55,10 @@ func (r *ROM) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	return r.readAtOffset(size, offset)
 }
 
+func (r *ROM) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+	return r.Read(size, address)
+}
+
 func (r *ROM) readAtOffset(size m68kemu.Size, offset uint32) (uint32, error) {
 	if offset+uint32(size) > uint32(len(r.data)) {
 		return 0, m68kemu.BusError(offset)
@@ -105,11 +109,19 @@ func (o *OverlayROM) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	return o.rom.readAtOffset(size, address)
 }
 
+func (o *OverlayROM) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+	return o.Read(size, address)
+}
+
 func (o *OverlayROM) Write(size m68kemu.Size, address uint32, value uint32) error {
 	return o.ram.Write(size, address, value)
 }
 
 func (o *OverlayROM) Reset() {
+	// A CPU RESET should not remap the boot ROM over low memory again.
+}
+
+func (o *OverlayROM) ColdReset() {
 	o.enabled = true
 }
 
@@ -127,14 +139,32 @@ func (o *OverlayROM) Enabled() bool {
 
 const memoryConfigBase = 0xFF8000
 
+const (
+	mmuBankSize128K = 128 * 1024
+	mmuBankSize512K = 512 * 1024
+	mmuBankSize2M   = 2 * 1024 * 1024
+)
+
 // MemoryConfig lets ROM disable its reset-time low-memory overlay.
 type MemoryConfig struct {
-	overlay *OverlayROM
-	value   byte
+	overlay      *OverlayROM
+	value        byte
+	ramBank0Size uint32
+	ramBank1Size uint32
+	mmuBank0Size uint32
+	mmuBank1Size uint32
 }
 
-func NewMemoryConfig(overlay *OverlayROM) *MemoryConfig {
-	return &MemoryConfig{overlay: overlay}
+func NewMemoryConfig(overlay *OverlayROM, ramSize uint32) *MemoryConfig {
+	bank0, bank1, value := physicalBanksForRAM(ramSize)
+	m := &MemoryConfig{
+		overlay:      overlay,
+		value:        value,
+		ramBank0Size: bank0,
+		ramBank1Size: bank1,
+	}
+	m.setValue(value)
+	return m
 }
 
 func (m *MemoryConfig) Contains(address uint32) bool {
@@ -148,8 +178,19 @@ func (m *MemoryConfig) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	return uint32(m.value), nil
 }
 
+func (m *MemoryConfig) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+	return m.Read(size, address)
+}
+
 func (m *MemoryConfig) Write(size m68kemu.Size, address uint32, value uint32) error {
-	m.value = byte(value)
+	switch size {
+	case m68kemu.Byte:
+		m.setValue(byte(value))
+	case m68kemu.Word:
+		m.setValue(byte(value))
+	default:
+		m.setValue(byte(value))
+	}
 	if address == memoryConfigBase+1 || size == m68kemu.Word {
 		m.overlay.Disable()
 	}
@@ -157,6 +198,124 @@ func (m *MemoryConfig) Write(size m68kemu.Size, address uint32, value uint32) er
 }
 
 func (m *MemoryConfig) Reset() {
-	m.value = 0
+	// A CPU RESET does not restore the MMU power-on bank configuration.
+}
+
+func (m *MemoryConfig) ColdReset() {
+	m.setValue(physicalConfigValue(m.ramBank0Size, m.ramBank1Size))
 	m.overlay.Enable()
+}
+
+func (m *MemoryConfig) LogicalSize() uint32 {
+	size := m.mmuBank0Size + m.mmuBank1Size
+	if size == 0 {
+		return m.ramBank0Size + m.ramBank1Size
+	}
+	return size
+}
+
+func (m *MemoryConfig) TranslateAddress(address uint32) (uint32, bool) {
+	if address >= m.LogicalSize() {
+		return 0, false
+	}
+
+	bankStart := uint32(0)
+	ramBankSize := m.ramBank0Size
+	mmuBankSize := m.mmuBank0Size
+	if address >= m.mmuBank0Size {
+		bankStart = m.ramBank0Size
+		ramBankSize = m.ramBank1Size
+		mmuBankSize = m.mmuBank1Size
+	}
+	if ramBankSize == 0 || mmuBankSize == 0 {
+		return 0, false
+	}
+
+	translated := translateSTBank(address, ramBankSize, mmuBankSize)
+	return bankStart + translated, true
+}
+
+func (m *MemoryConfig) setValue(value byte) {
+	m.value = value
+	m.mmuBank0Size = mmuBankSize((value >> 2) & 0x03)
+	m.mmuBank1Size = mmuBankSize(value & 0x03)
+}
+
+func mmuBankSize(code byte) uint32 {
+	switch code {
+	case 0:
+		return mmuBankSize128K
+	case 1:
+		return mmuBankSize512K
+	case 2:
+		return mmuBankSize2M
+	default:
+		return 0
+	}
+}
+
+func physicalBanksForRAM(ramSize uint32) (uint32, uint32, byte) {
+	switch ramSize {
+	case 256 * 1024:
+		return mmuBankSize128K, mmuBankSize128K, 0x00
+	case 1024 * 1024:
+		return mmuBankSize512K, mmuBankSize512K, 0x05
+	case 4 * 1024 * 1024:
+		return mmuBankSize2M, mmuBankSize2M, 0x0A
+	default:
+		return ramSize, 0, 0
+	}
+}
+
+func physicalConfigValue(bank0, bank1 uint32) byte {
+	return byte(mmuBankCode(bank0)<<2 | mmuBankCode(bank1))
+}
+
+func mmuBankCode(size uint32) byte {
+	switch size {
+	case mmuBankSize128K:
+		return 0
+	case mmuBankSize512K:
+		return 1
+	case mmuBankSize2M:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func translateSTBank(address, ramBankSize, mmuBankSize uint32) uint32 {
+	var translated uint32
+
+	switch ramBankSize {
+	case mmuBankSize2M:
+		switch mmuBankSize {
+		case mmuBankSize2M:
+			translated = address
+		case mmuBankSize512K:
+			translated = ((address & 0xFFC00) << 1) | (address & 0x7FF)
+		default:
+			translated = ((address & 0x7FE00) << 2) | (address & 0x7FF)
+		}
+	case mmuBankSize512K:
+		switch mmuBankSize {
+		case mmuBankSize2M:
+			translated = ((address & 0xFF800) >> 1) | (address & 0x3FF)
+		case mmuBankSize512K:
+			translated = address
+		default:
+			translated = ((address & 0x3FE00) << 1) | (address & 0x3FF)
+		}
+	default:
+		switch mmuBankSize {
+		case mmuBankSize2M:
+			translated = ((address & 0x7F800) >> 2) | (address & 0x1FF)
+		case mmuBankSize512K:
+			translated = ((address & 0x3FC00) >> 1) | (address & 0x1FF)
+		default:
+			translated = address
+		}
+	}
+
+	return translated & (ramBankSize - 1)
 }

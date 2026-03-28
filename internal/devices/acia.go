@@ -3,19 +3,21 @@ package devices
 import "github.com/jenska/m68kemu"
 
 const (
-	aciaBase = 0xFFFC00
-	aciaSize = 4
+	aciaBase        = 0xFFFC00
+	aciaChannelSize = 4
+	aciaChannelCt   = 2
+	aciaSize        = aciaChannelSize * aciaChannelCt
 )
 
 // ACIA fronts the IKBD as a memory-mapped serial interface.
 type ACIA struct {
 	ikbd     *IKBD
-	control  byte
-	status   byte
-	data     byte
+	control  [aciaChannelCt]byte
+	status   [aciaChannelCt]byte
+	data     [aciaChannelCt]byte
 	pending  []Interrupt
 	vector   uint8
-	rxLoaded bool
+	rxLoaded [aciaChannelCt]bool
 }
 
 func NewACIA(ikbd *IKBD) *ACIA {
@@ -36,22 +38,25 @@ func (a *ACIA) WaitStates(m68kemu.Size, uint32) uint32 {
 }
 
 func (a *ACIA) Reset() {
-	a.control = 0
-	a.status = 0x02
-	a.data = 0
+	for i := 0; i < aciaChannelCt; i++ {
+		a.control[i] = 0
+		a.status[i] = 0x02
+		a.data[i] = 0
+		a.rxLoaded[i] = false
+	}
 	a.pending = a.pending[:0]
-	a.rxLoaded = false
 }
 
 func (a *ACIA) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	a.pollIKBD()
-	switch address - aciaBase {
+	channel := aciaChannelIndex(address)
+	switch (address - aciaBase) % aciaChannelSize {
 	case 0, 1:
-		return uint32(a.status), nil
+		return uint32(a.status[channel]), nil
 	case 2, 3:
-		value := a.data
-		a.rxLoaded = false
-		a.status &^= 0x01
+		value := a.data[channel]
+		a.rxLoaded[channel] = false
+		a.status[channel] &^= 0x81
 		a.pollIKBD()
 		return uint32(value), nil
 	default:
@@ -60,11 +65,18 @@ func (a *ACIA) Read(size m68kemu.Size, address uint32) (uint32, error) {
 }
 
 func (a *ACIA) Write(size m68kemu.Size, address uint32, value uint32) error {
-	switch address - aciaBase {
+	channel := aciaChannelIndex(address)
+	switch (address - aciaBase) % aciaChannelSize {
 	case 0, 1:
-		a.control = byte(value)
+		a.control[channel] = byte(value)
+		if a.control[channel]&0x03 == 0x03 {
+			a.status[channel] = 0x02
+			a.rxLoaded[channel] = false
+		}
 	case 2, 3:
-		a.ikbd.HandleCommand(byte(value))
+		if channel == 0 {
+			a.ikbd.HandleCommand(byte(value))
+		}
 	}
 	a.pollIKBD()
 	return nil
@@ -84,16 +96,23 @@ func (a *ACIA) DrainInterrupts() []Interrupt {
 }
 
 func (a *ACIA) pollIKBD() {
-	if a.rxLoaded || !a.ikbd.HasData() {
+	if a.rxLoaded[0] || !a.ikbd.HasData() {
 		return
 	}
 	value, ok := a.ikbd.ReadByte()
 	if !ok {
 		return
 	}
-	a.data = value
-	a.rxLoaded = true
-	a.status |= 0x01
-	vector := a.vector
-	a.pending = append(a.pending, Interrupt{Level: 2, Vector: &vector})
+	a.data[0] = value
+	a.rxLoaded[0] = true
+	a.status[0] |= 0x01
+	if a.control[0]&0x80 != 0 {
+		a.status[0] |= 0x80
+		vector := a.vector
+		a.pending = append(a.pending, Interrupt{Level: 2, Vector: &vector})
+	}
+}
+
+func aciaChannelIndex(address uint32) uint32 {
+	return (address - aciaBase) / aciaChannelSize
 }

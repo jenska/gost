@@ -4,7 +4,6 @@ import "github.com/jenska/m68kemu"
 
 const (
 	shifterBase       = 0xFF8200
-	shifterBaseEnd    = 0xFF8261
 	paletteBase       = 0xFF8240
 	paletteRegisterCt = 16
 )
@@ -14,7 +13,6 @@ type Shifter struct {
 	ram          *RAM
 	baseHigh     byte
 	baseMid      byte
-	baseLow      byte
 	resolution   byte
 	palette      [paletteRegisterCt]uint16
 	framebuffer  []byte
@@ -34,10 +32,12 @@ func NewShifter(ram *RAM) *Shifter {
 }
 
 func (s *Shifter) Contains(address uint32) bool {
-	if address >= shifterBase && address < shifterBaseEnd {
+	switch address {
+	case 0xFF8201, 0xFF8203, 0xFF8260:
 		return true
+	default:
+		return address >= paletteBase && address < paletteBase+paletteRegisterCt*2
 	}
-	return address >= paletteBase && address < paletteBase+paletteRegisterCt*2
 }
 
 func (s *Shifter) WaitStates(m68kemu.Size, uint32) uint32 {
@@ -47,7 +47,6 @@ func (s *Shifter) WaitStates(m68kemu.Size, uint32) uint32 {
 func (s *Shifter) Reset() {
 	s.baseHigh = 0
 	s.baseMid = 0
-	s.baseLow = 0
 	s.resolution = 0
 	for i := range s.palette {
 		s.palette[i] = 0
@@ -64,8 +63,6 @@ func (s *Shifter) Read(size m68kemu.Size, address uint32) (uint32, error) {
 		return uint32(s.baseHigh), nil
 	case address == 0xFF8203:
 		return uint32(s.baseMid), nil
-	case address == 0xFF820D:
-		return uint32(s.baseLow), nil
 	case address == 0xFF8260:
 		return uint32(s.resolution), nil
 	case address >= paletteBase && address < paletteBase+paletteRegisterCt*2:
@@ -85,14 +82,16 @@ func (s *Shifter) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	}
 }
 
+func (s *Shifter) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+	return s.Read(size, address)
+}
+
 func (s *Shifter) Write(size m68kemu.Size, address uint32, value uint32) error {
 	switch {
 	case address == 0xFF8201:
 		s.baseHigh = byte(value)
 	case address == 0xFF8203:
 		s.baseMid = byte(value)
-	case address == 0xFF820D:
-		s.baseLow = byte(value)
 	case address == 0xFF8260:
 		s.resolution = byte(value) & 0x03
 	case address >= paletteBase && address < paletteBase+paletteRegisterCt*2:
@@ -122,7 +121,7 @@ func (s *Shifter) Dimensions() (int, int) {
 }
 
 func (s *Shifter) ScreenBase() uint32 {
-	return uint32(s.baseHigh)<<16 | uint32(s.baseMid)<<8 | uint32(s.baseLow)
+	return uint32(s.baseHigh)<<16 | uint32(s.baseMid)<<8
 }
 
 func (s *Shifter) Render(cpuCycles uint64) bool {
@@ -143,6 +142,8 @@ func (s *Shifter) Render(cpuCycles uint64) bool {
 		s.renderLow()
 	case 1:
 		s.renderMedium()
+	case 2:
+		s.renderHigh()
 	default:
 		s.renderUnsupported()
 	}
@@ -161,19 +162,28 @@ func (s *Shifter) currentDimensions() (int, int) {
 }
 
 func (s *Shifter) renderLow() {
-	base := s.ScreenBase() - s.ram.Base()
+	base := s.ScreenBase()
 	stride := uint32(160)
 	for y := 0; y < 200; y++ {
 		line := base + uint32(y)*stride
 		for group := 0; group < 20; group++ {
 			offset := line + uint32(group*8)
-			if int(offset+7) >= len(s.ram.data) {
+			p0, ok := s.readVideoWord(offset)
+			if !ok {
 				continue
 			}
-			p0 := readUint16BE(s.ram.data, offset)
-			p1 := readUint16BE(s.ram.data, offset+2)
-			p2 := readUint16BE(s.ram.data, offset+4)
-			p3 := readUint16BE(s.ram.data, offset+6)
+			p1, ok := s.readVideoWord(offset + 2)
+			if !ok {
+				continue
+			}
+			p2, ok := s.readVideoWord(offset + 4)
+			if !ok {
+				continue
+			}
+			p3, ok := s.readVideoWord(offset + 6)
+			if !ok {
+				continue
+			}
 			for bit := 0; bit < 16; bit++ {
 				mask := uint16(1 << (15 - bit))
 				index := 0
@@ -196,17 +206,20 @@ func (s *Shifter) renderLow() {
 }
 
 func (s *Shifter) renderMedium() {
-	base := s.ScreenBase() - s.ram.Base()
+	base := s.ScreenBase()
 	stride := uint32(160)
 	for y := 0; y < 200; y++ {
 		line := base + uint32(y)*stride
 		for group := 0; group < 40; group++ {
 			offset := line + uint32(group*4)
-			if int(offset+3) >= len(s.ram.data) {
+			p0, ok := s.readVideoWord(offset)
+			if !ok {
 				continue
 			}
-			p0 := readUint16BE(s.ram.data, offset)
-			p1 := readUint16BE(s.ram.data, offset+2)
+			p1, ok := s.readVideoWord(offset + 2)
+			if !ok {
+				continue
+			}
 			for bit := 0; bit < 16; bit++ {
 				mask := uint16(1 << (15 - bit))
 				index := 0
@@ -217,6 +230,29 @@ func (s *Shifter) renderMedium() {
 					index |= 2
 				}
 				s.writePixel(group*16+bit, y, s.palette[index])
+			}
+		}
+	}
+}
+
+func (s *Shifter) renderHigh() {
+	base := s.ScreenBase()
+	stride := uint32(80)
+	for y := 0; y < 400; y++ {
+		line := base + uint32(y)*stride
+		for group := 0; group < 40; group++ {
+			offset := line + uint32(group*2)
+			pixels, ok := s.readVideoWord(offset)
+			if !ok {
+				continue
+			}
+			for bit := 0; bit < 16; bit++ {
+				mask := uint16(1 << (15 - bit))
+				if pixels&mask != 0 {
+					s.writeMonoPixel(group*16+bit, y, 0x00)
+					continue
+				}
+				s.writeMonoPixel(group*16+bit, y, 0xFF)
 			}
 		}
 	}
@@ -243,4 +279,27 @@ func (s *Shifter) writePixel(x, y int, colorValue uint16) {
 	s.framebuffer[offset+1] = g
 	s.framebuffer[offset+2] = b
 	s.framebuffer[offset+3] = 0xFF
+}
+
+func (s *Shifter) writeMonoPixel(x, y int, value byte) {
+	if x < 0 || x >= s.width || y < 0 || y >= s.height {
+		return
+	}
+	offset := (y*s.width + x) * 4
+	s.framebuffer[offset] = value
+	s.framebuffer[offset+1] = value
+	s.framebuffer[offset+2] = value
+	s.framebuffer[offset+3] = 0xFF
+}
+
+func (s *Shifter) readVideoWord(address uint32) (uint16, bool) {
+	hi, err := s.ram.translate(address)
+	if err != nil {
+		return 0, false
+	}
+	lo, err := s.ram.translate(address + 1)
+	if err != nil {
+		return 0, false
+	}
+	return uint16(s.ram.data[hi])<<8 | uint16(s.ram.data[lo]), true
 }

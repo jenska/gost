@@ -5,6 +5,10 @@ import "github.com/jenska/m68kemu"
 const (
 	mfpBase = 0xFFFA00
 	mfpSize = 0x40
+	defaultMFPHostClockHz = 8_000_000
+	// Timer C divide-by-64 with data 192 is the ST's 200 Hz system timer,
+	// which implies a 2.4576 MHz MFP timer input clock.
+	mfpTimerInputHz = 2_457_600
 
 	mfpGPIP  = 0x01
 	mfpAER   = 0x03
@@ -43,15 +47,20 @@ type mfpTimer struct {
 
 // MFP models the STF's 68901 interrupt controller with timer-backed IRQs.
 type MFP struct {
-	registers    [mfpSize]byte
-	vectorBase   uint8
-	softwareEOI  bool
-	timers       [4]mfpTimer
-	serialBuffer byte
+	registers      [mfpSize]byte
+	vectorBase     uint8
+	softwareEOI    bool
+	timers         [4]mfpTimer
+	serialBuffer   byte
+	hostClockHz    uint64
+	clockRemainder uint64
 }
 
-func NewMFP() *MFP {
-	m := &MFP{}
+func NewMFP(hostClockHz uint64) *MFP {
+	if hostClockHz == 0 {
+		hostClockHz = defaultMFPHostClockHz
+	}
+	m := &MFP{hostClockHz: hostClockHz}
 	m.Reset()
 	return m
 }
@@ -74,6 +83,7 @@ func (m *MFP) Reset() {
 	m.timers[2] = mfpTimer{channel: 5, dataReg: mfpTCDR}
 	m.timers[3] = mfpTimer{channel: 4, dataReg: mfpTDDR}
 	m.serialBuffer = 0
+	m.clockRemainder = 0
 }
 
 func (m *MFP) Read(size m68kemu.Size, address uint32) (uint32, error) {
@@ -103,13 +113,20 @@ func (m *MFP) Write(size m68kemu.Size, address uint32, value uint32) error {
 }
 
 func (m *MFP) Advance(cycles uint64) {
+	m.clockRemainder += cycles * mfpTimerInputHz
+	ticks := m.clockRemainder / m.hostClockHz
+	m.clockRemainder %= m.hostClockHz
+	if ticks == 0 {
+		return
+	}
+
 	for i := range m.timers {
 		timer := &m.timers[i]
 		if !timer.enabled || timer.prescaler == 0 {
 			continue
 		}
 
-		remaining := cycles
+		remaining := ticks
 		for remaining >= timer.counter && timer.counter > 0 {
 			remaining -= timer.counter
 			timer.counter = uint64(m.timerReloadValue(timer.dataReg)) * timer.prescaler

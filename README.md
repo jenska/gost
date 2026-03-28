@@ -1,5 +1,9 @@
 # GoST
 
+<p align="center">
+  <img src="assets/media/gost.png" alt="GoST logo" width="240">
+</p>
+
 GoST is an Atari ST emulator in Go built around [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu) for Motorola 68000 CPU emulation.
 
 ## Status
@@ -25,7 +29,8 @@ This is not yet a complete Atari ST emulator that boots real TOS to the GEM desk
 - Minimal MFP timer and interrupt support
 - Minimal IKBD/ACIA keyboard and mouse event path
 - Simplified sector-based floppy controller with `.st` image support
-- CPU trace option for bring-up and debugging
+- CPU and boot trace options for bring-up and debugging
+- Headless framebuffer dump to PNG for boot inspection
 
 ## Project Layout
 
@@ -68,6 +73,24 @@ make headless
 go run ./cmd/gost --headless --frames 300
 ```
 
+Headless boot inspection with a PNG dump:
+
+```bash
+go run ./cmd/gost --headless --frames 60 --trace boot --dump-frame /tmp/gost-boot.png
+```
+
+Verbose headless boot inspection:
+
+```bash
+go run ./cmd/gost --headless --frames 20 --trace boot-verbose
+```
+
+Late-boot trace inspection in a custom PC range:
+
+```bash
+go run ./cmd/gost --headless --frames 20 --trace boot-verbose --trace-start 0xE16780 --trace-end 0xE16820
+```
+
 With a floppy image:
 
 ```bash
@@ -97,7 +120,10 @@ go run ./cmd/gost --os /path/to/tos.rom
 - `--fullscreen`: start fullscreen
 - `--headless`: run without opening a window
 - `--frames <n>`: number of frames to run in headless mode, default `300`
-- `--trace <mode>`: enable tracing, currently `cpu`
+- `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, or `boot-verbose`
+- `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces, default `0xE00000`
+- `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces, default `0xE01000`
+- `--dump-frame <path>`: write the last rendered framebuffer to a PNG file
 
 ## Development
 

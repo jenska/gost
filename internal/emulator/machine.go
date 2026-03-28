@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/jenska/gost/internal/devices"
+	"github.com/jenska/m68kdasm"
 	"github.com/jenska/m68kemu"
 )
 
@@ -13,7 +14,34 @@ const (
 	defaultROMHighAlias = 0xFC0000
 	secondaryROMAlias   = 0xE00000
 	stepQuantumCycles   = 512
+	bootTraceStart      = 0xE00000
+	bootTraceEnd        = 0xE01000
 )
+
+var bootTraceAddresses = []uint32{
+	0x000008,
+	0x000010,
+	0x00002C,
+	0x000420,
+	0x000424,
+	0x000426,
+	0x00042E,
+	0x00043A,
+	0x00051A,
+	0x0005A4,
+	0x0005A8,
+	0x200008,
+	0x200010,
+	0xFF8001,
+	0xFF8006,
+	0xFF8201,
+	0xFF8203,
+	0xFF8240,
+	0xFF8260,
+	0xFF820D,
+	0xFA0000,
+	0xFA0004,
+}
 
 type Machine struct {
 	cfg          Config
@@ -59,17 +87,24 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 	if cfg.FrameHz == 0 {
 		cfg.FrameHz = DefaultFrameHz
 	}
+	if cfg.TraceStart == 0 && cfg.TraceEnd == 0 {
+		cfg.TraceStart = bootTraceStart
+		cfg.TraceEnd = bootTraceEnd
+	}
 
 	ram := devices.NewRAM(0x000000, cfg.RAMSize)
 	rom := devices.NewROM(romImage, defaultROMHighAlias, secondaryROMAlias)
 	overlayROM := devices.NewOverlayROM(rom, ram)
-	memoryConfig := devices.NewMemoryConfig(overlayROM)
+	memoryConfig := devices.NewMemoryConfig(overlayROM, cfg.RAMSize)
+	ram.SetMemoryConfig(memoryConfig)
+	glue := devices.NewGLUE()
 	openBus := devices.NewOpenBus(
 		devices.AddressRange{Start: cfg.RAMSize, End: secondaryROMAlias},
 		devices.AddressRange{Start: secondaryROMAlias + uint32(len(romImage)), End: defaultROMHighAlias},
+		devices.AddressRange{Start: 0xFF8000, End: 0x1000000},
 	)
 	shifter := devices.NewShifter(ram)
-	mfp := devices.NewMFP()
+	mfp := devices.NewMFP(cfg.ClockHz)
 	ikbd := devices.NewIKBD()
 	acia := devices.NewACIA(ikbd)
 	fdc := devices.NewFDC()
@@ -80,13 +115,14 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 		overlayROM,
 		ram,
 		memoryConfig,
+		glue,
 		shifter,
 		mfp,
 		acia,
 		fdc,
 		psg,
-		rom,
 		openBus,
+		rom,
 	)
 
 	cpu, err := m68kemu.NewCPU(bus.CPUAddressBus())
@@ -129,59 +165,153 @@ func (m *Machine) EnableTrace(mode string, writer io.Writer) {
 		writer = io.Discard
 	}
 	m.traceWriter = writer
+	m.cpu.SetTracer(nil)
+	m.cpu.SetBusTracer(nil)
+	m.cpu.SetExceptionTracer(nil)
 
 	switch mode {
 	case "cpu":
 		m.cpu.SetTracer(func(info m68kemu.TraceInfo) {
 			fmt.Fprintf(m.traceWriter, "pc=%06x sr=%04x cycles=%d\n", info.PC, info.SR, m.cpu.Cycles())
 		})
+	case "cpu-verbose":
+		logger := m68kemu.NewVerboseLogger(m.cpu, m.bus.CPUAddressBus(), m.traceWriter, m68kemu.VerboseLoggerOptions{
+			IncludeCycles: true,
+		})
+		m.cpu.SetTracer(logger.Trace)
 	case "boot":
-		m.enableBootTrace()
+		m.enableBootTrace(false)
+	case "boot-verbose":
+		m.enableBootTrace(true)
 	default:
 		m.cpu.SetTracer(nil)
 	}
 }
 
-func (m *Machine) enableBootTrace() {
-	m.cpu.SetTracer(func(info m68kemu.TraceInfo) {
-		pc := info.PC & 0xFFFFFF
-		if pc < 0xE00000 || pc > 0xE00200 {
+func (m *Machine) enableBootTrace(verbose bool) {
+	m.cpu.SetBusTracer(func(info m68kemu.BusAccessInfo) {
+		address := info.Address & 0xFFFFFF
+		if info.InstructionFetch || !isBootTraceAddress(address) {
 			return
 		}
-		fmt.Fprintf(m.traceWriter, "pc=%06x sr=%04x cycles=%d d0=%08x a7=%08x\n",
-			pc, info.SR, m.cpu.Cycles(), uint32(info.Registers.D[0]), info.Registers.A[7])
+		regs := m.cpu.Registers()
+		fmt.Fprintf(m.traceWriter, "access=%s addr=%06x pc=%06x sr=%04x d0=%08x a7=%08x value=%s\n",
+			traceAccessKind(info.Write),
+			address,
+			regs.PC&0xFFFFFF,
+			regs.SR,
+			uint32(regs.D[0]),
+			regs.A[7],
+			traceValueString(info.Size, info.Value),
+		)
+	})
+	m.cpu.SetExceptionTracer(func(info m68kemu.ExceptionInfo) {
+		if info.FaultValid {
+			fmt.Fprintf(m.traceWriter, "exception vector=%d pc=%06x newpc=%06x opcode=%04x fault=%06x sr=%04x newsr=%04x\n",
+				info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.FaultAddress&0xFFFFFF, info.SR, info.NewSR)
+			return
+		}
+		fmt.Fprintf(m.traceWriter, "exception vector=%d pc=%06x newpc=%06x opcode=%04x sr=%04x newsr=%04x\n",
+			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR)
 	})
 
-	for _, addr := range []uint32{
-		0x000008,
-		0x000010,
-		0x00002C,
-		0xFF8001,
-		0xFF8006,
-		0xFA0000,
-		0xFA0004,
-	} {
-		m.addAccessTrace(addr)
+	if verbose {
+		logger := m68kemu.NewVerboseLogger(m.cpu, m.bus.CPUAddressBus(), m.traceWriter, m68kemu.VerboseLoggerOptions{
+			IncludeRegisters: true,
+			IncludeCycles:    true,
+		})
+		m.cpu.SetTracer(func(info m68kemu.TraceInfo) {
+			pc := info.PC & 0xFFFFFF
+			if !m.tracePCInRange(pc) {
+				return
+			}
+			logger.Trace(info)
+		})
+	} else {
+		m.cpu.SetTracer(func(info m68kemu.TraceInfo) {
+			pc := info.PC & 0xFFFFFF
+			if !m.tracePCInRange(pc) {
+				return
+			}
+			fmt.Fprintf(m.traceWriter,
+				"pc=%06x sr=%04x cycles=%d d0=%08x d6=%08x d7=%08x a0=%08x a1=%08x a3=%08x a7=%08x ins=%s\n",
+				pc,
+				info.SR,
+				m.cpu.Cycles(),
+				uint32(info.Registers.D[0]),
+				uint32(info.Registers.D[6]),
+				uint32(info.Registers.D[7]),
+				info.Registers.A[0],
+				info.Registers.A[1],
+				info.Registers.A[3],
+				info.Registers.A[7],
+				m.decodeTraceInstruction(info),
+			)
+		})
 	}
 }
 
-func (m *Machine) addAccessTrace(address uint32) {
-	m.cpu.AddBreakpoint(m68kemu.Breakpoint{
-		Address: address,
-		OnRead:  true,
-		OnWrite: true,
-		Halt:    false,
-		Callback: func(event m68kemu.BreakpointEvent) error {
-			fmt.Fprintf(m.traceWriter, "access=%s addr=%06x pc=%06x sr=%04x d0=%08x a7=%08x\n",
-				event.Type, event.Address&0xFFFFFF, event.Registers.PC&0xFFFFFF,
-				event.Registers.SR, uint32(event.Registers.D[0]), event.Registers.A[7])
-			return nil
-		},
-	})
+func (m *Machine) tracePCInRange(pc uint32) bool {
+	start := m.cfg.TraceStart & 0xFFFFFF
+	end := m.cfg.TraceEnd & 0xFFFFFF
+	if start == 0 && end == 0 {
+		start = bootTraceStart
+		end = bootTraceEnd
+	}
+	if end < start {
+		start, end = end, start
+	}
+	pc &= 0xFFFFFF
+	return pc >= start && pc <= end
+}
+
+func isBootTraceAddress(address uint32) bool {
+	address &= 0xFFFFFF
+	for _, candidate := range bootTraceAddresses {
+		if candidate == address {
+			return true
+		}
+	}
+	return false
+}
+
+func traceAccessKind(write bool) string {
+	if write {
+		return "write"
+	}
+	return "read"
+}
+
+func traceValueString(size m68kemu.Size, value uint32) string {
+	switch size {
+	case m68kemu.Byte:
+		return fmt.Sprintf("%02x", value&0xFF)
+	case m68kemu.Word:
+		return fmt.Sprintf("%04x", value&0xFFFF)
+	default:
+		return fmt.Sprintf("%08x", value)
+	}
+}
+
+func (m *Machine) decodeTraceInstruction(info m68kemu.TraceInfo) string {
+	if len(info.Bytes) >= 2 {
+		inst, err := m68kdasm.Decode(append([]byte(nil), info.Bytes...), info.PC)
+		if err == nil {
+			return inst.Assembly()
+		}
+	}
+	inst, err := m68kemu.DisassembleInstruction(m.bus.CPUAddressBus(), info.PC)
+	if err != nil {
+		return fmt.Sprintf("<decode error: %v>", err)
+	}
+	return inst.Assembly
 }
 
 func (m *Machine) Reset() error {
 	m.bus.Reset()
+	m.ram.ColdReset()
+	m.overlayROM.ColdReset()
+	m.memoryConfig.ColdReset()
 	m.frameCounter = 0
 	return m.cpu.Reset()
 }
@@ -207,6 +337,54 @@ func (m *Machine) StepFrame() (bool, error) {
 
 	m.frameCounter++
 	return m.shifter.Render(m.cpu.Cycles()), nil
+}
+
+func (m *Machine) RunUntil(options m68kemu.RunUntilOptions) (m68kemu.RunResult, error) {
+	if options.MaxInstructions == 0 &&
+		!options.StopOnException &&
+		!options.StopOnIllegal &&
+		options.StopOnPCRange == nil &&
+		options.StopWhenPCOutside == nil {
+		return m68kemu.RunResult{}, fmt.Errorf("RunUntil requires a stop condition or instruction limit")
+	}
+
+	startCycles := m.cpu.Cycles()
+	var total m68kemu.RunResult
+	for {
+		if options.MaxInstructions > 0 && total.Instructions >= options.MaxInstructions {
+			total.Reason = m68kemu.RunStopInstructionLimit
+			total.PC = m.cpu.Registers().PC
+			total.Cycles = m.cpu.Cycles() - startCycles
+			return total, nil
+		}
+
+		stepOptions := options
+		stepOptions.MaxInstructions = 1
+
+		before := m.cpu.Cycles()
+		result, err := m.cpu.RunUntil(stepOptions)
+		advanced := m.cpu.Cycles() - before
+		if advanced > 0 {
+			m.advanceDevices(advanced)
+			m.dispatchInterrupts()
+		}
+		if err != nil {
+			return total, err
+		}
+
+		total.Instructions += result.Instructions
+		total.Cycles = m.cpu.Cycles() - startCycles
+		total.PC = result.PC
+		if result.HasException {
+			total.Exception = result.Exception
+			total.HasException = true
+		}
+
+		if result.Reason != m68kemu.RunStopInstructionLimit {
+			total.Reason = result.Reason
+			return total, nil
+		}
+	}
 }
 
 func (m *Machine) advanceDevices(cycles uint64) {

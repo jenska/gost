@@ -38,6 +38,10 @@ func (o *OpenBus) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	}
 }
 
+func (o *OpenBus) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+	return o.Read(size, address)
+}
+
 func (o *OpenBus) Write(m68kemu.Size, uint32, uint32) error {
 	return nil
 }
