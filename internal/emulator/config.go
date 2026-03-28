@@ -1,7 +1,5 @@
 package emulator
 
-import "time"
-
 const (
 	DefaultRAMSize = 1024 * 1024
 	DefaultClockHz = 8_000_000
@@ -24,18 +22,11 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Scale:      2,
+		Scale:      1,
 		TraceStart: bootTraceStart,
 		TraceEnd:   bootTraceEnd,
 		RAMSize:    DefaultRAMSize,
 		ClockHz:    DefaultClockHz,
 		FrameHz:    DefaultFrameHz,
 	}
-}
-
-func (c Config) frameDuration() time.Duration {
-	if c.FrameHz == 0 {
-		return 0
-	}
-	return time.Second / time.Duration(c.FrameHz)
 }

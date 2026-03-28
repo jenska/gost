@@ -6,7 +6,7 @@ import (
 
 	"github.com/jenska/gost/internal/assets"
 	"github.com/jenska/gost/internal/devices"
-	"github.com/jenska/m68kemu"
+	cpu "github.com/jenska/m68kemu"
 )
 
 func TestMachineResetVectors(t *testing.T) {
@@ -29,19 +29,19 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 	openBus := devices.NewOpenBus(devices.AddressRange{Start: 0xFF8000, End: 0x1000000})
 	bus := NewSTBus(overlay, ram, memoryConfig, devices.NewGLUE(), openBus, rom)
 
-	if _, err := bus.Read(m68kemu.Word, 1); err == nil {
+	if _, err := bus.Read(cpu.Word, 1); err == nil {
 		t.Fatalf("expected address error for odd word access")
-	} else if _, ok := err.(m68kemu.AddressError); !ok {
+	} else if _, ok := err.(cpu.AddressError); !ok {
 		t.Fatalf("expected AddressError, got %T", err)
 	}
 
-	if _, err := bus.Read(m68kemu.Byte, 0x400000); err == nil {
+	if _, err := bus.Read(cpu.Byte, 0x400000); err == nil {
 		t.Fatalf("expected bus error for unmapped access")
-	} else if _, ok := err.(m68kemu.BusError); !ok {
+	} else if _, ok := err.(cpu.BusError); !ok {
 		t.Fatalf("expected BusError, got %T", err)
 	}
 
-	value, err := bus.Read(m68kemu.Long, 0)
+	value, err := bus.Read(cpu.Long, 0)
 	if err != nil {
 		t.Fatalf("read reset vector: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 		t.Fatalf("unexpected reset vector: got %08x", value)
 	}
 
-	value, err = bus.Read(m68kemu.Word, 0xFF8006)
+	value, err = bus.Read(cpu.Word, 0xFF8006)
 	if err != nil {
 		t.Fatalf("read glue register: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 		t.Fatalf("expected glue register to win over ROM alias: got %04x want 0000", value)
 	}
 
-	value, err = bus.Read(m68kemu.Byte, 0xFF820D)
+	value, err = bus.Read(cpu.Byte, 0xFF820D)
 	if err != nil {
 		t.Fatalf("read unmapped io hole: %v", err)
 	}
@@ -72,11 +72,11 @@ func TestOverlayWritesPassThroughToRAM(t *testing.T) {
 	overlay := devices.NewOverlayROM(rom, ram)
 	bus := NewSTBus(overlay, ram, rom)
 
-	if err := bus.Write(m68kemu.Long, 0x04, 0x12345678); err != nil {
+	if err := bus.Write(cpu.Long, 0x04, 0x12345678); err != nil {
 		t.Fatalf("write through overlay: %v", err)
 	}
 
-	got, err := ram.Read(m68kemu.Long, 0x04)
+	got, err := ram.Read(cpu.Long, 0x04)
 	if err != nil {
 		t.Fatalf("read RAM after overlay write: %v", err)
 	}
@@ -164,13 +164,65 @@ func TestBundledEmuTOSReachesShifterSetup(t *testing.T) {
 	t.Fatalf("expected EmuTOS boot to program a non-zero shifter screen base within 200 frames")
 }
 
+func TestBundledEmuTOSMixedInterruptsTriggerLatePanicRegression(t *testing.T) {
+	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create machine with bundled EmuTOS: %v", err)
+	}
+
+	for frame := 0; frame < 120; frame++ {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d: %v", frame, err)
+		}
+	}
+
+	if !panicRecordSet(t, machine) {
+		t.Fatalf("expected mixed VBL+MFP bring-up to reach the current late panic within 120 frames")
+	}
+}
+
+func TestBundledEmuTOSDoesNotPanicWithoutMFPDelivery(t *testing.T) {
+	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create machine with bundled EmuTOS: %v", err)
+	}
+
+	filteredClocked := make([]devices.Clocked, 0, len(machine.clocked))
+	for _, device := range machine.clocked {
+		if device == machine.mfp {
+			continue
+		}
+		filteredClocked = append(filteredClocked, device)
+	}
+	machine.clocked = filteredClocked
+
+	filteredIRQs := make([]devices.InterruptSource, 0, len(machine.irqSources))
+	for _, source := range machine.irqSources {
+		if source == machine.mfp {
+			continue
+		}
+		filteredIRQs = append(filteredIRQs, source)
+	}
+	machine.irqSources = filteredIRQs
+
+	for frame := 0; frame < 120; frame++ {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d: %v", frame, err)
+		}
+	}
+
+	if panicRecordSet(t, machine) {
+		t.Fatalf("expected late panic to disappear when MFP delivery is removed")
+	}
+}
+
 func TestMachineResetRestoresColdBootState(t *testing.T) {
 	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
 
 	if err := machine.LoadIntoRAM(0x000008, []byte{0xAA, 0x55}); err != nil {
 		t.Fatalf("seed RAM: %v", err)
 	}
-	if err := machine.memoryConfig.Write(m68kemu.Byte, 0xFF8001, 0x0A); err != nil {
+	if err := machine.memoryConfig.Write(cpu.Byte, 0xFF8001, 0x0A); err != nil {
 		t.Fatalf("write MMU config: %v", err)
 	}
 	if machine.overlayROM.Enabled() {
@@ -181,7 +233,7 @@ func TestMachineResetRestoresColdBootState(t *testing.T) {
 		t.Fatalf("machine reset: %v", err)
 	}
 
-	value, err := machine.ram.Read(m68kemu.Word, 0x000008)
+	value, err := machine.ram.Read(cpu.Word, 0x000008)
 	if err != nil {
 		t.Fatalf("read RAM after reset: %v", err)
 	}
@@ -189,7 +241,7 @@ func TestMachineResetRestoresColdBootState(t *testing.T) {
 		t.Fatalf("expected cold reset to clear RAM: got %04x", value)
 	}
 
-	configValue, err := machine.memoryConfig.Read(m68kemu.Byte, 0xFF8001)
+	configValue, err := machine.memoryConfig.Read(cpu.Byte, 0xFF8001)
 	if err != nil {
 		t.Fatalf("read MMU config after reset: %v", err)
 	}
@@ -253,4 +305,13 @@ func loopROM(code []byte) []byte {
 	binary.BigEndian.PutUint32(rom[4:8], defaultROMHighAlias+8)
 	copy(rom[8:], code)
 	return rom
+}
+
+func panicRecordSet(t *testing.T, machine *Machine) bool {
+	t.Helper()
+	value, err := machine.ram.Read(cpu.Long, 0x380)
+	if err != nil {
+		t.Fatalf("read panic record marker: %v", err)
+	}
+	return value == 0x12345678
 }

@@ -1,6 +1,6 @@
 package devices
 
-import "github.com/jenska/m68kemu"
+import cpu "github.com/jenska/m68kemu"
 
 type AddressRange struct {
 	Start uint32
@@ -25,24 +25,24 @@ func (o *OpenBus) Contains(address uint32) bool {
 	return false
 }
 
-func (o *OpenBus) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (o *OpenBus) Read(size cpu.Size, address uint32) (uint32, error) {
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		return 0, nil
-	case m68kemu.Word:
+	case cpu.Word:
 		return 0, nil
-	case m68kemu.Long:
+	case cpu.Long:
 		return 0, nil
 	default:
 		return 0, nil
 	}
 }
 
-func (o *OpenBus) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+func (o *OpenBus) Peek(size cpu.Size, address uint32) (uint32, error) {
 	return o.Read(size, address)
 }
 
-func (o *OpenBus) Write(m68kemu.Size, uint32, uint32) error {
+func (o *OpenBus) Write(cpu.Size, uint32, uint32) error {
 	return nil
 }
 

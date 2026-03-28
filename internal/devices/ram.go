@@ -3,7 +3,7 @@ package devices
 import (
 	"fmt"
 
-	"github.com/jenska/m68kemu"
+	cpu "github.com/jenska/m68kemu"
 )
 
 // RAM is the main ST memory and doubles as the framebuffer backing store.
@@ -44,19 +44,19 @@ func (r *RAM) Contains(address uint32) bool {
 	return address >= r.base && address < r.base+limit
 }
 
-func (r *RAM) WaitStates(m68kemu.Size, uint32) uint32 {
+func (r *RAM) WaitStates(cpu.Size, uint32) uint32 {
 	return 0
 }
 
-func (r *RAM) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (r *RAM) Read(size cpu.Size, address uint32) (uint32, error) {
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		offset, err := r.translate(address)
 		if err != nil {
 			return 0, err
 		}
 		return uint32(r.data[offset]), nil
-	case m68kemu.Word:
+	case cpu.Word:
 		hi, err := r.translate(address)
 		if err != nil {
 			return 0, err
@@ -66,7 +66,7 @@ func (r *RAM) Read(size m68kemu.Size, address uint32) (uint32, error) {
 			return 0, err
 		}
 		return uint32(r.data[hi])<<8 | uint32(r.data[lo]), nil
-	case m68kemu.Long:
+	case cpu.Long:
 		b0, err := r.translate(address)
 		if err != nil {
 			return 0, err
@@ -92,20 +92,20 @@ func (r *RAM) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	}
 }
 
-func (r *RAM) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+func (r *RAM) Peek(size cpu.Size, address uint32) (uint32, error) {
 	return r.Read(size, address)
 }
 
-func (r *RAM) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (r *RAM) Write(size cpu.Size, address uint32, value uint32) error {
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		offset, err := r.translate(address)
 		if err != nil {
 			return err
 		}
 		r.data[offset] = byte(value)
 		return nil
-	case m68kemu.Word:
+	case cpu.Word:
 		hi, err := r.translate(address)
 		if err != nil {
 			return err
@@ -117,7 +117,7 @@ func (r *RAM) Write(size m68kemu.Size, address uint32, value uint32) error {
 		r.data[hi] = byte(value >> 8)
 		r.data[lo] = byte(value)
 		return nil
-	case m68kemu.Long:
+	case cpu.Long:
 		b0, err := r.translate(address)
 		if err != nil {
 			return err
@@ -150,7 +150,7 @@ func (r *RAM) LoadAt(address uint32, payload []byte) error {
 	}
 	end := address + uint32(len(payload)) - 1
 	if address < r.base || end >= r.base+uint32(len(r.data)) {
-		return m68kemu.BusError(address)
+		return cpu.BusError(address)
 	}
 
 	copy(r.data[address-r.base:], payload)
@@ -168,20 +168,20 @@ func (r *RAM) ColdReset() {
 
 func (r *RAM) translate(address uint32) (uint32, error) {
 	if address < r.base {
-		return 0, m68kemu.BusError(address)
+		return 0, cpu.BusError(address)
 	}
 
 	logical := address - r.base
 	if r.mmu != nil {
 		offset, ok := r.mmu.TranslateAddress(logical)
 		if !ok || offset >= uint32(len(r.data)) {
-			return 0, m68kemu.BusError(address)
+			return 0, cpu.BusError(address)
 		}
 		return offset, nil
 	}
 
 	if logical >= uint32(len(r.data)) {
-		return 0, m68kemu.BusError(address)
+		return 0, cpu.BusError(address)
 	}
 	return logical, nil
 }

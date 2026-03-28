@@ -3,7 +3,8 @@ package emulator
 import (
 	"testing"
 
-	"github.com/jenska/m68kemu"
+	"github.com/jenska/gost/internal/devices"
+	cpu "github.com/jenska/m68kemu"
 )
 
 func TestIsBootTraceAddress(t *testing.T) {
@@ -30,13 +31,13 @@ func TestIsBootTraceAddress(t *testing.T) {
 func TestTraceValueString(t *testing.T) {
 	tests := []struct {
 		name  string
-		size  m68kemu.Size
+		size  cpu.Size
 		value uint32
 		want  string
 	}{
-		{name: "byte", size: m68kemu.Byte, value: 0x1234, want: "34"},
-		{name: "word", size: m68kemu.Word, value: 0x1234, want: "1234"},
-		{name: "long", size: m68kemu.Long, value: 0x12345678, want: "12345678"},
+		{name: "byte", size: cpu.Byte, value: 0x1234, want: "34"},
+		{name: "word", size: cpu.Word, value: 0x1234, want: "1234"},
+		{name: "long", size: cpu.Long, value: 0x12345678, want: "12345678"},
 	}
 
 	for _, tt := range tests {
@@ -78,5 +79,25 @@ func TestMachineTracePCInRangeDefaults(t *testing.T) {
 	}
 	if machine.tracePCInRange(0x00E16794) {
 		t.Fatalf("expected default trace range to exclude late boot PC")
+	}
+}
+
+func TestMachineNextDeviceEventCycles(t *testing.T) {
+	vbl := devices.NewVBLSource(8_000_000, 50)
+	mfp := devices.NewMFP(8_000_000)
+	if err := mfp.Write(1, 0xFFFA23, 1); err != nil {
+		t.Fatalf("write timer c data: %v", err)
+	}
+	if err := mfp.Write(1, 0xFFFA1D, 0x10); err != nil {
+		t.Fatalf("write timer cd control: %v", err)
+	}
+
+	machine := &Machine{clocked: []devices.Clocked{mfp, vbl}}
+	cycles, ok := machine.nextDeviceEventCycles()
+	if !ok {
+		t.Fatalf("expected a next device event")
+	}
+	if cycles != 14 {
+		t.Fatalf("unexpected next device event cycles: got %d want 14", cycles)
 	}
 }

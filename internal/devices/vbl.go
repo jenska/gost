@@ -38,3 +38,10 @@ func (v *VBLSource) DrainInterrupts() []Interrupt {
 	v.pending = v.pending[:0]
 	return out
 }
+
+func (v *VBLSource) NextEventCycles() (uint64, bool) {
+	if v.counter == 0 {
+		return 1, true
+	}
+	return v.counter, true
+}

@@ -15,8 +15,8 @@ func TestIKBDResetCommandQueuesVersionByte(t *testing.T) {
 		t.Fatalf("expected reset command to queue a version byte")
 	}
 
-	value, ok := ikbd.ReadByte()
-	if !ok {
+	value, err := ikbd.ReadByte()
+	if err != nil {
 		t.Fatalf("expected queued version byte")
 	}
 	if value != 0xF1 {

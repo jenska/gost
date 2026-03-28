@@ -183,3 +183,31 @@ func TestMFPTimerAccumulatesFractionalCPUClock(t *testing.T) {
 		t.Fatalf("unexpected vector: %+v", irqs[0].Vector)
 	}
 }
+
+func TestMFPTimerNextEventCycles(t *testing.T) {
+	mfp := NewMFP(8_000_000)
+
+	if err := mfp.Write(1, mfpBase+mfpTCDR, 1); err != nil {
+		t.Fatalf("write timer c data: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTCDCR, 0x10); err != nil {
+		t.Fatalf("write timer cd control: %v", err)
+	}
+
+	cycles, ok := mfp.NextEventCycles()
+	if !ok {
+		t.Fatalf("expected enabled timer to report a next event")
+	}
+	if cycles != 14 {
+		t.Fatalf("unexpected next event cycles: got %d want 14", cycles)
+	}
+
+	mfp.Advance(13)
+	cycles, ok = mfp.NextEventCycles()
+	if !ok {
+		t.Fatalf("expected enabled timer to keep reporting a next event")
+	}
+	if cycles != 1 {
+		t.Fatalf("unexpected next event after partial advance: got %d want 1", cycles)
+	}
+}

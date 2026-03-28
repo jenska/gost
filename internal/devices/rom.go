@@ -3,7 +3,7 @@ package devices
 import (
 	"fmt"
 
-	"github.com/jenska/m68kemu"
+	cpu "github.com/jenska/m68kemu"
 )
 
 // ROM exposes immutable bytes at one or more aliased addresses.
@@ -29,11 +29,11 @@ func (r *ROM) Contains(address uint32) bool {
 	return false
 }
 
-func (r *ROM) WaitStates(m68kemu.Size, uint32) uint32 {
+func (r *ROM) WaitStates(cpu.Size, uint32) uint32 {
 	return 4
 }
 
-func (r *ROM) offset(address uint32, size m68kemu.Size) (uint32, error) {
+func (r *ROM) offset(address uint32, size cpu.Size) (uint32, error) {
 	for _, base := range r.aliases {
 		if address < base {
 			continue
@@ -43,10 +43,10 @@ func (r *ROM) offset(address uint32, size m68kemu.Size) (uint32, error) {
 			return offset, nil
 		}
 	}
-	return 0, m68kemu.BusError(address)
+	return 0, cpu.BusError(address)
 }
 
-func (r *ROM) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (r *ROM) Read(size cpu.Size, address uint32) (uint32, error) {
 	offset, err := r.offset(address, size)
 	if err != nil {
 		return 0, err
@@ -55,28 +55,28 @@ func (r *ROM) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	return r.readAtOffset(size, offset)
 }
 
-func (r *ROM) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+func (r *ROM) Peek(size cpu.Size, address uint32) (uint32, error) {
 	return r.Read(size, address)
 }
 
-func (r *ROM) readAtOffset(size m68kemu.Size, offset uint32) (uint32, error) {
+func (r *ROM) readAtOffset(size cpu.Size, offset uint32) (uint32, error) {
 	if offset+uint32(size) > uint32(len(r.data)) {
-		return 0, m68kemu.BusError(offset)
+		return 0, cpu.BusError(offset)
 	}
 
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		return uint32(r.data[offset]), nil
-	case m68kemu.Word:
+	case cpu.Word:
 		return uint32(readUint16BE(r.data, offset)), nil
-	case m68kemu.Long:
+	case cpu.Long:
 		return readUint32BE(r.data, offset), nil
 	default:
 		return 0, fmt.Errorf("unsupported ROM read size %d", size)
 	}
 }
 
-func (r *ROM) Write(m68kemu.Size, uint32, uint32) error {
+func (r *ROM) Write(cpu.Size, uint32, uint32) error {
 	return nil
 }
 
@@ -86,7 +86,7 @@ func (r *ROM) Bytes() []byte {
 	return append([]byte(nil), r.data...)
 }
 
-func (r *ROM) Slice(address uint32, size m68kemu.Size) (uint32, error) {
+func (r *ROM) Slice(address uint32, size cpu.Size) (uint32, error) {
 	return r.Read(size, address)
 }
 
@@ -105,15 +105,15 @@ func (o *OverlayROM) Contains(address uint32) bool {
 	return o.enabled && address < 8
 }
 
-func (o *OverlayROM) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (o *OverlayROM) Read(size cpu.Size, address uint32) (uint32, error) {
 	return o.rom.readAtOffset(size, address)
 }
 
-func (o *OverlayROM) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+func (o *OverlayROM) Peek(size cpu.Size, address uint32) (uint32, error) {
 	return o.Read(size, address)
 }
 
-func (o *OverlayROM) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (o *OverlayROM) Write(size cpu.Size, address uint32, value uint32) error {
 	return o.ram.Write(size, address, value)
 }
 
@@ -171,27 +171,27 @@ func (m *MemoryConfig) Contains(address uint32) bool {
 	return address >= memoryConfigBase && address < memoryConfigBase+2
 }
 
-func (m *MemoryConfig) Read(size m68kemu.Size, address uint32) (uint32, error) {
-	if size == m68kemu.Word {
+func (m *MemoryConfig) Read(size cpu.Size, address uint32) (uint32, error) {
+	if size == cpu.Word {
 		return uint32(m.value), nil
 	}
 	return uint32(m.value), nil
 }
 
-func (m *MemoryConfig) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+func (m *MemoryConfig) Peek(size cpu.Size, address uint32) (uint32, error) {
 	return m.Read(size, address)
 }
 
-func (m *MemoryConfig) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (m *MemoryConfig) Write(size cpu.Size, address uint32, value uint32) error {
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		m.setValue(byte(value))
-	case m68kemu.Word:
+	case cpu.Word:
 		m.setValue(byte(value))
 	default:
 		m.setValue(byte(value))
 	}
-	if address == memoryConfigBase+1 || size == m68kemu.Word {
+	if address == memoryConfigBase+1 || size == cpu.Word {
 		m.overlay.Disable()
 	}
 	return nil

@@ -3,7 +3,7 @@ package devices
 import (
 	"fmt"
 
-	"github.com/jenska/m68kemu"
+	cpu "github.com/jenska/m68kemu"
 )
 
 const (
@@ -37,7 +37,7 @@ func (f *FDC) Contains(address uint32) bool {
 	return address >= fdcBase && address < fdcBase+fdcSize
 }
 
-func (f *FDC) WaitStates(m68kemu.Size, uint32) uint32 {
+func (f *FDC) WaitStates(cpu.Size, uint32) uint32 {
 	return 8
 }
 
@@ -60,7 +60,7 @@ func (f *FDC) InsertDisk(image []byte) error {
 	return nil
 }
 
-func (f *FDC) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (f *FDC) Read(size cpu.Size, address uint32) (uint32, error) {
 	switch address - fdcBase {
 	case 0:
 		return uint32(f.status), nil
@@ -83,7 +83,7 @@ func (f *FDC) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	}
 }
 
-func (f *FDC) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (f *FDC) Write(size cpu.Size, address uint32, value uint32) error {
 	switch address - fdcBase {
 	case 0:
 		f.command = byte(value)

@@ -1,6 +1,9 @@
 package devices
 
-import "github.com/jenska/m68kemu"
+import (
+	"github.com/jenska/m68kemu"
+	cpu "github.com/jenska/m68kemu"
+)
 
 const (
 	aciaBase        = 0xFFFC00
@@ -15,16 +18,11 @@ type ACIA struct {
 	control  [aciaChannelCt]byte
 	status   [aciaChannelCt]byte
 	data     [aciaChannelCt]byte
-	pending  []Interrupt
-	vector   uint8
 	rxLoaded [aciaChannelCt]bool
 }
 
 func NewACIA(ikbd *IKBD) *ACIA {
-	a := &ACIA{
-		ikbd:   ikbd,
-		vector: 0x4C,
-	}
+	a := &ACIA{ikbd: ikbd}
 	a.Reset()
 	return a
 }
@@ -33,7 +31,7 @@ func (a *ACIA) Contains(address uint32) bool {
 	return address >= aciaBase && address < aciaBase+aciaSize
 }
 
-func (a *ACIA) WaitStates(m68kemu.Size, uint32) uint32 {
+func (a *ACIA) WaitStates(cpu.Size, uint32) uint32 {
 	return 2
 }
 
@@ -44,7 +42,6 @@ func (a *ACIA) Reset() {
 		a.data[i] = 0
 		a.rxLoaded[i] = false
 	}
-	a.pending = a.pending[:0]
 }
 
 func (a *ACIA) Read(size m68kemu.Size, address uint32) (uint32, error) {
@@ -87,29 +84,25 @@ func (a *ACIA) Advance(uint64) {
 }
 
 func (a *ACIA) DrainInterrupts() []Interrupt {
-	if len(a.pending) == 0 {
-		return nil
-	}
-	out := append([]Interrupt(nil), a.pending...)
-	a.pending = a.pending[:0]
-	return out
+	return nil
 }
 
 func (a *ACIA) pollIKBD() {
 	if a.rxLoaded[0] || !a.ikbd.HasData() {
 		return
 	}
-	value, ok := a.ikbd.ReadByte()
-	if !ok {
+	value, err := a.ikbd.ReadByte()
+	if err != nil {
 		return
 	}
 	a.data[0] = value
 	a.rxLoaded[0] = true
 	a.status[0] |= 0x01
+	// The ST routes keyboard RX interrupts through the MFP GPIP lines, not as a
+	// direct CPU interrupt from the ACIA block. Until that path is modeled,
+	// expose receive-ready status only.
 	if a.control[0]&0x80 != 0 {
 		a.status[0] |= 0x80
-		vector := a.vector
-		a.pending = append(a.pending, Interrupt{Level: 2, Vector: &vector})
 	}
 }
 

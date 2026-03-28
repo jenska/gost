@@ -1,10 +1,10 @@
 package devices
 
-import "github.com/jenska/m68kemu"
+import cpu "github.com/jenska/m68kemu"
 
 const (
-	mfpBase = 0xFFFA00
-	mfpSize = 0x40
+	mfpBase               = 0xFFFA00
+	mfpSize               = 0x40
 	defaultMFPHostClockHz = 8_000_000
 	// Timer C divide-by-64 with data 192 is the ST's 200 Hz system timer,
 	// which implies a 2.4576 MHz MFP timer input clock.
@@ -69,7 +69,7 @@ func (m *MFP) Contains(address uint32) bool {
 	return address >= mfpBase && address < mfpBase+mfpSize
 }
 
-func (m *MFP) WaitStates(m68kemu.Size, uint32) uint32 {
+func (m *MFP) WaitStates(cpu.Size, uint32) uint32 {
 	return 4
 }
 
@@ -86,12 +86,12 @@ func (m *MFP) Reset() {
 	m.clockRemainder = 0
 }
 
-func (m *MFP) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (m *MFP) Read(size cpu.Size, address uint32) (uint32, error) {
 	offset := address - mfpBase
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		return uint32(m.readByte(offset)), nil
-	case m68kemu.Word:
+	case cpu.Word:
 		hi := m.readByte(offset)
 		lo := m.readByte(offset + 1)
 		return uint32(hi)<<8 | uint32(lo), nil
@@ -100,12 +100,12 @@ func (m *MFP) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	}
 }
 
-func (m *MFP) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (m *MFP) Write(size cpu.Size, address uint32, value uint32) error {
 	offset := address - mfpBase
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		m.writeByte(offset, byte(value))
-	case m68kemu.Word:
+	case cpu.Word:
 		m.writeByte(offset, byte(value>>8))
 		m.writeByte(offset+1, byte(value))
 	}
@@ -151,6 +151,35 @@ func (m *MFP) DrainInterrupts() []Interrupt {
 
 	vector := m.vectorBase + uint8(channel)
 	return []Interrupt{{Level: 6, Vector: &vector}}
+}
+
+func (m *MFP) NextEventCycles() (uint64, bool) {
+	minTicks := uint64(0)
+	for i := range m.timers {
+		timer := &m.timers[i]
+		if !timer.enabled || timer.prescaler == 0 || timer.counter == 0 {
+			continue
+		}
+		if minTicks == 0 || timer.counter < minTicks {
+			minTicks = timer.counter
+		}
+	}
+	if minTicks == 0 {
+		return 0, false
+	}
+
+	numerator := minTicks*m.hostClockHz - m.clockRemainder
+	if numerator == 0 {
+		return 1, true
+	}
+	cycles := numerator / mfpTimerInputHz
+	if numerator%mfpTimerInputHz != 0 {
+		cycles++
+	}
+	if cycles == 0 {
+		cycles = 1
+	}
+	return cycles, true
 }
 
 func (m *MFP) readByte(offset uint32) byte {

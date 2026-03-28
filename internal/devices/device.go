@@ -1,6 +1,6 @@
 package devices
 
-import "github.com/jenska/m68kemu"
+import cpu "github.com/jenska/m68kemu"
 
 // Interrupt models a pending CPU interrupt coming from a device.
 type Interrupt struct {
@@ -11,6 +11,12 @@ type Interrupt struct {
 // Clocked devices advance with emulated CPU cycles.
 type Clocked interface {
 	Advance(cycles uint64)
+}
+
+// EventPredictor reports the next clock boundary at which a device's visible
+// state may change.
+type EventPredictor interface {
+	NextEventCycles() (uint64, bool)
 }
 
 // InterruptSource exposes pending interrupts to the machine.
@@ -29,14 +35,14 @@ func readUint32BE(buf []byte, offset uint32) uint32 {
 		uint32(buf[offset+3])
 }
 
-func writeBySize(buf []byte, offset uint32, size m68kemu.Size, value uint32) {
+func writeBySize(buf []byte, offset uint32, size cpu.Size, value uint32) {
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		buf[offset] = byte(value)
-	case m68kemu.Word:
+	case cpu.Word:
 		buf[offset] = byte(value >> 8)
 		buf[offset+1] = byte(value)
-	case m68kemu.Long:
+	case cpu.Long:
 		buf[offset] = byte(value >> 24)
 		buf[offset+1] = byte(value >> 16)
 		buf[offset+2] = byte(value >> 8)

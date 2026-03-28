@@ -1,6 +1,6 @@
 package devices
 
-import "github.com/jenska/m68kemu"
+import cpu "github.com/jenska/m68kemu"
 
 const (
 	shifterBase       = 0xFF8200
@@ -33,14 +33,14 @@ func NewShifter(ram *RAM) *Shifter {
 
 func (s *Shifter) Contains(address uint32) bool {
 	switch address {
-	case 0xFF8201, 0xFF8203, 0xFF8260:
+	case shifterBase + 1, shifterBase + 3:
 		return true
 	default:
-		return address >= paletteBase && address < paletteBase+paletteRegisterCt*2
+		return address >= paletteBase && address <= paletteBase+paletteRegisterCt*2
 	}
 }
 
-func (s *Shifter) WaitStates(m68kemu.Size, uint32) uint32 {
+func (s *Shifter) WaitStates(cpu.Size, uint32) uint32 {
 	return 2
 }
 
@@ -57,7 +57,7 @@ func (s *Shifter) Reset() {
 	s.lastRendered = 0
 }
 
-func (s *Shifter) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (s *Shifter) Read(size cpu.Size, address uint32) (uint32, error) {
 	switch {
 	case address == 0xFF8201:
 		return uint32(s.baseHigh), nil
@@ -69,7 +69,7 @@ func (s *Shifter) Read(size m68kemu.Size, address uint32) (uint32, error) {
 		index := (address - paletteBase) / 2
 		value := s.palette[index]
 		switch size {
-		case m68kemu.Byte:
+		case cpu.Byte:
 			if address&1 == 0 {
 				return uint32(value >> 8), nil
 			}
@@ -82,11 +82,11 @@ func (s *Shifter) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	}
 }
 
-func (s *Shifter) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+func (s *Shifter) Peek(size cpu.Size, address uint32) (uint32, error) {
 	return s.Read(size, address)
 }
 
-func (s *Shifter) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (s *Shifter) Write(size cpu.Size, address uint32, value uint32) error {
 	switch {
 	case address == 0xFF8201:
 		s.baseHigh = byte(value)
@@ -97,7 +97,7 @@ func (s *Shifter) Write(size m68kemu.Size, address uint32, value uint32) error {
 	case address >= paletteBase && address < paletteBase+paletteRegisterCt*2:
 		index := (address - paletteBase) / 2
 		switch size {
-		case m68kemu.Byte:
+		case cpu.Byte:
 			current := s.palette[index]
 			if address&1 == 0 {
 				current = (current & 0x00FF) | uint16(value&0xFF)<<8

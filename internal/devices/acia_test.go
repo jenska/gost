@@ -54,3 +54,19 @@ func TestACIAMIDIChannelStaysIndependent(t *testing.T) {
 		t.Fatalf("unexpected keyboard status after MIDI reset: got %02x want 02", keyboardStatus)
 	}
 }
+
+func TestACIAKeyboardDoesNotQueueDirectCPUInterrupt(t *testing.T) {
+	ikbd := NewIKBD()
+	acia := NewACIA(ikbd)
+
+	if err := acia.Write(1, aciaBase, 0x95); err != nil {
+		t.Fatalf("enable keyboard RX interrupts: %v", err)
+	}
+
+	ikbd.PushKey(0x1E, true)
+	acia.Advance(0)
+
+	if irqs := acia.DrainInterrupts(); len(irqs) != 0 {
+		t.Fatalf("expected no direct CPU interrupts from ACIA, got %d", len(irqs))
+	}
+}

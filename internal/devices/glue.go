@@ -1,6 +1,6 @@
 package devices
 
-import "github.com/jenska/m68kemu"
+import cpu "github.com/jenska/m68kemu"
 
 const (
 	glueBase = 0xFF8006
@@ -23,9 +23,9 @@ func (g *GLUE) Contains(address uint32) bool {
 	return address >= glueBase && address < glueBase+glueSize
 }
 
-func (g *GLUE) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (g *GLUE) Read(size cpu.Size, address uint32) (uint32, error) {
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		if address&1 == 0 {
 			return uint32(g.config >> 8), nil
 		}
@@ -35,13 +35,13 @@ func (g *GLUE) Read(size m68kemu.Size, address uint32) (uint32, error) {
 	}
 }
 
-func (g *GLUE) Peek(size m68kemu.Size, address uint32) (uint32, error) {
+func (g *GLUE) Peek(size cpu.Size, address uint32) (uint32, error) {
 	return g.Read(size, address)
 }
 
-func (g *GLUE) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (g *GLUE) Write(size cpu.Size, address uint32, value uint32) error {
 	switch size {
-	case m68kemu.Byte:
+	case cpu.Byte:
 		if address&1 == 0 {
 			g.config = (g.config & 0x00FF) | uint16(value&0xFF)<<8
 		} else {

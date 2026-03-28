@@ -1,6 +1,6 @@
 package devices
 
-import "github.com/jenska/m68kemu"
+import cpu "github.com/jenska/m68kemu"
 
 const (
 	psgBase = 0xFF8800
@@ -21,7 +21,7 @@ func (p *PSG) Contains(address uint32) bool {
 	return address >= psgBase && address < psgBase+psgSize
 }
 
-func (p *PSG) WaitStates(m68kemu.Size, uint32) uint32 {
+func (p *PSG) WaitStates(cpu.Size, uint32) uint32 {
 	return 2
 }
 
@@ -30,11 +30,11 @@ func (p *PSG) Reset() {
 	clear(p.regs[:])
 }
 
-func (p *PSG) Read(m68kemu.Size, uint32) (uint32, error) {
+func (p *PSG) Read(cpu.Size, uint32) (uint32, error) {
 	return uint32(p.regs[p.address&0x0F]), nil
 }
 
-func (p *PSG) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (p *PSG) Write(size cpu.Size, address uint32, value uint32) error {
 	switch address - psgBase {
 	case 0, 1:
 		p.address = byte(value) & 0x0F

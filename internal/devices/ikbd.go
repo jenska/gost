@@ -1,5 +1,7 @@
 package devices
 
+import "io"
+
 // IKBD implements a small queue-based model of the keyboard controller.
 type IKBD struct {
 	queue     []byte
@@ -62,13 +64,13 @@ func (i *IKBD) HasData() bool {
 	return len(i.queue) > 0
 }
 
-func (i *IKBD) ReadByte() (byte, bool) {
+func (i *IKBD) ReadByte() (byte, error) {
 	if len(i.queue) == 0 {
-		return 0, false
+		return 0, io.EOF
 	}
 	value := i.queue[0]
 	i.queue = i.queue[1:]
-	return value, true
+	return value, nil
 }
 
 func ikbdCommandExtraBytes(cmd byte) int {

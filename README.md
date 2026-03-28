@@ -17,6 +17,16 @@ This repository currently provides a working emulator foundation:
 
 This is not yet a complete Atari ST emulator that boots real TOS to the GEM desktop. The hardware models are intentionally simplified and meant as the base for continued bring-up.
 
+Current 400-frame headless boot state:
+
+![Current emulation status](assets/media/gost-status.png)
+
+Current bring-up note:
+
+- EmuTOS reaches video setup and renders the panic screen shown above rather than the GEM desktop.
+- The current blocker is in late interrupt/device bring-up, especially mixed VBL and MFP behavior.
+- Recent work added better boot tracing, a more accurate ST device map, and reduced false interrupt sources to narrow the remaining failure.
+
 ## Features
 
 - Go 1.26 project layout with a runnable `cmd/gost` entrypoint
@@ -135,6 +145,12 @@ make test
 
 ```bash
 go test ./...
+```
+
+Debug-oriented emulator probes are kept behind a build tag so the default suite stays fast:
+
+```bash
+go test -tags debugtests ./internal/emulator
 ```
 
 Build everything:
