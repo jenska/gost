@@ -1,4 +1,4 @@
-# GoST
+# GoST - Atari ST Emulator in Go
 
 <p align="center">
   <img src="assets/media/gost.png" alt="GoST logo" width="240">
