@@ -12,6 +12,8 @@ github.com/jenska/m68kdasm v1.0.1 h1:6UNXbPQlgMbIMhBkMndQCitjiCOtnf/I+c1dcpmNytY
 github.com/jenska/m68kdasm v1.0.1/go.mod h1:zo8kmm6mRV7C1v0pQc9kIQBh+RIuAuczHZk4w/ezEjs=
 github.com/jenska/m68kemu v1.2.1 h1:/LJD5fE7MPtE1LUt3QCAXrooDAwueH1S4J/zGRzcL2M=
 github.com/jenska/m68kemu v1.2.1/go.mod h1:OBPaI/UC7oX1FUcJWdpnUmdHPwJYek/Zg7MjFdybaqQ=
+github.com/jenska/m68kemu v1.2.2 h1:fMSfGxwc/gFPxgUIcD1V8QURw4NYgZHPG6M7Uzb/29A=
+github.com/jenska/m68kemu v1.2.2/go.mod h1:OBPaI/UC7oX1FUcJWdpnUmdHPwJYek/Zg7MjFdybaqQ=
 github.com/jezek/xgb v1.1.1 h1:bE/r8ZZtSv7l9gk6nU0mYx51aXrvnyb44892TwSaqS4=
 github.com/jezek/xgb v1.1.1/go.mod h1:nrhwO0FX/enq75I7Y7G8iN1ubpSGZEiA3v9e9GyRFlk=
 golang.org/x/image v0.31.0 h1:mLChjE2MV6g1S7oqbXC0/UcKijjm5fnJLUYKIYrLESA=

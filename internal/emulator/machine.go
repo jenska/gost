@@ -101,8 +101,14 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 	ram.SetMemoryConfig(memoryConfig)
 	glue := devices.NewGLUE()
 	steSound := devices.NewSTESound()
+	monsterProbe := devices.NewBusErrorRegion(
+		devices.AddressRange{Start: 0xFFFE00, End: 0xFFFE10},
+	)
+	fixedProbeRegion := devices.NewFixedValueRegion(
+		0xFFFFFFFF,
+		devices.AddressRange{Start: 0xFA0000, End: 0xFA0010},
+	)
 	openBus := devices.NewOpenBus(
-		devices.AddressRange{Start: cfg.RAMSize, End: secondaryROMAlias},
 		devices.AddressRange{Start: secondaryROMAlias + uint32(len(romImage)), End: defaultROMHighAlias},
 		devices.AddressRange{Start: 0xFF8000, End: 0x1000000},
 	)
@@ -125,6 +131,8 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 		fdc,
 		psg,
 		steSound,
+		monsterProbe,
+		fixedProbeRegion,
 		openBus,
 		rom,
 	)

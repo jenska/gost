@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.9.9
 	github.com/jenska/m68kdasm v1.0.1
-	github.com/jenska/m68kemu v1.2.1
+	github.com/jenska/m68kemu v1.2.2
 )
 
 require (

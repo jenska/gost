@@ -26,8 +26,9 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 	rom := devices.NewROM(loopROM(nil), defaultROMHighAlias, secondaryROMAlias)
 	overlay := devices.NewOverlayROM(rom, ram)
 	memoryConfig := devices.NewMemoryConfig(overlay, ram.Size())
+	monsterProbe := devices.NewBusErrorRegion(devices.AddressRange{Start: 0xFFFE00, End: 0xFFFE10})
 	openBus := devices.NewOpenBus(devices.AddressRange{Start: 0xFF8000, End: 0x1000000})
-	bus := NewSTBus(overlay, ram, memoryConfig, devices.NewGLUE(), openBus, rom)
+	bus := NewSTBus(overlay, ram, memoryConfig, devices.NewGLUE(), monsterProbe, openBus, rom)
 
 	if _, err := bus.Read(cpu.Word, 1); err == nil {
 		t.Fatalf("expected address error for odd word access")
@@ -63,6 +64,12 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 	}
 	if value != 0 {
 		t.Fatalf("expected unmapped io hole to read open bus, got %02x want 00", value)
+	}
+
+	if _, err := bus.Read(cpu.Byte, 0xFFFE00); err == nil {
+		t.Fatalf("expected MonSTer probe window to bus-error")
+	} else if _, ok := err.(cpu.BusError); !ok {
+		t.Fatalf("expected BusError for MonSTer probe window, got %T", err)
 	}
 }
 
@@ -164,20 +171,62 @@ func TestBundledEmuTOSReachesShifterSetup(t *testing.T) {
 	t.Fatalf("expected EmuTOS boot to program a non-zero shifter screen base within 200 frames")
 }
 
-func TestBundledEmuTOSMixedInterruptsTriggerLatePanicRegression(t *testing.T) {
+func TestBundledEmuTOSReachesDesktop(t *testing.T) {
 	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
 	if err != nil {
 		t.Fatalf("create machine with bundled EmuTOS: %v", err)
 	}
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := 0; frame < 400; frame++ {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
 	}
 
-	if !panicRecordSet(t, machine) {
-		t.Fatalf("expected mixed VBL+MFP bring-up to reach the current late panic within 120 frames")
+	if panicRecordSet(t, machine) {
+		t.Fatalf("expected desktop boot to avoid the old panic path")
+	}
+
+	width, height := machine.shifter.Dimensions()
+	if width != 640 || height != 400 {
+		t.Fatalf("expected high-resolution desktop mode, got %dx%d", width, height)
+	}
+
+	frame := machine.FrameBuffer()
+	if len(frame) != width*height*4 {
+		t.Fatalf("unexpected framebuffer size: got %d want %d", len(frame), width*height*4)
+	}
+
+	var menuBlack, trashBlack, whitePixels int
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			offset := (y*width + x) * 4
+			r, g, b, a := frame[offset], frame[offset+1], frame[offset+2], frame[offset+3]
+			if a == 0 {
+				continue
+			}
+			if r == 0xFF && g == 0xFF && b == 0xFF {
+				whitePixels++
+			}
+			if r == 0x00 && g == 0x00 && b == 0x00 {
+				if y < 16 && x < 220 {
+					menuBlack++
+				}
+				if x < 80 && y > 340 {
+					trashBlack++
+				}
+			}
+		}
+	}
+
+	if menuBlack < 40 {
+		t.Fatalf("expected menu-bar text pixels, got only %d black pixels in top-left menu region", menuBlack)
+	}
+	if trashBlack < 40 {
+		t.Fatalf("expected desktop icon pixels, got only %d black pixels in trash region", trashBlack)
+	}
+	if whitePixels < 5000 {
+		t.Fatalf("expected visible desktop framebuffer, got only %d white pixels", whitePixels)
 	}
 }
 

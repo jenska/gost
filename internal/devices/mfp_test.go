@@ -211,3 +211,46 @@ func TestMFPTimerNextEventCycles(t *testing.T) {
 		t.Fatalf("unexpected next event after partial advance: got %d want 1", cycles)
 	}
 }
+
+func TestMFPSoftwareEOIPreventsDuplicateTimerDispatchBeforeServiceClear(t *testing.T) {
+	mfp := NewMFP(8_000_000)
+
+	if err := mfp.Write(1, mfpBase+mfpVR, 0x48); err != nil {
+		t.Fatalf("write vector base with software eoi: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERB, 0x20); err != nil {
+		t.Fatalf("write interrupt enable: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRB, 0x20); err != nil {
+		t.Fatalf("write interrupt mask: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTCDR, 1); err != nil {
+		t.Fatalf("write timer c data: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTCDCR, 0x10); err != nil {
+		t.Fatalf("write timer cd control: %v", err)
+	}
+
+	mfp.Advance(14)
+	irqs := mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected first timer c interrupt, got %d", len(irqs))
+	}
+
+	mfp.Advance(14)
+	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+		t.Fatalf("expected duplicate timer c interrupt to stay blocked until service clear, got %d", len(irqs))
+	}
+
+	if err := mfp.Write(1, mfpBase+mfpISRB, 0xDF); err != nil {
+		t.Fatalf("clear timer c in-service bit: %v", err)
+	}
+
+	irqs = mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected pending timer c interrupt after service clear, got %d", len(irqs))
+	}
+	if irqs[0].Vector == nil || *irqs[0].Vector != 0x45 {
+		t.Fatalf("unexpected vector after service clear: %+v", irqs[0].Vector)
+	}
+}

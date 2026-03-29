@@ -8,14 +8,19 @@ GoST is an Atari ST emulator in Go built around [`github.com/jenska/m68kemu`](ht
 
 ## Status
 
+Major milestone:
+
+- `v0.2.0` is the first GoST release that boots the bundled EmuTOS image all the way to the GEM desktop.
+
 This repository currently provides a working emulator foundation:
 
 - `m68kemu` is wired in as the CPU core.
 - A desktop frontend is available via Ebitengine.
 - The project has an ST-oriented bus and device model for RAM, ROM, Shifter, MFP, IKBD/ACIA, FDC, and PSG.
 - Headless execution, tracing hooks, and a basic test suite are in place.
+- The bundled EmuTOS image now reaches the GEM desktop.
 
-This is not yet a complete Atari ST emulator that boots real TOS to the GEM desktop. The hardware models are intentionally simplified and meant as the base for continued bring-up.
+This is still not a complete Atari ST emulator for general real-TOS compatibility. The hardware models are intentionally simplified and the current desktop boot depends on the latest bring-up fixes, including local `m68kemu` patches that still need to be upstreamed.
 
 Current 400-frame headless boot state:
 
@@ -23,9 +28,14 @@ Current 400-frame headless boot state:
 
 Current bring-up note:
 
-- EmuTOS reaches video setup and renders the panic screen shown above rather than the GEM desktop.
-- The current blocker is in late interrupt/device bring-up, especially mixed VBL and MFP behavior.
-- Recent work added better boot tracing, a more accurate ST device map, and reduced false interrupt sources to narrow the remaining failure.
+- EmuTOS now reaches the GEM desktop and renders the menu bar and desktop icons shown above.
+- The current focus is cleanup and stabilization: validating longer-running desktop sessions and broadening hardware and TOS compatibility.
+- Real-TOS compatibility and fuller Atari ST hardware coverage are still works in progress.
+
+Release milestone summary:
+
+- Desktop boot now works in both the windowed frontend and headless PNG-dump mode.
+- The project has moved from early hardware bring-up into stabilization and compatibility work.
 
 ## Features
 
@@ -35,7 +45,7 @@ Current bring-up note:
 - Boot-vector proxy at address `0x000000`
 - ROM aliases in high memory
 - 1 MiB RAM default machine profile
-- Low and medium resolution Shifter framebuffer conversion
+- Low, medium, and high resolution Shifter framebuffer conversion
 - Minimal MFP timer and interrupt support
 - Minimal IKBD/ACIA keyboard and mouse event path
 - Simplified sector-based floppy controller with `.st` image support
@@ -206,7 +216,8 @@ This preserves deterministic emulation while creating room for asynchronous fram
 
 ## Known Gaps
 
-- Real TOS boot to GEM is not complete yet
+- Real TOS boot coverage beyond the bundled EmuTOS image is not complete yet
+- Some of the current late-boot fixes still live in a temporary local `m68kemu` override
 - MMU/GLUE behavior is still incomplete
 - Shifter timing and register coverage are partial
 - MFP support is minimal and only suitable for early bring-up
@@ -216,7 +227,8 @@ This preserves deterministic emulation while creating room for asynchronous fram
 
 ## Next Steps
 
-- Improve MMU/GLUE/Shifter behavior for real TOS bring-up
+- Upstream the remaining `m68kemu` fixes and remove the local override
+- Improve MMU/GLUE/Shifter behavior for broader TOS compatibility
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
 - Deepen WD1772 emulation beyond simple sector access

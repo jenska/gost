@@ -50,6 +50,7 @@ type MFP struct {
 	registers      [mfpSize]byte
 	vectorBase     uint8
 	softwareEOI    bool
+	inFlight       [16]bool
 	timers         [4]mfpTimer
 	serialBuffer   byte
 	hostClockHz    uint64
@@ -75,6 +76,7 @@ func (m *MFP) WaitStates(cpu.Size, uint32) uint32 {
 
 func (m *MFP) Reset() {
 	clear(m.registers[:])
+	clear(m.inFlight[:])
 	m.vectorBase = 0x40
 	m.softwareEOI = false
 	m.registers[mfpVR] = m.vectorBase
@@ -145,6 +147,7 @@ func (m *MFP) DrainInterrupts() []Interrupt {
 	}
 
 	m.clearRegisterBit(pendingRegisterForChannel(channel), channelBit(channel))
+	m.inFlight[channel] = true
 	if m.softwareEOI {
 		m.setRegisterBit(serviceRegisterForChannel(channel), channelBit(channel))
 	}
@@ -208,7 +211,9 @@ func (m *MFP) writeByte(offset uint32, value byte) {
 	case mfpIPRA, mfpIPRB:
 		m.registers[offset] &= value
 	case mfpISRA, mfpISRB:
+		before := m.registers[offset]
 		m.registers[offset] &= value
+		m.clearInFlightBits(serviceOffsetToChannelBase(offset), before&^m.registers[offset])
 	case mfpVR:
 		m.vectorBase = value & 0xF0
 		m.softwareEOI = value&0x08 != 0
@@ -321,6 +326,9 @@ func (m *MFP) nextPendingChannel() (int, bool) {
 		if blockedAt >= 0 && channel <= blockedAt {
 			continue
 		}
+		if m.inFlight[channel] {
+			continue
+		}
 		bit := channelBit(channel)
 		if m.registers[pendingRegisterForChannel(channel)]&bit == 0 {
 			continue
@@ -388,4 +396,21 @@ func channelBit(channel int) byte {
 		return 1 << uint(channel-8)
 	}
 	return 1 << uint(channel)
+}
+
+func serviceOffsetToChannelBase(offset uint32) int {
+	if offset == mfpISRA {
+		return 8
+	}
+	return 0
+}
+
+func (m *MFP) clearInFlightBits(channelBase int, bits byte) {
+	for bit := 0; bit < 8; bit++ {
+		mask := byte(1 << uint(bit))
+		if bits&mask == 0 {
+			continue
+		}
+		m.inFlight[channelBase+bit] = false
+	}
 }
