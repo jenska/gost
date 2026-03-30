@@ -217,7 +217,6 @@ This preserves deterministic emulation while creating room for asynchronous fram
 ## Known Gaps
 
 - Real TOS boot coverage beyond the bundled EmuTOS image is not complete yet
-- Some of the current late-boot fixes still live in a temporary local `m68kemu` override
 - MMU/GLUE behavior is still incomplete
 - Shifter timing and register coverage are partial
 - MFP support is minimal and only suitable for early bring-up
@@ -227,7 +226,6 @@ This preserves deterministic emulation while creating room for asynchronous fram
 
 ## Next Steps
 
-- Upstream the remaining `m68kemu` fixes and remove the local override
 - Improve MMU/GLUE/Shifter behavior for broader TOS compatibility
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
