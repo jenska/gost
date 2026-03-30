@@ -14,15 +14,17 @@ const (
 
 // ACIA fronts the IKBD as a memory-mapped serial interface.
 type ACIA struct {
-	ikbd     *IKBD
-	control  [aciaChannelCt]byte
-	status   [aciaChannelCt]byte
-	data     [aciaChannelCt]byte
-	rxLoaded [aciaChannelCt]bool
+	ikbd        *IKBD
+	keyboardIRQ func(bool)
+	control     [aciaChannelCt]byte
+	status      [aciaChannelCt]byte
+	data        [aciaChannelCt]byte
+	rxLoaded    [aciaChannelCt]bool
+	rxCooldown  [aciaChannelCt]bool
 }
 
-func NewACIA(ikbd *IKBD) *ACIA {
-	a := &ACIA{ikbd: ikbd}
+func NewACIA(ikbd *IKBD, keyboardIRQ func(bool)) *ACIA {
+	a := &ACIA{ikbd: ikbd, keyboardIRQ: keyboardIRQ}
 	a.Reset()
 	return a
 }
@@ -41,20 +43,26 @@ func (a *ACIA) Reset() {
 		a.status[i] = 0x02
 		a.data[i] = 0
 		a.rxLoaded[i] = false
+		a.rxCooldown[i] = false
 	}
 }
 
 func (a *ACIA) Read(size m68kemu.Size, address uint32) (uint32, error) {
-	a.pollIKBD()
 	channel := aciaChannelIndex(address)
+	if !a.rxCooldown[channel] {
+		a.pollIKBD()
+	}
 	switch (address - aciaBase) % aciaChannelSize {
 	case 0, 1:
 		return uint32(a.status[channel]), nil
 	case 2, 3:
 		value := a.data[channel]
 		a.rxLoaded[channel] = false
+		a.rxCooldown[channel] = true
 		a.status[channel] &^= 0x81
-		a.pollIKBD()
+		if channel == 0 {
+			a.updateKeyboardIRQ()
+		}
 		return uint32(value), nil
 	default:
 		return 0, nil
@@ -69,6 +77,8 @@ func (a *ACIA) Write(size m68kemu.Size, address uint32, value uint32) error {
 		if a.control[channel]&0x03 == 0x03 {
 			a.status[channel] = 0x02
 			a.rxLoaded[channel] = false
+			a.rxCooldown[channel] = false
+			a.updateKeyboardIRQ()
 		}
 	case 2, 3:
 		if channel == 0 {
@@ -76,10 +86,14 @@ func (a *ACIA) Write(size m68kemu.Size, address uint32, value uint32) error {
 		}
 	}
 	a.pollIKBD()
+	a.updateKeyboardIRQ()
 	return nil
 }
 
 func (a *ACIA) Advance(uint64) {
+	for i := range a.rxCooldown {
+		a.rxCooldown[i] = false
+	}
 	a.pollIKBD()
 }
 
@@ -98,12 +112,22 @@ func (a *ACIA) pollIKBD() {
 	a.data[0] = value
 	a.rxLoaded[0] = true
 	a.status[0] |= 0x01
-	// The ST routes keyboard RX interrupts through the MFP GPIP lines, not as a
-	// direct CPU interrupt from the ACIA block. Until that path is modeled,
-	// expose receive-ready status only.
 	if a.control[0]&0x80 != 0 {
 		a.status[0] |= 0x80
 	}
+	a.updateKeyboardIRQ()
+}
+
+func (a *ACIA) updateKeyboardIRQ() {
+	if a.rxLoaded[0] && a.control[0]&0x80 != 0 {
+		a.status[0] |= 0x80
+	} else {
+		a.status[0] &^= 0x80
+	}
+	if a.keyboardIRQ == nil {
+		return
+	}
+	a.keyboardIRQ(a.status[0]&0x80 != 0)
 }
 
 func aciaChannelIndex(address uint32) uint32 {

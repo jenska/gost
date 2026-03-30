@@ -6,30 +6,18 @@ import (
 	cpu "github.com/jenska/m68kemu"
 )
 
-func TestSTESoundReturnsStableAllOnesReads(t *testing.T) {
+func TestSTESoundFaultsOnAbsentDMAWindow(t *testing.T) {
 	sound := NewSTESound()
 
-	byteValue, err := sound.Read(cpu.Byte, 0xFF8901)
-	if err != nil {
-		t.Fatalf("read byte: %v", err)
-	}
-	if byteValue != 0xFF {
-		t.Fatalf("unexpected byte read: got %02x want ff", byteValue)
+	if _, err := sound.Read(cpu.Byte, 0xFF8901); err == nil {
+		t.Fatalf("expected byte read to bus-error")
+	} else if _, ok := err.(cpu.BusError); !ok {
+		t.Fatalf("expected BusError, got %T", err)
 	}
 
-	wordValue, err := sound.Read(cpu.Word, 0xFF8900)
-	if err != nil {
-		t.Fatalf("read word: %v", err)
-	}
-	if wordValue != 0xFFFF {
-		t.Fatalf("unexpected word read: got %04x want ffff", wordValue)
-	}
-
-	longValue, err := sound.Read(cpu.Long, 0xFF8900)
-	if err != nil {
-		t.Fatalf("read long: %v", err)
-	}
-	if longValue != 0xFFFFFFFF {
-		t.Fatalf("unexpected long read: got %08x want ffffffff", longValue)
+	if err := sound.Write(cpu.Word, 0xFF8900, 0x1234); err == nil {
+		t.Fatalf("expected word write to bus-error")
+	} else if _, ok := err.(cpu.BusError); !ok {
+		t.Fatalf("expected BusError, got %T", err)
 	}
 }

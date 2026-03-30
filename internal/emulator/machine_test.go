@@ -230,6 +230,86 @@ func TestBundledEmuTOSReachesDesktop(t *testing.T) {
 	}
 }
 
+func TestBundledEmuTOSMouseMoveChangesDesktopFrame(t *testing.T) {
+	base, err := NewMachine(DefaultConfig(), assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create baseline machine with bundled EmuTOS: %v", err)
+	}
+	withMouse, err := NewMachine(DefaultConfig(), assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create mouse machine with bundled EmuTOS: %v", err)
+	}
+
+	for frame := 0; frame < 400; frame++ {
+		if _, err := base.StepFrame(); err != nil {
+			t.Fatalf("baseline step frame %d: %v", frame, err)
+		}
+		if _, err := withMouse.StepFrame(); err != nil {
+			t.Fatalf("mouse step frame %d: %v", frame, err)
+		}
+	}
+
+	withMouse.PushMouse(12, 8, 0)
+
+	for frame := 0; frame < 20; frame++ {
+		if _, err := base.StepFrame(); err != nil {
+			t.Fatalf("baseline post-mouse frame %d: %v", frame, err)
+		}
+		if _, err := withMouse.StepFrame(); err != nil {
+			t.Fatalf("mouse post-mouse frame %d: %v", frame, err)
+		}
+	}
+
+	baseFrame := base.FrameBuffer()
+	mouseFrame := withMouse.FrameBuffer()
+	if len(baseFrame) != len(mouseFrame) {
+		t.Fatalf("framebuffer size mismatch: baseline=%d mouse=%d", len(baseFrame), len(mouseFrame))
+	}
+
+	changed := 0
+	for i := range baseFrame {
+		if baseFrame[i] != mouseFrame[i] {
+			changed++
+		}
+	}
+	if changed == 0 {
+		t.Fatalf("expected mouse input to change the desktop framebuffer")
+	}
+}
+
+func TestBundledEmuTOSReportsMousePosition(t *testing.T) {
+	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create machine with bundled EmuTOS: %v", err)
+	}
+
+	for frame := 0; frame < 400; frame++ {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d: %v", frame, err)
+		}
+	}
+
+	beforeX, beforeY, ok := machine.MousePosition()
+	if !ok {
+		t.Fatalf("expected GEM desktop to expose a mouse position")
+	}
+
+	machine.PushMouse(12, 8, 0)
+	for frame := 0; frame < 20; frame++ {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("post-mouse frame %d: %v", frame, err)
+		}
+	}
+
+	afterX, afterY, ok := machine.MousePosition()
+	if !ok {
+		t.Fatalf("expected GEM desktop to expose a mouse position after moving")
+	}
+	if afterX == beforeX && afterY == beforeY {
+		t.Fatalf("expected mouse position to change after movement, stayed at (%d,%d)", afterX, afterY)
+	}
+}
+
 func TestBundledEmuTOSDoesNotPanicWithoutMFPDelivery(t *testing.T) {
 	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
 	if err != nil {

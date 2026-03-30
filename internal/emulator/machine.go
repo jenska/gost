@@ -16,6 +16,8 @@ const (
 	stepQuantumCycles   = 512
 	bootTraceStart      = 0xE00000
 	bootTraceEnd        = 0xE01000
+	guestMouseXAddr     = 0x001E6C
+	guestMouseYAddr     = 0x001E6E
 )
 
 var bootTraceAddresses = []uint32{
@@ -115,7 +117,7 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 	shifter := devices.NewShifter(ram)
 	mfp := devices.NewMFP(cfg.ClockHz)
 	ikbd := devices.NewIKBD()
-	acia := devices.NewACIA(ikbd)
+	acia := devices.NewACIA(ikbd, mfp.SetACIAInterrupt)
 	fdc := devices.NewFDC()
 	psg := devices.NewPSG()
 	vbl := devices.NewVBLSource(cfg.ClockHz, cfg.FrameHz)
@@ -464,6 +466,30 @@ func (m *Machine) PushKey(scancode byte, pressed bool) {
 
 func (m *Machine) PushMouse(dx, dy int, buttons byte) {
 	m.ikbd.PushMouse(dx, dy, buttons)
+}
+
+func (m *Machine) MousePosition() (x, y int, ok bool) {
+	width, height := m.Dimensions()
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+
+	xValue, err := m.ram.Read(cpu.Word, guestMouseXAddr)
+	if err != nil {
+		return 0, 0, false
+	}
+	yValue, err := m.ram.Read(cpu.Word, guestMouseYAddr)
+	if err != nil {
+		return 0, 0, false
+	}
+
+	x = int(uint16(xValue))
+	y = int(uint16(yValue))
+	if x < 0 || x >= width || y < 0 || y >= height {
+		return 0, 0, false
+	}
+
+	return x, y, true
 }
 
 func (m *Machine) InsertFloppy(side int, image []byte) error {

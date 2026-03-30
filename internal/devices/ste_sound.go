@@ -7,17 +7,20 @@ const (
 	steSoundSize = 0x40
 )
 
-// STESound provides stable reads for the STE DMA sound register window.
-// On plain ST machines this block is absent, but returning all-ones is a
-// closer hardware probe result than the emulator's generic zero-valued open bus.
-type STESound struct{}
+// STESound models the absent STE DMA sound window on a plain ST.
+// EmuTOS probes this area with bus-error detection during machine setup.
+type STESound struct {
+	region *BusErrorRegion
+}
 
 func NewSTESound() *STESound {
-	return &STESound{}
+	return &STESound{
+		region: NewBusErrorRegion(AddressRange{Start: steSoundBase, End: steSoundBase + steSoundSize}),
+	}
 }
 
 func (s *STESound) Contains(address uint32) bool {
-	return address >= steSoundBase && address < steSoundBase+steSoundSize
+	return s.region.Contains(address)
 }
 
 func (s *STESound) WaitStates(cpu.Size, uint32) uint32 {
@@ -25,24 +28,15 @@ func (s *STESound) WaitStates(cpu.Size, uint32) uint32 {
 }
 
 func (s *STESound) Read(size cpu.Size, address uint32) (uint32, error) {
-	switch size {
-	case cpu.Byte:
-		return 0xFF, nil
-	case cpu.Word:
-		return 0xFFFF, nil
-	case cpu.Long:
-		return 0xFFFFFFFF, nil
-	default:
-		return 0xFFFFFFFF, nil
-	}
+	return s.region.Read(size, address)
 }
 
 func (s *STESound) Peek(size cpu.Size, address uint32) (uint32, error) {
-	return s.Read(size, address)
+	return s.region.Peek(size, address)
 }
 
-func (s *STESound) Write(cpu.Size, uint32, uint32) error {
-	return nil
+func (s *STESound) Write(size cpu.Size, address uint32, value uint32) error {
+	return s.region.Write(size, address, value)
 }
 
 func (s *STESound) Reset() {}

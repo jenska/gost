@@ -254,3 +254,33 @@ func TestMFPSoftwareEOIPreventsDuplicateTimerDispatchBeforeServiceClear(t *testi
 		t.Fatalf("unexpected vector after service clear: %+v", irqs[0].Vector)
 	}
 }
+
+func TestMFPGPIPBit4ReflectsACIAInterruptLine(t *testing.T) {
+	mfp := NewMFP(8_000_000)
+
+	idle, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read idle GPIP: %v", err)
+	}
+	if byte(idle)&0x10 == 0 {
+		t.Fatalf("expected idle ACIA line to read high, GPIP=%02x", byte(idle))
+	}
+
+	mfp.SetACIAInterrupt(true)
+	active, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read active GPIP: %v", err)
+	}
+	if byte(active)&0x10 != 0 {
+		t.Fatalf("expected asserted ACIA line to read low, GPIP=%02x", byte(active))
+	}
+
+	mfp.SetACIAInterrupt(false)
+	cleared, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read cleared GPIP: %v", err)
+	}
+	if byte(cleared)&0x10 == 0 {
+		t.Fatalf("expected cleared ACIA line to read high, GPIP=%02x", byte(cleared))
+	}
+}

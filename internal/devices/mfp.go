@@ -51,6 +51,7 @@ type MFP struct {
 	vectorBase     uint8
 	softwareEOI    bool
 	inFlight       [16]bool
+	aciaIRQActive  bool
 	timers         [4]mfpTimer
 	serialBuffer   byte
 	hostClockHz    uint64
@@ -86,6 +87,7 @@ func (m *MFP) Reset() {
 	m.timers[3] = mfpTimer{channel: 4, dataReg: mfpTDDR}
 	m.serialBuffer = 0
 	m.clockRemainder = 0
+	m.aciaIRQActive = false
 }
 
 func (m *MFP) Read(size cpu.Size, address uint32) (uint32, error) {
@@ -187,6 +189,8 @@ func (m *MFP) NextEventCycles() (uint64, bool) {
 
 func (m *MFP) readByte(offset uint32) byte {
 	switch offset {
+	case mfpGPIP:
+		return m.gpipState()
 	case mfpTADR:
 		return m.timerCurrentValue(0)
 	case mfpTBDR:
@@ -314,6 +318,24 @@ func (m *MFP) timerCurrentValue(index int) byte {
 
 func (m *MFP) raiseChannel(channel int) {
 	m.setRegisterBit(pendingRegisterForChannel(channel), channelBit(channel))
+}
+
+func (m *MFP) SetACIAInterrupt(asserted bool) {
+	if asserted == m.aciaIRQActive {
+		return
+	}
+	m.aciaIRQActive = asserted
+	if asserted {
+		m.raiseChannel(6)
+	}
+}
+
+func (m *MFP) gpipState() byte {
+	value := m.registers[mfpGPIP]
+	if m.aciaIRQActive {
+		return value &^ 0x10
+	}
+	return value | 0x10
 }
 
 func (m *MFP) nextPendingChannel() (int, bool) {
