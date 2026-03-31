@@ -26,9 +26,10 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 	rom := devices.NewROM(loopROM(nil), defaultROMHighAlias, secondaryROMAlias)
 	overlay := devices.NewOverlayROM(rom, ram)
 	memoryConfig := devices.NewMemoryConfig(overlay, ram.Size())
+	blitter := devices.NewBlitter(ram)
 	monsterProbe := devices.NewBusErrorRegion(devices.AddressRange{Start: 0xFFFE00, End: 0xFFFE10})
 	openBus := devices.NewOpenBus(devices.AddressRange{Start: 0xFF8000, End: 0x1000000})
-	bus := NewSTBus(overlay, ram, memoryConfig, devices.NewGLUE(), monsterProbe, openBus, rom)
+	bus := NewSTBus(overlay, ram, memoryConfig, devices.NewGLUE(), blitter, monsterProbe, openBus, rom)
 
 	if _, err := bus.Read(cpu.Word, 1); err == nil {
 		t.Fatalf("expected address error for odd word access")
@@ -64,6 +65,14 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 	}
 	if value != 0 {
 		t.Fatalf("expected unmapped io hole to read open bus, got %02x want 00", value)
+	}
+
+	value, err = bus.Read(cpu.Byte, 0xFF8A3C)
+	if err != nil {
+		t.Fatalf("read blitter status register: %v", err)
+	}
+	if value != 0 {
+		t.Fatalf("expected blitter status register to reset to 00, got %02x", value)
 	}
 
 	if _, err := bus.Read(cpu.Byte, 0xFFFE00); err == nil {

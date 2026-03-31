@@ -56,6 +56,7 @@ type Machine struct {
 	overlayROM   *devices.OverlayROM
 	memoryConfig *devices.MemoryConfig
 	shifter      *devices.Shifter
+	blitter      *devices.Blitter
 	mfp          *devices.MFP
 	ikbd         *devices.IKBD
 	acia         *devices.ACIA
@@ -115,6 +116,7 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 		devices.AddressRange{Start: 0xFF8000, End: 0x1000000},
 	)
 	shifter := devices.NewShifter(ram)
+	blitter := devices.NewBlitter(ram)
 	mfp := devices.NewMFP(cfg.ClockHz)
 	ikbd := devices.NewIKBD()
 	acia := devices.NewACIA(ikbd, mfp.SetACIAInterrupt)
@@ -128,6 +130,7 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 		memoryConfig,
 		glue,
 		shifter,
+		blitter,
 		mfp,
 		acia,
 		fdc,
@@ -153,6 +156,7 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 		overlayROM:   overlayROM,
 		memoryConfig: memoryConfig,
 		shifter:      shifter,
+		blitter:      blitter,
 		mfp:          mfp,
 		ikbd:         ikbd,
 		acia:         acia,
