@@ -141,6 +141,87 @@ func TestBlitterHalftoneOnlyFillUsesLineNumber(t *testing.T) {
 	}
 }
 
+func TestBlitterFillsMultipleWordsAcrossRows(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	blitter := NewBlitter(ram)
+
+	for i := 0; i < 16; i++ {
+		mustWriteBlitter(t, blitter, uint32(i*2), cpu.Word, 0xFFFF)
+	}
+
+	mustWriteBlitter(t, blitter, 0x28, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2A, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2C, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2E, cpu.Word, 2)
+	mustWriteBlitter(t, blitter, 0x30, cpu.Word, 0x000E)
+	mustWriteBlitter(t, blitter, 0x32, cpu.Long, 0x00000300)
+	mustWriteBlitter(t, blitter, 0x36, cpu.Word, 2)
+	mustWriteBlitter(t, blitter, 0x38, cpu.Word, 2)
+	mustWriteBlitter(t, blitter, 0x3A, cpu.Byte, 1)
+	mustWriteBlitter(t, blitter, 0x3B, cpu.Byte, 3)
+	mustWriteBlitter(t, blitter, 0x3D, cpu.Byte, 0)
+	mustWriteBlitter(t, blitter, 0x3C, cpu.Byte, blitterBusy|blitterHog)
+
+	wantAddrs := []uint32{0x000300, 0x000302, 0x000310, 0x000312}
+	for _, addr := range wantAddrs {
+		value, err := ram.Read(cpu.Word, addr)
+		if err != nil {
+			t.Fatalf("read filled word at %06x: %v", addr, err)
+		}
+		if value != 0xFFFF {
+			t.Fatalf("unexpected filled value at %06x: got %04x want ffff", addr, value)
+		}
+	}
+
+	status, err := blitter.Read(cpu.Byte, blitterBase+0x3C)
+	if err != nil {
+		t.Fatalf("read status after fill: %v", err)
+	}
+	if status&blitterHog == 0 {
+		t.Fatalf("expected HOG bit to remain set after BUSY write, got %02x", status)
+	}
+}
+
+func TestBlitterCopiesReverseDirectionForOverlap(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	blitter := NewBlitter(ram)
+
+	if err := ram.Write(cpu.Word, 0x000404, 0x1111); err != nil {
+		t.Fatalf("write source word 0: %v", err)
+	}
+	if err := ram.Write(cpu.Word, 0x000406, 0x2222); err != nil {
+		t.Fatalf("write source word 1: %v", err)
+	}
+
+	mustWriteBlitter(t, blitter, 0x20, cpu.Word, 0xFFFE)
+	mustWriteBlitter(t, blitter, 0x22, cpu.Word, 0xFFFC)
+	mustWriteBlitter(t, blitter, 0x24, cpu.Long, 0x00000406)
+	mustWriteBlitter(t, blitter, 0x28, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2A, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2C, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2E, cpu.Word, 0xFFFE)
+	mustWriteBlitter(t, blitter, 0x30, cpu.Word, 0xFFFC)
+	mustWriteBlitter(t, blitter, 0x32, cpu.Long, 0x0000040A)
+	mustWriteBlitter(t, blitter, 0x36, cpu.Word, 2)
+	mustWriteBlitter(t, blitter, 0x38, cpu.Word, 1)
+	mustWriteBlitter(t, blitter, 0x3A, cpu.Byte, 2)
+	mustWriteBlitter(t, blitter, 0x3B, cpu.Byte, 3)
+	mustWriteBlitter(t, blitter, 0x3D, cpu.Byte, blitterFXSR)
+	mustWriteBlitter(t, blitter, 0x3C, cpu.Byte, blitterBusy)
+
+	value0, err := ram.Read(cpu.Word, 0x000408)
+	if err != nil {
+		t.Fatalf("read copied overlap word 0: %v", err)
+	}
+	value1, err := ram.Read(cpu.Word, 0x00040A)
+	if err != nil {
+		t.Fatalf("read copied overlap word 1: %v", err)
+	}
+	if value0 != 0x1111 || value1 != 0x2222 {
+		t.Fatalf("unexpected reverse copy result: got %04x %04x want 1111 2222", value0, value1)
+	}
+}
+
 func mustWriteBlitter(t *testing.T, blitter *Blitter, offset uint32, size cpu.Size, value uint32) {
 	t.Helper()
 	if err := blitter.Write(size, blitterBase+offset, value); err != nil {

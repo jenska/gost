@@ -184,6 +184,41 @@ func TestMFPTimerAccumulatesFractionalCPUClock(t *testing.T) {
 	}
 }
 
+func TestMFPAutoEOITimerCRepeats(t *testing.T) {
+	mfp := NewMFP(8_000_000)
+
+	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
+		t.Fatalf("write vector base: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERB, 0x20); err != nil {
+		t.Fatalf("write interrupt enable: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRB, 0x20); err != nil {
+		t.Fatalf("write interrupt mask: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTCDR, 1); err != nil {
+		t.Fatalf("write timer c data: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTCDCR, 0x10); err != nil {
+		t.Fatalf("write timer cd control: %v", err)
+	}
+
+	mfp.Advance(14)
+	irqs := mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected first timer c interrupt, got %d", len(irqs))
+	}
+
+	mfp.Advance(14)
+	irqs = mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected recurring timer c interrupt under auto-EOI, got %d", len(irqs))
+	}
+	if irqs[0].Vector == nil || *irqs[0].Vector != 0x45 {
+		t.Fatalf("unexpected recurring timer c vector: %+v", irqs[0].Vector)
+	}
+}
+
 func TestMFPTimerNextEventCycles(t *testing.T) {
 	mfp := NewMFP(8_000_000)
 
@@ -282,5 +317,26 @@ func TestMFPGPIPBit4ReflectsACIAInterruptLine(t *testing.T) {
 	}
 	if byte(cleared)&0x10 == 0 {
 		t.Fatalf("expected cleared ACIA line to read high, GPIP=%02x", byte(cleared))
+	}
+}
+
+func TestMFPGPIPBit7ReflectsMonitorType(t *testing.T) {
+	mfp := NewMFP(8_000_000)
+
+	mono, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read mono GPIP: %v", err)
+	}
+	if byte(mono)&0x80 != 0 {
+		t.Fatalf("expected monochrome monitor to clear GPIP bit 7, GPIP=%02x", byte(mono))
+	}
+
+	mfp.SetColorMonitor(true)
+	color, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read color GPIP: %v", err)
+	}
+	if byte(color)&0x80 == 0 {
+		t.Fatalf("expected color monitor to set GPIP bit 7, GPIP=%02x", byte(color))
 	}
 }

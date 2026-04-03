@@ -158,3 +158,16 @@ func TestIKBDPushKeyQueuesExtendedMouseScancodes(t *testing.T) {
 		}
 	}
 }
+
+func TestIKBDLongCommandDoesNotOverflowParserBuffer(t *testing.T) {
+	ikbd := NewIKBD()
+	ikbd.Reset()
+
+	for _, cmd := range []byte{0x19, 1, 2, 3, 4, 5, 6} {
+		ikbd.HandleCommand(cmd)
+	}
+
+	if ikbd.commandAt != 0 || ikbd.remaining != 0 {
+		t.Fatalf("expected parser to reset after a long command, got commandAt=%d remaining=%d", ikbd.commandAt, ikbd.remaining)
+	}
+}

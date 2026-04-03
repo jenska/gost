@@ -52,6 +52,7 @@ type MFP struct {
 	softwareEOI    bool
 	inFlight       [16]bool
 	aciaIRQActive  bool
+	colorMonitor   bool
 	timers         [4]mfpTimer
 	serialBuffer   byte
 	hostClockHz    uint64
@@ -88,6 +89,11 @@ func (m *MFP) Reset() {
 	m.serialBuffer = 0
 	m.clockRemainder = 0
 	m.aciaIRQActive = false
+}
+
+// SetColorMonitor controls the monitor-detect input presented on GPIP bit 7.
+func (m *MFP) SetColorMonitor(enabled bool) {
+	m.colorMonitor = enabled
 }
 
 func (m *MFP) Read(size cpu.Size, address uint32) (uint32, error) {
@@ -149,8 +155,8 @@ func (m *MFP) DrainInterrupts() []Interrupt {
 	}
 
 	m.clearRegisterBit(pendingRegisterForChannel(channel), channelBit(channel))
-	m.inFlight[channel] = true
 	if m.softwareEOI {
+		m.inFlight[channel] = true
 		m.setRegisterBit(serviceRegisterForChannel(channel), channelBit(channel))
 	}
 
@@ -332,10 +338,17 @@ func (m *MFP) SetACIAInterrupt(asserted bool) {
 
 func (m *MFP) gpipState() byte {
 	value := m.registers[mfpGPIP]
-	if m.aciaIRQActive {
-		return value &^ 0x10
+	if m.colorMonitor {
+		value |= 0x80
+	} else {
+		value &^= 0x80
 	}
-	return value | 0x10
+	if m.aciaIRQActive {
+		value &^= 0x10
+	} else {
+		value |= 0x10
+	}
+	return value
 }
 
 func (m *MFP) nextPendingChannel() (int, bool) {

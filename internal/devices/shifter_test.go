@@ -31,6 +31,46 @@ func TestShifterLowResolutionPixelConversion(t *testing.T) {
 	}
 }
 
+func TestShifterMediumResolutionPixelConversion(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := NewShifter(ram)
+
+	if err := shifter.Write(1, 0xFF8260, 0x01); err != nil {
+		t.Fatalf("write resolution: %v", err)
+	}
+	if err := shifter.Write(2, paletteBase+2, 0x0700); err != nil {
+		t.Fatalf("write palette 1: %v", err)
+	}
+	if err := shifter.Write(2, paletteBase+4, 0x0070); err != nil {
+		t.Fatalf("write palette 2: %v", err)
+	}
+	if err := shifter.Write(2, paletteBase+6, 0x0770); err != nil {
+		t.Fatalf("write palette 3: %v", err)
+	}
+	if err := ram.LoadAt(0, []byte{0x80, 0x00, 0x00, 0x00}); err != nil {
+		t.Fatalf("load medium bitplanes: %v", err)
+	}
+
+	if !shifter.Render(1) {
+		t.Fatalf("expected render to report a change")
+	}
+
+	width, height := shifter.Dimensions()
+	if width != 640 || height != 200 {
+		t.Fatalf("unexpected dimensions: got %dx%d want 640x200", width, height)
+	}
+
+	framebuffer := shifter.FrameBuffer()
+	first := framebuffer[:4]
+	if first[0] != 255 || first[1] != 0 || first[2] != 0 || first[3] != 255 {
+		t.Fatalf("unexpected first medium pixel RGBA: %v", first)
+	}
+	second := framebuffer[4:8]
+	if second[0] != 0 || second[1] != 0 || second[2] != 0 || second[3] != 255 {
+		t.Fatalf("unexpected second medium pixel RGBA: %v", second)
+	}
+}
+
 func TestShifterHighResolutionMonochromeConversion(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	shifter := NewShifter(ram)

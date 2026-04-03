@@ -6,6 +6,8 @@
 
 GoST is an Atari ST emulator in Go built around [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu) for Motorola 68000 CPU emulation.
 
+Browser build target after GitHub Pages is enabled: [GoST WebAssembly demo](https://jenska.github.io/gost/)
+
 ## Status
 
 Major milestone:
@@ -18,9 +20,9 @@ This repository currently provides a working emulator foundation:
 - A desktop frontend is available via Ebitengine.
 - The project has an ST-oriented bus and device model for RAM, ROM, Shifter, MFP, IKBD/ACIA, FDC, and PSG.
 - Headless execution, tracing hooks, and a basic test suite are in place.
-- The bundled EmuTOS image now reaches the GEM desktop.
+- The bundled EmuTOS image now reaches the GEM desktop in both monochrome and color-monitor modes.
 
-This is still not a complete Atari ST emulator for general real-TOS compatibility. The hardware models are intentionally simplified and the current desktop boot depends on the latest bring-up fixes, including local `m68kemu` patches that still need to be upstreamed.
+This is still not a complete Atari ST emulator for general real-TOS compatibility. The hardware models are intentionally simplified, and the current desktop boot is still based on a focused ST bring-up rather than broad hardware completeness.
 
 Current 400-frame headless boot state:
 
@@ -29,12 +31,14 @@ Current 400-frame headless boot state:
 Current bring-up note:
 
 - EmuTOS now reaches the GEM desktop and renders the menu bar and desktop icons shown above.
+- The machine can now boot as either a monochrome or color-monitor ST, with color mode enabled via `--color-monitor`.
 - The current focus is cleanup and stabilization: validating longer-running desktop sessions and broadening hardware and TOS compatibility.
 - Real-TOS compatibility and fuller Atari ST hardware coverage are still works in progress.
 
 Release milestone summary:
 
 - Desktop boot now works in both the windowed frontend and headless PNG-dump mode.
+- Color-monitor boot now works in low-resolution ST mode via the normal frontend and headless mode.
 - The project has moved from early hardware bring-up into stabilization and compatibility work.
 
 ## Features
@@ -46,6 +50,7 @@ Release milestone summary:
 - ROM aliases in high memory
 - 1 MiB RAM default machine profile
 - Low, medium, and high resolution Shifter framebuffer conversion
+- Configurable monochrome or color-monitor ST boot profile
 - Minimal MFP timer and interrupt support
 - Minimal IKBD/ACIA keyboard and mouse event path
 - Simplified sector-based floppy controller with `.st` image support
@@ -83,6 +88,12 @@ make run
 go run ./cmd/gost
 ```
 
+Color monitor mode:
+
+```bash
+go run ./cmd/gost --color-monitor
+```
+
 Headless mode:
 
 ```bash
@@ -91,6 +102,12 @@ make headless
 
 ```bash
 go run ./cmd/gost --headless --frames 300
+```
+
+Headless color desktop boot:
+
+```bash
+go run ./cmd/gost --headless --color-monitor --frames 400 --dump-frame /tmp/gost-color-desktop.png
 ```
 
 Headless boot inspection with a PNG dump:
@@ -131,14 +148,43 @@ make run ARGS="--os /path/to/tos.rom"
 go run ./cmd/gost --os /path/to/tos.rom
 ```
 
+## WebAssembly
+
+Yes: this project already compiles to `GOOS=js GOARCH=wasm`, and the bundled EmuTOS image makes a browser build practical without adding ROM download steps.
+
+Build the browser demo assets into `docs/`:
+
+```bash
+make wasm
+```
+
+Serve the generated files locally:
+
+```bash
+python3 -m http.server --directory docs 8000
+```
+
+Then open [http://localhost:8000](http://localhost:8000).
+
+The repository also includes a GitHub Pages workflow at [`./.github/workflows/pages.yml`](./.github/workflows/pages.yml). Once Pages is enabled for GitHub Actions on this repository, the README link above points to the expected public URL:
+
+- [https://jenska.github.io/gost/](https://jenska.github.io/gost/)
+
+Current browser-build limitations:
+
+- The browser build always boots the bundled EmuTOS image.
+- CLI paths such as `--rom`, `--os`, `--floppy-a`, and `--dump-frame` remain desktop/headless features unless a browser-side file picker is added later.
+- The generated `.wasm` binary must be served over HTTP; opening `docs/index.html` directly from disk will not work.
+
 ### CLI Flags
 
 - `--rom <path>`: path to the TOS ROM image
 - `--os <path>`: alias for `--rom`
-- `--floppy-a <path>`: optional floppy disk image for drive A
+- `--floppy-a <path>`: optional floppy disk image for drive A (`.st` or `.msa`)
 - `--scale <n>`: window scale factor, default `2`
 - `--fullscreen`: start fullscreen
 - `--headless`: run without opening a window
+- `--color-monitor`: emulate an Atari color monitor instead of monochrome
 - `--frames <n>`: number of frames to run in headless mode, default `300`
 - `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, or `boot-verbose`
 - `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces, default `0xE00000`

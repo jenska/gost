@@ -10,6 +10,11 @@ import (
 	cpu "github.com/jenska/m68kemu"
 )
 
+type AudioSource interface {
+	DrainMonoF32([]float32) int
+	OutputSampleRate() int
+}
+
 const (
 	defaultROMHighAlias = 0xFC0000
 	secondaryROMAlias   = 0xE00000
@@ -58,7 +63,6 @@ type Machine struct {
 	shifter      *devices.Shifter
 	blitter      *devices.Blitter
 	mfp          *devices.MFP
-	ikbd         *devices.IKBD
 	acia         *devices.ACIA
 	fdc          *devices.FDC
 	psg          *devices.PSG
@@ -72,10 +76,6 @@ type Machine struct {
 }
 
 func LoadROM(path string) ([]byte, error) {
-	return os.ReadFile(path)
-}
-
-func LoadDiskImage(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
@@ -118,10 +118,10 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 	shifter := devices.NewShifter(ram)
 	blitter := devices.NewBlitter(ram)
 	mfp := devices.NewMFP(cfg.ClockHz)
-	ikbd := devices.NewIKBD()
-	acia := devices.NewACIA(ikbd, mfp.SetACIAInterrupt)
-	fdc := devices.NewFDC()
-	psg := devices.NewPSG()
+	mfp.SetColorMonitor(cfg.ColorMonitor)
+	acia := devices.NewACIA(mfp.SetACIAInterrupt)
+	fdc := devices.NewFDC(ram, nil)
+	psg := devices.NewPSG(cfg.ClockHz)
 	vbl := devices.NewVBLSource(cfg.ClockHz, cfg.FrameHz)
 
 	bus := NewSTBus(
@@ -158,12 +158,11 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 		shifter:      shifter,
 		blitter:      blitter,
 		mfp:          mfp,
-		ikbd:         ikbd,
 		acia:         acia,
 		fdc:          fdc,
 		psg:          psg,
 		vbl:          vbl,
-		clocked:      []devices.Clocked{mfp, acia, fdc, vbl},
+		clocked:      []devices.Clocked{mfp, acia, fdc, psg, vbl},
 		irqSources:   []devices.InterruptSource{vbl, mfp, acia, fdc},
 		frameCycles:  cfg.ClockHz / cfg.FrameHz,
 		traceMode:    cfg.Trace,
@@ -390,8 +389,11 @@ func (m *Machine) RunUntil(options cpu.RunUntilOptions) (cpu.RunResult, error) {
 	if options.MaxInstructions == 0 &&
 		!options.StopOnException &&
 		!options.StopOnIllegal &&
+		len(options.StopAtPC) == 0 &&
 		options.StopOnPCRange == nil &&
-		options.StopWhenPCOutside == nil {
+		options.StopWhenPCOutside == nil &&
+		options.StopOnBusAccess == nil &&
+		options.StopPredicate == nil {
 		return cpu.RunResult{}, fmt.Errorf("RunUntil requires a stop condition or instruction limit")
 	}
 
@@ -425,6 +427,14 @@ func (m *Machine) RunUntil(options cpu.RunUntilOptions) (cpu.RunResult, error) {
 		if result.HasException {
 			total.Exception = result.Exception
 			total.HasException = true
+		}
+		if result.HasBusAccess {
+			total.BusAccess = result.BusAccess
+			total.HasBusAccess = true
+		}
+		if result.HasInterrupt {
+			total.Interrupt = result.Interrupt
+			total.HasInterrupt = true
 		}
 
 		if result.Reason != cpu.RunStopInstructionLimit {
@@ -460,16 +470,20 @@ func (m *Machine) Registers() cpu.Registers {
 	return m.cpu.Registers()
 }
 
+func (m *Machine) DebugState() cpu.DebugState {
+	return m.cpu.DebugState()
+}
+
 func (m *Machine) Cycles() uint64 {
 	return m.cpu.Cycles()
 }
 
 func (m *Machine) PushKey(scancode byte, pressed bool) {
-	m.ikbd.PushKey(scancode, pressed)
+	m.acia.PushKey(scancode, pressed)
 }
 
 func (m *Machine) PushMouse(dx, dy int, buttons byte) {
-	m.ikbd.PushMouse(dx, dy, buttons)
+	m.acia.PushMouse(dx, dy, buttons)
 }
 
 func (m *Machine) MousePosition() (x, y int, ok bool) {
@@ -494,6 +508,10 @@ func (m *Machine) MousePosition() (x, y int, ok bool) {
 	}
 
 	return x, y, true
+}
+
+func (m *Machine) AudioSource() AudioSource {
+	return m.psg
 }
 
 func (m *Machine) InsertFloppy(side int, image []byte) error {

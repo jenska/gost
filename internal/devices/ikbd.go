@@ -1,7 +1,11 @@
 package devices
 
-import "io"
+import (
+	"io"
+)
 
+// ikbdMouseMode controls whether mouse motion is reported as deltas or as an
+// absolute position.
 type ikbdMouseMode byte
 
 const (
@@ -9,30 +13,61 @@ const (
 	ikbdMouseModeAbsolute
 )
 
+const (
+	// Supported IKBD command bytes used by the emulator's command parser.
+	ikbdCmdSetRelativeMouseMode byte = 0x08
+	ikbdCmdSetAbsoluteMouseMode byte = 0x09
+	ikbdCmdSetMouseScale        byte = 0x0C
+	ikbdCmdInterrogateMouse     byte = 0x0D
+	ikbdCmdLoadMousePosition    byte = 0x0E
+	ikbdCmdSetYBottomUp         byte = 0x0F
+	ikbdCmdSetYTopDown          byte = 0x10
+	ikbdCmdResumeOutput         byte = 0x11
+	ikbdCmdDisableMouse         byte = 0x12
+	ikbdCmdPauseOutput          byte = 0x13
+	ikbdCmdReset                byte = 0x80
+)
+
+const (
+	// IKBD packet and reply bytes emitted back to the ACIA.
+	ikbdReplySelfTestOK         byte = 0xF1
+	ikbdPacketAbsolutePosition  byte = 0xF7
+	ikbdPacketRelativeMouseBase byte = 0xF8
+)
+
 // IKBD implements a small queue-based model of the keyboard controller.
 type IKBD struct {
-	queue            []byte
-	command          [6]byte
-	commandAt        int
-	remaining        int
-	mouseDisabled    bool
-	outputPaused     bool
+	queue     []byte
+	command   [7]byte
+	commandAt int
+	remaining int
+	// mouseDisabled suppresses motion packets while still allowing stateful
+	// command handling.
+	mouseDisabled bool
+	// outputPaused temporarily stops outbound mouse data.
+	outputPaused bool
+	// invertMouseY flips the Y axis for subsequent host mouse motion.
 	invertMouseY     bool
 	lastMouseButtons byte
-	mouseMode        ikbdMouseMode
-	absX             uint16
-	absY             uint16
-	absMaxX          uint16
-	absMaxY          uint16
-	absScaleX        uint8
-	absScaleY        uint8
-	absButtons       byte
+	// mouseMode selects relative or absolute mouse reporting.
+	mouseMode ikbdMouseMode
+	absX      uint16
+	absY      uint16
+	absMaxX   uint16
+	absMaxY   uint16
+	// absScale* scales host mouse deltas before applying them to absolute
+	// coordinates.
+	absScaleX  uint8
+	absScaleY  uint8
+	absButtons byte
 }
 
+// NewIKBD constructs an IKBD in its default power-on state.
 func NewIKBD() *IKBD {
 	return &IKBD{}
 }
 
+// Reset clears queued data and restores the controller state to defaults.
 func (i *IKBD) Reset() {
 	i.queue = i.queue[:0]
 	i.commandAt = 0
@@ -51,6 +86,7 @@ func (i *IKBD) Reset() {
 	i.absButtons = 0
 }
 
+// PushKey enqueues a make or break scancode for delivery over the ACIA link.
 func (i *IKBD) PushKey(scancode byte, pressed bool) {
 	if pressed {
 		i.queue = append(i.queue, scancode&0x7F)
@@ -59,6 +95,8 @@ func (i *IKBD) PushKey(scancode byte, pressed bool) {
 	i.queue = append(i.queue, scancode|0x80)
 }
 
+// PushMouse converts host mouse movement into IKBD packets for the current
+// reporting mode.
 func (i *IKBD) PushMouse(dx, dy int, buttons byte) {
 	if i.outputPaused {
 		return
@@ -81,7 +119,7 @@ func (i *IKBD) PushMouse(dx, dy int, buttons byte) {
 		for dx != 0 || dy != 0 || buttons != i.lastMouseButtons {
 			stepX := clampMouseDelta(dx)
 			stepY := clampMouseDelta(dy)
-			i.queue = append(i.queue, 0xF8|buttons, byte(int8(stepX)), byte(int8(stepY)))
+			i.queue = append(i.queue, ikbdPacketRelativeMouseBase|buttons, byte(int8(stepX)), byte(int8(stepY)))
 			i.lastMouseButtons = buttons
 			dx -= stepX
 			dy -= stepY
@@ -89,6 +127,8 @@ func (i *IKBD) PushMouse(dx, dy int, buttons byte) {
 	}
 }
 
+// HandleCommand accumulates command bytes until the selected IKBD command has
+// all of its parameters, then applies the supported behavior.
 func (i *IKBD) HandleCommand(cmd byte) {
 	if i.commandAt == 0 {
 		i.command[0] = cmd
@@ -106,12 +146,15 @@ func (i *IKBD) HandleCommand(cmd byte) {
 		}
 	}
 
+	// Only the subset of IKBD commands needed by the emulator is modeled here.
 	switch i.command[0] {
-	case 0x08:
+	case ikbdCmdSetRelativeMouseMode:
+		// Return to the default streaming mouse mode.
 		i.mouseDisabled = false
 		i.outputPaused = false
 		i.mouseMode = ikbdMouseModeRelative
-	case 0x09:
+	case ikbdCmdSetAbsoluteMouseMode:
+		// Switch to absolute reporting and reset the tracked tablet position.
 		i.mouseDisabled = false
 		i.outputPaused = false
 		i.mouseMode = ikbdMouseModeAbsolute
@@ -120,14 +163,17 @@ func (i *IKBD) HandleCommand(cmd byte) {
 		i.absX = 0
 		i.absY = 0
 		i.absButtons = 0
-	case 0x0C:
+	case ikbdCmdSetMouseScale:
+		// Apply host-to-IKBD scaling for absolute position updates.
 		i.absScaleX = clampMouseScale(i.command[1])
 		i.absScaleY = clampMouseScale(i.command[2])
-	case 0x0D:
+	case ikbdCmdInterrogateMouse:
+		// Report the current absolute position when absolute mode is active.
 		if i.mouseMode == ikbdMouseModeAbsolute {
 			i.queueAbsolutePosition()
 		}
-	case 0x0E:
+	case ikbdCmdLoadMousePosition:
+		// Seed the absolute pointer position from the command payload.
 		i.absX = uint16(i.command[2])<<8 | uint16(i.command[3])
 		i.absY = uint16(i.command[4])<<8 | uint16(i.command[5])
 		if i.absX > i.absMaxX {
@@ -136,17 +182,18 @@ func (i *IKBD) HandleCommand(cmd byte) {
 		if i.absY > i.absMaxY {
 			i.absY = i.absMaxY
 		}
-	case 0x0F:
+	case ikbdCmdSetYBottomUp:
 		i.invertMouseY = true
-	case 0x10:
+	case ikbdCmdSetYTopDown:
 		i.invertMouseY = false
-	case 0x11:
+	case ikbdCmdResumeOutput:
 		i.outputPaused = false
-	case 0x12:
+	case ikbdCmdDisableMouse:
 		i.mouseDisabled = true
-	case 0x13:
+	case ikbdCmdPauseOutput:
 		i.outputPaused = true
-	case 0x80:
+	case ikbdCmdReset:
+		// `0x80 0x01` performs the reset sequence expected during startup.
 		if i.commandAt >= 2 && i.command[1] == 0x01 {
 			i.outputPaused = false
 			i.mouseDisabled = false
@@ -160,7 +207,7 @@ func (i *IKBD) HandleCommand(cmd byte) {
 			i.absScaleX = 1
 			i.absScaleY = 1
 			i.absButtons = 0
-			i.queue = append(i.queue, 0xF1)
+			i.queue = append(i.queue, ikbdReplySelfTestOK)
 		}
 	}
 
@@ -168,10 +215,12 @@ func (i *IKBD) HandleCommand(cmd byte) {
 	i.remaining = 0
 }
 
+// HasData reports whether a byte is ready to be read by the ACIA.
 func (i *IKBD) HasData() bool {
 	return len(i.queue) > 0
 }
 
+// ReadByte pops the next queued IKBD byte.
 func (i *IKBD) ReadByte() (byte, error) {
 	if len(i.queue) == 0 {
 		return 0, io.EOF
@@ -181,17 +230,18 @@ func (i *IKBD) ReadByte() (byte, error) {
 	return value, nil
 }
 
+// ikbdCommandExtraBytes returns how many parameter bytes follow a command byte.
 func ikbdCommandExtraBytes(cmd byte) int {
 	switch cmd {
-	case 0x07, 0x17, 0x80:
+	case 0x07, 0x17, ikbdCmdReset:
 		return 1
-	case 0x0A, 0x0B, 0x0C, 0x21, 0x22:
+	case 0x0A, 0x0B, ikbdCmdSetMouseScale, 0x21, 0x22:
 		return 2
 	case 0x20:
 		return 3
-	case 0x09:
+	case ikbdCmdSetAbsoluteMouseMode:
 		return 4
-	case 0x0E:
+	case ikbdCmdLoadMousePosition:
 		return 5
 	case 0x19, 0x1B:
 		return 6
@@ -200,6 +250,8 @@ func ikbdCommandExtraBytes(cmd byte) int {
 	}
 }
 
+// clampMouseDelta limits relative mouse motion to the signed 8-bit packet
+// range used by the IKBD.
 func clampMouseDelta(delta int) int {
 	switch {
 	case delta > 127:
@@ -211,6 +263,8 @@ func clampMouseDelta(delta int) int {
 	}
 }
 
+// clampMouseScale treats a zero scale factor as 1 so absolute mode still
+// advances.
 func clampMouseScale(value byte) uint8 {
 	if value == 0 {
 		return 1
@@ -218,6 +272,8 @@ func clampMouseScale(value byte) uint8 {
 	return uint8(value)
 }
 
+// clampAbsoluteCoordinate applies a scaled delta and clamps the result to the
+// configured absolute axis range.
 func clampAbsoluteCoordinate(current uint16, delta int, max uint16, scale uint8) uint16 {
 	if delta == 0 {
 		return current
@@ -266,7 +322,7 @@ func (i *IKBD) updateAbsoluteButtons(buttons byte) {
 func (i *IKBD) queueAbsolutePosition() {
 	i.queue = append(
 		i.queue,
-		0xF7,
+		ikbdPacketAbsolutePosition,
 		i.absButtons,
 		byte(i.absX>>8),
 		byte(i.absX),

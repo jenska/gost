@@ -2,32 +2,40 @@ package ebiten
 
 import (
 	"fmt"
+	"time"
 
 	ebitenlib "github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/jenska/gost/internal/emulator"
 	"github.com/jenska/gost/internal/platform/inputmap"
-)
-
-const (
-	gemArrowHotspotX   = 1
-	gemArrowHotspotY   = 0
-	macOSArrowHotspotX = 5
-	macOSArrowHotspotY = 5
+	"github.com/jenska/ym2149/renderer/atarist"
+	"github.com/jenska/ym2149/renderer/audiostream"
 )
 
 type App struct {
 	machine      *emulator.Machine
-	scale        int
+	scale        float64
 	texture      *ebitenlib.Image
 	prevKeys     map[ebitenlib.Key]bool
 	guestMouseX  int
 	guestMouseY  int
 	lastButtons  byte
+	mousePrimed  bool
 	mouseReady   bool
+	mouseSyncing int
+	mouseStable  int
 	mouseInside  bool
 	cursorHidden bool
 }
+
+const (
+	initialMouseSyncFrames = 12
+	maxMouseSyncStep       = 32
+	initialMouseWarmup     = 12
+	reentryMouseWarmup     = 2
+	audioBufferSize        = 75 * time.Millisecond
+)
 
 func Run(machine *emulator.Machine, cfg emulator.Config) error {
 	app := &App{
@@ -44,10 +52,17 @@ func Run(machine *emulator.Machine, cfg emulator.Config) error {
 	app.resetMouseTracking(width, height)
 
 	ebitenlib.SetWindowTitle("GoST Emulator")
-	ebitenlib.SetWindowSize(width*app.scale, height*app.scale)
+	ebitenlib.SetWindowSize(scaledWindowSize(width, height, app.scale))
 	ebitenlib.SetWindowResizingMode(ebitenlib.WindowResizingModeEnabled)
 	ebitenlib.SetTPS(int(cfg.FrameHz))
 	ebitenlib.SetFullscreen(cfg.Fullscreen)
+
+	player, err := newAudioPlayer(machine)
+	if err != nil {
+		return err
+	}
+	defer player.Close()
+	player.Play()
 
 	return ebitenlib.RunGame(app)
 }
@@ -64,7 +79,7 @@ func (a *App) Update() error {
 		width, height := a.machine.Dimensions()
 		if a.texture == nil || a.texture.Bounds().Dx() != width || a.texture.Bounds().Dy() != height {
 			a.texture = ebitenlib.NewImage(width, height)
-			ebitenlib.SetWindowSize(width*a.scale, height*a.scale)
+			ebitenlib.SetWindowSize(scaledWindowSize(width, height, a.scale))
 			a.resetMouseTracking(width, height)
 		}
 		a.texture.WritePixels(a.machine.FrameBuffer())
@@ -122,35 +137,87 @@ func (a *App) handleMouse() {
 		buttons |= 0x01
 	}
 
-	a.setHostCursorHidden(inside)
 	if !inside {
 		a.setHostCursorHidden(false)
+		a.mouseStable = 0
 		a.mouseInside = false
-		if !a.mouseReady {
-			a.lastButtons = buttons
-		}
+		a.mouseReady = false
+		a.mouseSyncing = 0
+		a.lastButtons = buttons
 		return
 	}
 
-	if guestX, guestY, ok := a.machine.MousePosition(); ok {
+	guestX, guestY, guestOK := a.machine.MousePosition()
+	if !guestOK {
+		a.setHostCursorHidden(false)
+		a.mouseStable = 0
+		a.mouseReady = false
+		a.mouseSyncing = 0
+		a.mouseInside = true
+		a.lastButtons = buttons
+		return
+	}
+
+	warmupFrames := initialMouseWarmup
+	if a.mousePrimed {
+		warmupFrames = reentryMouseWarmup
+	}
+	if a.mouseStable < warmupFrames {
+		a.mouseStable++
+	}
+	if a.mouseStable < warmupFrames {
+		a.setHostCursorHidden(false)
+		a.guestMouseX = guestX
+		a.guestMouseY = guestY
+		a.mouseReady = false
+		a.mouseSyncing = 0
+		a.mouseInside = true
+		a.lastButtons = buttons
+		return
+	}
+
+	a.setHostCursorHidden(true)
+	targetX, targetY := guestTargetPosition(x, y, width, height)
+
+	if !a.mouseReady {
+		a.guestMouseX = guestX
+		a.guestMouseY = guestY
+		a.mouseSyncing = initialMouseSyncFrames
+		a.mousePrimed = true
+		a.lastButtons = buttons
+		a.mouseReady = true
+		a.mouseInside = true
+	}
+
+	if a.mouseSyncing > 0 {
 		a.guestMouseX = guestX
 		a.guestMouseY = guestY
 	}
 
-	if !a.mouseReady {
-		a.lastButtons = buttons
-		a.mouseReady = true
-	}
-
-	targetX, targetY := guestTargetPosition(x, y, width, height)
 	dx := targetX - a.guestMouseX
 	dy := targetY - a.guestMouseY
+	if a.mouseSyncing > 0 {
+		dx = clampMouseSyncDelta(dx)
+		dy = clampMouseSyncDelta(dy)
+	}
 
 	if dx != 0 || dy != 0 || buttons != a.lastButtons {
 		a.machine.PushMouse(dx, dy, buttons)
+		a.guestMouseX += dx
+		a.guestMouseY += dy
+		a.lastButtons = buttons
+	}
+	if a.mouseSyncing > 0 {
+		if absInt(targetX-a.guestMouseX) <= 1 && absInt(targetY-a.guestMouseY) <= 1 {
+			a.mouseSyncing = 0
+			a.guestMouseX = targetX
+			a.guestMouseY = targetY
+		} else {
+			a.mouseSyncing--
+		}
+	} else {
 		a.guestMouseX = targetX
 		a.guestMouseY = targetY
-		a.lastButtons = buttons
 	}
 	a.mouseInside = true
 }
@@ -159,7 +226,10 @@ func (a *App) resetMouseTracking(width, height int) {
 	a.guestMouseX = width / 2
 	a.guestMouseY = height / 2
 	a.lastButtons = 0
+	a.mousePrimed = false
 	a.mouseReady = false
+	a.mouseSyncing = 0
+	a.mouseStable = 0
 	a.mouseInside = false
 	a.cursorHidden = false
 }
@@ -176,13 +246,57 @@ func (a *App) setHostCursorHidden(hidden bool) {
 	a.cursorHidden = hidden
 }
 
+func scaledWindowSize(width, height int, scale float64) (int, int) {
+	return int(float64(width) * scale), int(float64(height) * scale)
+}
+
+func clampMouseSyncDelta(delta int) int {
+	switch {
+	case delta > maxMouseSyncStep:
+		return maxMouseSyncStep
+	case delta < -maxMouseSyncStep:
+		return -maxMouseSyncStep
+	default:
+		return delta
+	}
+}
+
 func guestTargetPosition(hostX, hostY, width, height int) (int, int) {
-	return clampToBounds(
-		hostX-(macOSArrowHotspotX-gemArrowHotspotX),
-		hostY-(macOSArrowHotspotY-gemArrowHotspotY),
-		width,
-		height,
-	)
+	return clampToBounds(hostX, hostY, width, height)
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func newAudioPlayer(machine *emulator.Machine) (*audio.Player, error) {
+	source := atarist.New(machine.AudioSource(), atarist.Config{})
+	reader := audiostream.NewReader(source, 1024)
+
+	ctx, err := ensureAudioContext(reader.OutputSampleRate())
+	if err != nil {
+		return nil, fmt.Errorf("create audio context: %w", err)
+	}
+
+	player, err := ctx.NewPlayerF32(reader)
+	if err != nil {
+		return nil, fmt.Errorf("create audio player: %w", err)
+	}
+	player.SetBufferSize(audioBufferSize)
+	return player, nil
+}
+
+func ensureAudioContext(sampleRate int) (*audio.Context, error) {
+	if ctx := audio.CurrentContext(); ctx != nil {
+		if ctx.SampleRate() != sampleRate {
+			return nil, fmt.Errorf("existing Ebiten audio context uses sample rate %d, want %d", ctx.SampleRate(), sampleRate)
+		}
+		return ctx, nil
+	}
+	return audio.NewContext(sampleRate), nil
 }
 
 func clampToBounds(x, y, width, height int) (int, int) {

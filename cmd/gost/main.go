@@ -20,15 +20,16 @@ func main() {
 
 	flag.StringVar(&cfg.ROMPath, "rom", "", "path to Atari ST TOS ROM")
 	flag.StringVar(&cfg.ROMPath, "os", "", "path to operating system ROM image")
-	flag.StringVar(&cfg.FloppyA, "floppy-a", "", "path to drive A disk image (.st)")
-	flag.IntVar(&cfg.Scale, "scale", cfg.Scale, "display scale factor")
+	flag.StringVar(&cfg.FloppyA, "floppy-a", "", "path to drive A disk image (.st or .msa)")
+	flag.Float64Var(&cfg.Scale, "scale", cfg.Scale, "display scale factor")
 	flag.BoolVar(&cfg.Fullscreen, "fullscreen", false, "run in fullscreen mode")
 	flag.BoolVar(&cfg.Headless, "headless", false, "run without a window")
+	flag.BoolVar(&cfg.ColorMonitor, "color-monitor", false, "emulate an Atari color monitor instead of monochrome")
 	flag.StringVar(&cfg.Trace, "trace", "", "enable tracing: cpu|cpu-verbose|boot|boot-verbose")
 	flag.StringVar(&traceStart, "trace-start", traceStart, "first PC included in boot traces (hex or decimal)")
 	flag.StringVar(&traceEnd, "trace-end", traceEnd, "last PC included in boot traces (hex or decimal)")
 	flag.StringVar(&dumpFramePath, "dump-frame", "", "write the last rendered framebuffer to a PNG file")
-	flag.IntVar(&frames, "frames", 300, "frames to run in headless mode")
+	flag.IntVar(&frames, "frames", 500, "frames to run in headless mode")
 	flag.Parse()
 
 	var err error
@@ -60,7 +61,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "create machine: %v\n", err)
 		os.Exit(1)
 	}
-	if cfg.Trace != "" && cfg.Trace != "cpu" {
+	if cfg.Trace != "" {
 		machine.EnableTrace(cfg.Trace, os.Stdout)
 	}
 

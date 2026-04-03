@@ -3,14 +3,13 @@ package devices
 import "testing"
 
 func TestACIAReceivesIKBDBytes(t *testing.T) {
-	ikbd := NewIKBD()
-	acia := NewACIA(ikbd, nil)
+	acia := NewACIA(nil)
 
 	if err := acia.Write(1, aciaBase, 0x95); err != nil {
 		t.Fatalf("enable keyboard RX interrupts: %v", err)
 	}
 
-	ikbd.PushKey(0x1E, true)
+	acia.PushKey(0x1E, true)
 	acia.Advance(0)
 
 	status, err := acia.Read(1, aciaBase)
@@ -31,8 +30,7 @@ func TestACIAReceivesIKBDBytes(t *testing.T) {
 }
 
 func TestACIAMIDIChannelStaysIndependent(t *testing.T) {
-	ikbd := NewIKBD()
-	acia := NewACIA(ikbd, nil)
+	acia := NewACIA(nil)
 
 	if err := acia.Write(1, aciaBase+4, 0x03); err != nil {
 		t.Fatalf("reset MIDI channel: %v", err)
@@ -56,14 +54,13 @@ func TestACIAMIDIChannelStaysIndependent(t *testing.T) {
 }
 
 func TestACIAKeyboardDoesNotQueueDirectCPUInterrupt(t *testing.T) {
-	ikbd := NewIKBD()
-	acia := NewACIA(ikbd, nil)
+	acia := NewACIA(nil)
 
 	if err := acia.Write(1, aciaBase, 0x95); err != nil {
 		t.Fatalf("enable keyboard RX interrupts: %v", err)
 	}
 
-	ikbd.PushKey(0x1E, true)
+	acia.PushKey(0x1E, true)
 	acia.Advance(0)
 
 	if irqs := acia.DrainInterrupts(); len(irqs) != 0 {
@@ -72,9 +69,8 @@ func TestACIAKeyboardDoesNotQueueDirectCPUInterrupt(t *testing.T) {
 }
 
 func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
-	ikbd := NewIKBD()
 	mfp := NewMFP(8_000_000)
-	acia := NewACIA(ikbd, mfp.SetACIAInterrupt)
+	acia := NewACIA(mfp.SetACIAInterrupt)
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
 		t.Fatalf("write vector base: %v", err)
@@ -89,7 +85,7 @@ func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
 		t.Fatalf("enable keyboard RX interrupts: %v", err)
 	}
 
-	ikbd.PushKey(0x1E, true)
+	acia.PushKey(0x1E, true)
 	acia.Advance(0)
 
 	irqs := mfp.DrainInterrupts()
@@ -110,10 +106,9 @@ func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
 }
 
 func TestACIAStaggersQueuedMouseBytesAcrossAdvances(t *testing.T) {
-	ikbd := NewIKBD()
-	acia := NewACIA(ikbd, nil)
+	acia := NewACIA(nil)
 
-	ikbd.PushMouse(4, 2, 0)
+	acia.PushMouse(4, 2, 0)
 	acia.Advance(0)
 
 	status, err := acia.Read(1, aciaBase)

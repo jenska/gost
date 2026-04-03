@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    >
+    <title>GoST WebAssembly Demo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg-top: #09131c;
+        --bg-bottom: #010408;
+        --panel: rgba(8, 17, 25, 0.88);
+        --panel-border: rgba(123, 255, 187, 0.28);
+        --text: #e9f7f1;
+        --muted: #9bb7ad;
+        --accent: #9dff7a;
+        --accent-strong: #5df4bf;
+        --shadow: rgba(0, 0, 0, 0.45);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top, rgba(93, 244, 191, 0.18), transparent 30%),
+          linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+        background-size: 100% 3px, 3px 100%;
+        opacity: 0.18;
+      }
+
+      main {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0 32px;
+      }
+
+      .shell {
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 30px 80px var(--shadow);
+        backdrop-filter: blur(12px);
+      }
+
+      .masthead {
+        padding: 18px 22px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px 16px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: clamp(1.2rem, 3vw, 1.75rem);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .subtitle {
+        margin: 6px 0 0;
+        color: var(--muted);
+        max-width: 64ch;
+        line-height: 1.5;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--accent);
+        font-size: 0.9rem;
+        white-space: nowrap;
+      }
+
+      .badge::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent-strong);
+        box-shadow: 0 0 12px rgba(93, 244, 191, 0.8);
+      }
+
+      .content {
+        display: grid;
+        grid-template-columns: minmax(260px, 320px) 1fr;
+        gap: 0;
+      }
+
+      .sidebar,
+      .viewport {
+        padding: 22px;
+      }
+
+      .sidebar {
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .viewport {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .panel-title {
+        margin: 0 0 12px;
+        font-size: 0.84rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .status {
+        margin: 0 0 18px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        line-height: 1.5;
+      }
+
+      .notes {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .notes li + li {
+        margin-top: 10px;
+      }
+
+      .frame {
+        position: relative;
+        flex: 1;
+        min-height: 480px;
+        display: grid;
+        place-items: center;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background:
+          radial-gradient(circle at top, rgba(157, 255, 122, 0.15), transparent 28%),
+          linear-gradient(180deg, rgba(6, 9, 12, 0.92), rgba(2, 3, 5, 0.96));
+        overflow: hidden;
+      }
+
+      .frame canvas {
+        width: 100% !important;
+        height: 100% !important;
+        image-rendering: pixelated;
+      }
+
+      #fallback {
+        position: absolute;
+        inset: 18px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        padding: 24px;
+        border-radius: 14px;
+        border: 1px dashed rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.02);
+        color: var(--muted);
+      }
+
+      #fallback.hidden {
+        display: none;
+      }
+
+      .footer {
+        color: var(--muted);
+        font-size: 0.95rem;
+        line-height: 1.5;
+      }
+
+      .footer a {
+        color: var(--accent);
+      }
+
+      @media (max-width: 900px) {
+        .content {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          border-right: 0;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .frame {
+          min-height: 320px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="shell">
+        <header class="masthead">
+          <div>
+            <h1 class="title">GoST WebAssembly Demo</h1>
+            <p class="subtitle">
+              Atari ST bring-up in the browser, powered by Go, Ebitengine, and
+              the bundled EmuTOS image.
+            </p>
+          </div>
+          <div class="badge">Browser build</div>
+        </header>
+
+        <div class="content">
+          <aside class="sidebar">
+            <h2 class="panel-title">Status</h2>
+            <p class="status" id="status">Loading Go runtime and emulator...</p>
+
+            <h2 class="panel-title">Notes</h2>
+            <ul class="notes">
+              <li>The browser build boots the bundled EmuTOS ROM by default.</li>
+              <li>ROM, floppy, and PNG dump file paths stay desktop-only for now.</li>
+              <li>Use a local server or GitHub Pages. Opening this HTML file directly will not load the `.wasm` binary.</li>
+            </ul>
+          </aside>
+
+          <section class="viewport">
+            <div class="frame">
+              <div id="fallback">
+                The emulator canvas will appear here once `gost.wasm` starts.
+              </div>
+            </div>
+
+            <p class="footer">
+              Source and desktop builds live in
+              <a href="https://github.com/jenska/gost">github.com/jenska/gost</a>.
+            </p>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="wasm_exec.js"></script>
+    <script>
+      const frameNode = document.querySelector(".frame");
+      const statusNode = document.getElementById("status");
+      const fallbackNode = document.getElementById("fallback");
+
+      const go = new Go();
+
+      const attachCanvas = () => {
+        const canvas = document.querySelector("body > canvas, .frame > canvas");
+        if (!canvas) {
+          return false;
+        }
+        if (canvas.parentElement !== frameNode) {
+          frameNode.appendChild(canvas);
+        }
+        fallbackNode.classList.add("hidden");
+        return true;
+      };
+
+      const observer = new MutationObserver(() => {
+        attachCanvas();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+
+      const originalRun = go.run.bind(go);
+      go.run = async (instance) => {
+        try {
+          return await originalRun(instance);
+        } finally {
+          observer.disconnect();
+        }
+      };
+
+      async function loadWasm() {
+        const response = await fetch("gost.wasm");
+        if (!response.ok) {
+          throw new Error(`fetch gost.wasm: ${response.status} ${response.statusText}`);
+        }
+
+        if (WebAssembly.instantiateStreaming) {
+          try {
+            return await WebAssembly.instantiateStreaming(response.clone(), go.importObject);
+          } catch (error) {
+            console.warn("instantiateStreaming failed, falling back to ArrayBuffer", error);
+          }
+        }
+
+        const bytes = await response.arrayBuffer();
+        return WebAssembly.instantiate(bytes, go.importObject);
+      }
+
+      loadWasm()
+        .then(async (result) => {
+          statusNode.textContent = "Booting bundled EmuTOS...";
+          try {
+            await go.run(result.instance);
+            statusNode.textContent = "The emulator exited.";
+            fallbackNode.classList.remove("hidden");
+          } catch (error) {
+            statusNode.textContent = "The emulator stopped unexpectedly.";
+            fallbackNode.classList.remove("hidden");
+            console.error(error);
+          }
+        })
+        .catch((error) => {
+          if (!attachCanvas()) {
+            fallbackNode.classList.remove("hidden");
+          }
+          statusNode.textContent = "Failed to start the browser build. See the console for details.";
+          console.error(error);
+        });
+
+      window.addEventListener("load", () => {
+        attachCanvas();
+      });
+
+      window.addEventListener("resize", () => {
+        attachCanvas();
+      });
+    </script>
+  </body>
+</html>
