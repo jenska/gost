@@ -340,3 +340,15 @@ func TestMFPGPIPBit7ReflectsMonitorType(t *testing.T) {
 		t.Fatalf("expected color monitor to set GPIP bit 7, GPIP=%02x", byte(color))
 	}
 }
+
+func TestMFPGPIPBit5DefaultsHighWithoutICDRTC(t *testing.T) {
+	mfp := NewMFP(8_000_000)
+
+	value, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read GPIP: %v", err)
+	}
+	if byte(value)&0x20 == 0 {
+		t.Fatalf("expected GPIP bit 5 to idle high, GPIP=%02x", byte(value))
+	}
+}

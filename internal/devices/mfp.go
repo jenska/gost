@@ -81,6 +81,9 @@ func (m *MFP) Reset() {
 	clear(m.inFlight[:])
 	m.vectorBase = 0x40
 	m.softwareEOI = false
+	// Unmodeled GPIP inputs idle high on a plain ST, which prevents EmuTOS
+	// from falsely detecting optional hardware like the ICD RTC.
+	m.registers[mfpGPIP] = 0x6F
 	m.registers[mfpVR] = m.vectorBase
 	m.timers[0] = mfpTimer{channel: 13, dataReg: mfpTADR}
 	m.timers[1] = mfpTimer{channel: 8, dataReg: mfpTBDR}
