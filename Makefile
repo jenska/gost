@@ -16,10 +16,11 @@ ifneq ("$(wildcard $(DEFAULT_FLOPPY))","")
 RUN_FLOPPY_ARGS += --floppy-a $(DEFAULT_FLOPPY)
 endif
 
-.PHONY: help build test run headless wasm clean
+.PHONY: help ci build test run headless wasm clean
 
 help:
 	@printf "Available targets:\n"
+	@printf "  make ci               Run tests and build native + wasm artifacts\n"
 	@printf "  make build            Build the emulator binary\n"
 	@printf "  make test             Run the Go test suite\n"
 	@printf "  make run              Run the desktop emulator\n"
@@ -28,11 +29,14 @@ help:
 	@printf "  make clean            Remove built artifacts\n"
 	@printf "\n"
 	@printf "Examples:\n"
+	@printf "  make ci\n"
 	@printf "  make build\n"
 	@printf "  make run ARGS='--fullscreen'\n"
 	@printf "  make headless FRAMES=600 ARGS='--trace cpu'\n"
 	@printf "  make run ARGS='--floppy-a /path/to/disk.msa'\n"
 	@printf "  make wasm\n"
+
+ci: test build wasm
 
 build:
 	@mkdir -p $(BIN_DIR)
