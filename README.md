@@ -14,48 +14,42 @@ Major milestone:
 
 - `v0.2.0` is the first GoST release that boots the bundled EmuTOS image all the way to the GEM desktop.
 
-This repository currently provides a working emulator foundation:
+GoST has moved beyond early bring-up and now provides a usable Atari ST desktop baseline:
 
-- `m68kemu` is wired in as the CPU core.
-- A desktop frontend is available via Ebitengine.
-- The project has an ST-oriented bus and device model for RAM, ROM, Shifter, MFP, IKBD/ACIA, FDC, and PSG.
-- Headless execution, tracing hooks, and a basic test suite are in place.
-- The bundled EmuTOS image now reaches the GEM desktop in both monochrome and color-monitor modes.
+- The bundled EmuTOS image boots to the GEM desktop in both monochrome and color-monitor modes.
+- The desktop frontend runs in an Ebitengine window with working keyboard, mouse, and audio paths.
+- Headless execution, PNG frame dumping, CPU/boot tracing, and browser builds are available for development and debugging.
+- The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, floppy DMA/FDC, and YM2149-backed PSG audio.
 
-This is still not a complete Atari ST emulator for general real-TOS compatibility. The hardware models are intentionally simplified, and the current desktop boot is still based on a focused ST bring-up rather than broad hardware completeness.
+This is still not a complete Atari ST emulator for broad real-software compatibility yet. The current focus is cleanup, stabilization, and expanding compatibility from the working desktop baseline.
 
-Current 400-frame headless boot state:
+Latest 400-frame color desktop boot:
 
 ![Current emulation status](assets/media/gost-status.png)
 
-Current bring-up note:
+Current focus:
 
-- EmuTOS now reaches the GEM desktop and renders the menu bar and desktop icons shown above.
-- The machine can now boot as either a monochrome or color-monitor ST, with color mode enabled via `--color-monitor`.
-- The current focus is cleanup and stabilization: validating longer-running desktop sessions and broadening hardware and TOS compatibility.
-- Real-TOS compatibility and fuller Atari ST hardware coverage are still works in progress.
-
-Release milestone summary:
-
-- Desktop boot now works in both the windowed frontend and headless PNG-dump mode.
-- Color-monitor boot now works in low-resolution ST mode via the normal frontend and headless mode.
-- The project has moved from early hardware bring-up into stabilization and compatibility work.
+- Stabilize longer interactive GEM desktop sessions.
+- Improve compatibility with more real Atari ST applications and disk images.
+- Continue filling hardware behavior gaps where real software exposes them.
 
 ## Features
 
-- Go 1.26 project layout with a runnable `cmd/gost` entrypoint
-- `github.com/jenska/m68kemu` pinned as the CPU emulator dependency
-- 24-bit address bus via a local ST bus wrapper
-- Boot-vector proxy at address `0x000000`
-- ROM aliases in high memory
-- 1 MiB RAM default machine profile
-- Low, medium, and high resolution Shifter framebuffer conversion
-- Configurable monochrome or color-monitor ST boot profile
-- Minimal MFP timer and interrupt support
-- Minimal IKBD/ACIA keyboard and mouse event path
-- Simplified sector-based floppy controller with `.st` image support
-- CPU and boot trace options for bring-up and debugging
-- Headless framebuffer dump to PNG for boot inspection
+- Motorola 68000 emulation via [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu)
+- Atari ST machine model with a 24-bit bus, ROM overlay boot, and 1 MiB RAM default profile
+- GEM desktop boot with the bundled EmuTOS ROM
+- Monochrome and color-monitor boot modes
+- Low, medium, and high resolution Shifter framebuffer rendering
+- Working desktop input path for keyboard and mouse through IKBD/ACIA
+- YM2149-backed PSG sound with live audio playback in the desktop frontend
+- Atari ST Blitter register model exercised by live GEM/VDI boot
+- MFP timer and interrupt delivery
+- Floppy DMA/FDC path with `.st` and `.msa` image support
+- Desktop frontend via Ebitengine
+- Headless execution with PNG framebuffer dumping
+- CPU, boot, and verbose tracing for bring-up and debugging
+- WebAssembly build target for browser-based experiments
+- Automated Go test coverage for devices, emulator behavior, and frontend integration
 
 ## Project Layout
 
@@ -87,6 +81,8 @@ make run
 ```bash
 go run ./cmd/gost
 ```
+
+If `downloads/atari-st/PDATS321.msa` exists locally, `make run` and `make headless` automatically mount it as drive A.
 
 Color monitor mode:
 
@@ -131,11 +127,11 @@ go run ./cmd/gost --headless --frames 20 --trace boot-verbose --trace-start 0xE1
 With a floppy image:
 
 ```bash
-make run ARGS="--floppy-a /path/to/disk.st"
+make run ARGS="--floppy-a /path/to/disk.msa"
 ```
 
 ```bash
-go run ./cmd/gost --floppy-a /path/to/disk.st
+go run ./cmd/gost --floppy-a /path/to/disk.msa
 ```
 
 Override the bundled OS:
