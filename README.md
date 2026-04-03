@@ -6,7 +6,7 @@
 
 GoST is an Atari ST emulator in Go built around [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu) for Motorola 68000 CPU emulation.
 
-Browser build target after GitHub Pages is enabled: [GoST WebAssembly demo](https://jenska.github.io/gost/)
+Browser build target: [GoST WebAssembly demo](https://jenska.github.io/gost/)
 
 ## Status
 
@@ -162,9 +162,7 @@ python3 -m http.server --directory docs 8000
 
 Then open [http://localhost:8000](http://localhost:8000).
 
-The repository also includes a GitHub Pages workflow at [`./.github/workflows/pages.yml`](./.github/workflows/pages.yml). Once Pages is enabled for GitHub Actions on this repository, the README link above points to the expected public URL:
-
-- [https://jenska.github.io/gost/](https://jenska.github.io/gost/)
+The repository also includes a GitHub Pages workflow at [`./.github/workflows/pages.yml`](./.github/workflows/pages.yml).
 
 Current browser-build limitations:
 
@@ -261,10 +259,8 @@ This preserves deterministic emulation while creating room for asynchronous fram
 - Real TOS boot coverage beyond the bundled EmuTOS image is not complete yet
 - MMU/GLUE behavior is still incomplete
 - Shifter timing and register coverage are partial
-- MFP support is minimal and only suitable for early bring-up
 - IKBD protocol coverage is incomplete
-- Audio generation is not implemented yet
-- No STE features, blitter, hard disk, MIDI, or copy-protected disk format support yet
+- No hard disk, MIDI, or copy-protected disk format support yet
 
 ## Next Steps
 
@@ -272,5 +268,4 @@ This preserves deterministic emulation while creating room for asynchronous fram
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
 - Deepen WD1772 emulation beyond simple sector access
-- Add real YM2149 audio output
 - Build debugger and trace tooling around the existing machine core
