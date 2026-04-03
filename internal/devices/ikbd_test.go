@@ -1,6 +1,9 @@
 package devices
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestIKBDResetCommandQueuesVersionByte(t *testing.T) {
 	ikbd := NewIKBD()
@@ -170,4 +173,73 @@ func TestIKBDLongCommandDoesNotOverflowParserBuffer(t *testing.T) {
 	if ikbd.commandAt != 0 || ikbd.remaining != 0 {
 		t.Fatalf("expected parser to reset after a long command, got commandAt=%d remaining=%d", ikbd.commandAt, ikbd.remaining)
 	}
+}
+
+func TestIKBDInterrogateClockReturnsCurrentPackedBCDTime(t *testing.T) {
+	now := time.Date(2026, time.April, 3, 21, 45, 18, 0, time.Local)
+	ikbd := newTestIKBD(now)
+	ikbd.Reset()
+
+	ikbd.HandleCommand(0x1C)
+
+	want := []byte{0xFC, 0x26, 0x04, 0x03, 0x21, 0x45, 0x18}
+	for idx, expected := range want {
+		got, err := ikbd.ReadByte()
+		if err != nil {
+			t.Fatalf("read clock byte %d: %v", idx, err)
+		}
+		if got != expected {
+			t.Fatalf("unexpected clock byte %d: got %02x want %02x", idx, got, expected)
+		}
+	}
+}
+
+func TestIKBDSetClockUpdatesInterrogatedTime(t *testing.T) {
+	now := time.Date(2026, time.April, 3, 21, 45, 18, 0, time.Local)
+	ikbd := newTestIKBD(now)
+	ikbd.Reset()
+
+	for _, cmd := range []byte{0x1B, 0x24, 0x12, 0x31, 0x23, 0x59, 0x58} {
+		ikbd.HandleCommand(cmd)
+	}
+	ikbd.HandleCommand(0x1C)
+
+	want := []byte{0xFC, 0x24, 0x12, 0x31, 0x23, 0x59, 0x58}
+	for idx, expected := range want {
+		got, err := ikbd.ReadByte()
+		if err != nil {
+			t.Fatalf("read set clock byte %d: %v", idx, err)
+		}
+		if got != expected {
+			t.Fatalf("unexpected set clock byte %d: got %02x want %02x", idx, got, expected)
+		}
+	}
+}
+
+func TestIKBDSetClockIgnoresInvalidBCDFields(t *testing.T) {
+	now := time.Date(2026, time.April, 3, 21, 45, 18, 0, time.Local)
+	ikbd := newTestIKBD(now)
+	ikbd.Reset()
+
+	for _, cmd := range []byte{0x1B, 0x99, 0x1A, 0x04, 0x22, 0x77, 0x30} {
+		ikbd.HandleCommand(cmd)
+	}
+	ikbd.HandleCommand(0x1C)
+
+	want := []byte{0xFC, 0x99, 0x04, 0x04, 0x22, 0x45, 0x30}
+	for idx, expected := range want {
+		got, err := ikbd.ReadByte()
+		if err != nil {
+			t.Fatalf("read partial clock byte %d: %v", idx, err)
+		}
+		if got != expected {
+			t.Fatalf("unexpected partial clock byte %d: got %02x want %02x", idx, got, expected)
+		}
+	}
+}
+
+func newTestIKBD(now time.Time) *IKBD {
+	ikbd := NewIKBD()
+	ikbd.now = func() time.Time { return now }
+	return ikbd
 }

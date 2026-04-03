@@ -2,6 +2,7 @@ package devices
 
 import (
 	"io"
+	"time"
 )
 
 // ikbdMouseMode controls whether mouse motion is reported as deltas or as an
@@ -25,12 +26,15 @@ const (
 	ikbdCmdResumeOutput         byte = 0x11
 	ikbdCmdDisableMouse         byte = 0x12
 	ikbdCmdPauseOutput          byte = 0x13
+	ikbdCmdSetClock             byte = 0x1B
+	ikbdCmdInterrogateClock     byte = 0x1C
 	ikbdCmdReset                byte = 0x80
 )
 
 const (
 	// IKBD packet and reply bytes emitted back to the ACIA.
 	ikbdReplySelfTestOK         byte = 0xF1
+	ikbdReplyClockData          byte = 0xFC
 	ikbdPacketAbsolutePosition  byte = 0xF7
 	ikbdPacketRelativeMouseBase byte = 0xF8
 )
@@ -60,11 +64,14 @@ type IKBD struct {
 	absScaleX  uint8
 	absScaleY  uint8
 	absButtons byte
+	now        func() time.Time
+	clockBase  time.Time
+	clockSetAt time.Time
 }
 
 // NewIKBD constructs an IKBD in its default power-on state.
 func NewIKBD() *IKBD {
-	return &IKBD{}
+	return &IKBD{now: time.Now}
 }
 
 // Reset clears queued data and restores the controller state to defaults.
@@ -84,6 +91,9 @@ func (i *IKBD) Reset() {
 	i.absScaleX = 1
 	i.absScaleY = 1
 	i.absButtons = 0
+	now := i.nowTime()
+	i.clockBase = now
+	i.clockSetAt = now
 }
 
 // PushKey enqueues a make or break scancode for delivery over the ACIA link.
@@ -192,6 +202,10 @@ func (i *IKBD) HandleCommand(cmd byte) {
 		i.mouseDisabled = true
 	case ikbdCmdPauseOutput:
 		i.outputPaused = true
+	case ikbdCmdSetClock:
+		i.setClockFromCommand()
+	case ikbdCmdInterrogateClock:
+		i.queueClockData()
 	case ikbdCmdReset:
 		// `0x80 0x01` performs the reset sequence expected during startup.
 		if i.commandAt >= 2 && i.command[1] == 0x01 {
@@ -207,6 +221,9 @@ func (i *IKBD) HandleCommand(cmd byte) {
 			i.absScaleX = 1
 			i.absScaleY = 1
 			i.absButtons = 0
+			now := i.nowTime()
+			i.clockBase = now
+			i.clockSetAt = now
 			i.queue = append(i.queue, ikbdReplySelfTestOK)
 		}
 	}
@@ -243,11 +260,109 @@ func ikbdCommandExtraBytes(cmd byte) int {
 		return 4
 	case ikbdCmdLoadMousePosition:
 		return 5
-	case 0x19, 0x1B:
+	case 0x19, ikbdCmdSetClock:
 		return 6
 	default:
 		return 0
 	}
+}
+
+func (i *IKBD) nowTime() time.Time {
+	if i.now == nil {
+		i.now = time.Now
+	}
+	return i.now().Local().Truncate(time.Second)
+}
+
+func (i *IKBD) currentClock() time.Time {
+	if i.clockBase.IsZero() {
+		now := i.nowTime()
+		i.clockBase = now
+		i.clockSetAt = now
+	}
+	elapsed := i.nowTime().Sub(i.clockSetAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return i.clockBase.Add(elapsed).Truncate(time.Second)
+}
+
+func (i *IKBD) setClockFromCommand() {
+	current := i.currentClock()
+
+	if year, ok := decodePackedBCD(i.command[1]); ok {
+		current = time.Date(fullClockYear(year), current.Month(), current.Day(), current.Hour(), current.Minute(), current.Second(), 0, current.Location())
+	}
+	if month, ok := decodePackedBCD(i.command[2]); ok && month >= 1 && month <= 12 {
+		current = withClockDate(current, current.Year(), time.Month(month), min(current.Day(), daysIn(current.Year(), time.Month(month))))
+	}
+	if day, ok := decodePackedBCD(i.command[3]); ok {
+		maxDay := daysIn(current.Year(), current.Month())
+		if day >= 1 && day <= maxDay {
+			current = withClockDate(current, current.Year(), current.Month(), day)
+		}
+	}
+	if hour, ok := decodePackedBCD(i.command[4]); ok && hour <= 23 {
+		current = time.Date(current.Year(), current.Month(), current.Day(), hour, current.Minute(), current.Second(), 0, current.Location())
+	}
+	if minute, ok := decodePackedBCD(i.command[5]); ok && minute <= 59 {
+		current = time.Date(current.Year(), current.Month(), current.Day(), current.Hour(), minute, current.Second(), 0, current.Location())
+	}
+	if second, ok := decodePackedBCD(i.command[6]); ok && second <= 59 {
+		current = time.Date(current.Year(), current.Month(), current.Day(), current.Hour(), current.Minute(), second, 0, current.Location())
+	}
+
+	now := i.nowTime()
+	i.clockBase = current
+	i.clockSetAt = now
+}
+
+func (i *IKBD) queueClockData() {
+	current := i.currentClock()
+	i.queue = append(i.queue,
+		ikbdReplyClockData,
+		encodePackedBCD(current.Year()%100),
+		encodePackedBCD(int(current.Month())),
+		encodePackedBCD(current.Day()),
+		encodePackedBCD(current.Hour()),
+		encodePackedBCD(current.Minute()),
+		encodePackedBCD(current.Second()),
+	)
+}
+
+func decodePackedBCD(value byte) (int, bool) {
+	hi := int(value >> 4)
+	lo := int(value & 0x0F)
+	if hi > 9 || lo > 9 {
+		return 0, false
+	}
+	return hi*10 + lo, true
+}
+
+func encodePackedBCD(value int) byte {
+	return byte((value/10)<<4 | (value % 10))
+}
+
+func fullClockYear(twoDigit int) int {
+	if twoDigit >= 80 {
+		return 1900 + twoDigit
+	}
+	return 2000 + twoDigit
+}
+
+func withClockDate(current time.Time, year int, month time.Month, day int) time.Time {
+	return time.Date(year, month, day, current.Hour(), current.Minute(), current.Second(), 0, current.Location())
+}
+
+func daysIn(year int, month time.Month) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.Local).Day()
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // clampMouseDelta limits relative mouse motion to the signed 8-bit packet

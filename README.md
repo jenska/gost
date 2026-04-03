@@ -12,8 +12,6 @@ Browser build target: [GoST WebAssembly demo](https://jenska.github.io/gost/)
 
 Major milestone:
 
-- `v0.2.0` is the first GoST release that boots the bundled EmuTOS image all the way to the GEM desktop.
-
 GoST has moved beyond early bring-up and now provides a usable Atari ST desktop baseline:
 
 - The bundled EmuTOS image boots to the GEM desktop in both monochrome and color-monitor modes.
