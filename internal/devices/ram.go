@@ -157,6 +157,17 @@ func (r *RAM) LoadAt(address uint32, payload []byte) error {
 	return nil
 }
 
+func (r *RAM) CopyOut(address uint32, dst []byte) error {
+	for i := range dst {
+		offset, err := r.translate(address + uint32(i))
+		if err != nil {
+			return err
+		}
+		dst[i] = r.data[offset]
+	}
+	return nil
+}
+
 func (r *RAM) Reset() {
 	// The 68000 RESET instruction resets external devices but does not erase
 	// system RAM on an Atari ST. Keep RAM contents intact for warm-reset paths.

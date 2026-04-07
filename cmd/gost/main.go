@@ -19,8 +19,9 @@ func main() {
 	traceEnd := fmt.Sprintf("0x%06x", cfg.TraceEnd)
 
 	flag.StringVar(&cfg.ROMPath, "rom", "", "path to Atari ST TOS ROM")
-	flag.StringVar(&cfg.ROMPath, "os", "", "path to operating system ROM image")
 	flag.StringVar(&cfg.FloppyA, "floppy-a", "", "path to drive A disk image (.st or .msa)")
+	flag.IntVar(&cfg.HardDiskSizeMB, "hd-size-mb", cfg.HardDiskSizeMB, "virtual ACSI hard disk size in MiB (0 disables)")
+	flag.StringVar(&cfg.HardDiskImagePath, "hd-image", "", "path to persistent virtual hard disk image file")
 	flag.Float64Var(&cfg.Scale, "scale", cfg.Scale, "display scale factor")
 	flag.BoolVar(&cfg.Fullscreen, "fullscreen", false, "run in fullscreen mode")
 	flag.BoolVar(&cfg.Headless, "headless", false, "run without a window")
@@ -64,6 +65,22 @@ func main() {
 	if cfg.Trace != "" {
 		machine.EnableTrace(cfg.Trace, os.Stdout)
 	}
+	if cfg.HardDiskImagePath != "" {
+		image, created, err := emulator.EnsureHardDiskImageFile(cfg.HardDiskImagePath, machine.HardDiskImage())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "prepare hard disk image: %v\n", err)
+			os.Exit(1)
+		}
+		if err := machine.SetHardDiskImage(image); err != nil {
+			fmt.Fprintf(os.Stderr, "attach hard disk image: %v\n", err)
+			os.Exit(1)
+		}
+		if created {
+			fmt.Fprintf(os.Stderr, "created virtual hard disk image: %s (%d MiB)\n", cfg.HardDiskImagePath, len(image)/(1024*1024))
+		} else {
+			fmt.Fprintf(os.Stderr, "using virtual hard disk image: %s (%d MiB)\n", cfg.HardDiskImagePath, len(image)/(1024*1024))
+		}
+	}
 
 	if cfg.FloppyA != "" {
 		disk, err := emulator.LoadDiskImage(cfg.FloppyA)
@@ -77,9 +94,19 @@ func main() {
 		}
 	}
 
+	persistHardDisk := func() error {
+		if cfg.HardDiskImagePath == "" {
+			return nil
+		}
+		return emulator.SaveHardDiskImageFile(cfg.HardDiskImagePath, machine.HardDiskImage())
+	}
+
 	if cfg.Headless {
 		for i := 0; i < frames; i++ {
 			if _, err := machine.StepFrame(); err != nil {
+				if saveErr := persistHardDisk(); saveErr != nil {
+					fmt.Fprintf(os.Stderr, "save hard disk image: %v\n", saveErr)
+				}
 				fmt.Fprintf(os.Stderr, "headless frame %d: %v\n", i, err)
 				os.Exit(1)
 			}
@@ -91,11 +118,18 @@ func main() {
 				os.Exit(1)
 			}
 		}
+		if err := persistHardDisk(); err != nil {
+			fmt.Fprintf(os.Stderr, "save hard disk image: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Printf("frames=%d cycles=%d pc=%06x sr=%04x\n", frames, machine.Cycles(), regs.PC, regs.SR)
 		return
 	}
 
 	if err := gostebiten.Run(machine, cfg); err != nil {
+		if saveErr := persistHardDisk(); saveErr != nil {
+			fmt.Fprintf(os.Stderr, "save hard disk image: %v\n", saveErr)
+		}
 		fmt.Fprintf(os.Stderr, "run emulator: %v\n", err)
 		os.Exit(1)
 	}
@@ -105,6 +139,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "dump frame: %v\n", err)
 			os.Exit(1)
 		}
+	}
+	if err := persistHardDisk(); err != nil {
+		fmt.Fprintf(os.Stderr, "save hard disk image: %v\n", err)
+		os.Exit(1)
 	}
 }
 

@@ -215,6 +215,31 @@ func TestBundledEmuTOSCreatesMachine(t *testing.T) {
 	}
 }
 
+func TestMachineDefaultConfigCreates30MBVirtualHardDisk(t *testing.T) {
+	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+	if got, want := machine.HardDiskSizeBytes(), 30*1024*1024; got != want {
+		t.Fatalf("unexpected default virtual hard disk size: got %d want %d", got, want)
+	}
+}
+
+func TestMachineSetHardDiskImageReplacesVirtualDisk(t *testing.T) {
+	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+	custom := make([]byte, 2*512)
+	custom[0] = 0xAB
+
+	if err := machine.SetHardDiskImage(custom); err != nil {
+		t.Fatalf("set hard disk image: %v", err)
+	}
+
+	image := machine.HardDiskImage()
+	if len(image) != len(custom) {
+		t.Fatalf("hard disk image size = %d, want %d", len(image), len(custom))
+	}
+	if image[0] != 0xAB {
+		t.Fatalf("hard disk image content mismatch: got %02x want AB", image[0])
+	}
+}
+
 func TestBundledEmuTOSReachesShifterSetup(t *testing.T) {
 	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
 	if err != nil {
@@ -280,6 +305,23 @@ func TestBundledEmuTOSReachesDesktop(t *testing.T) {
 	}
 	if whitePixels < 5000 {
 		t.Fatalf("expected visible desktop framebuffer, got only %d white pixels", whitePixels)
+	}
+}
+
+func TestBundledEmuTOSMountsDefaultVirtualHardDiskAsDriveC(t *testing.T) {
+	machine := mustBootBundledMachine(t, DefaultConfig(), 500)
+
+	// EmuTOS low-memory variable _drvbits is at 0x04C2; bit 2 indicates C:.
+	var drvbits uint32
+	for i := 0; i < 4; i++ {
+		value, err := machine.ram.Read(cpu.Byte, 0x04C2+uint32(i))
+		if err != nil {
+			t.Fatalf("read _drvbits byte %d: %v", i, err)
+		}
+		drvbits = (drvbits << 8) | uint32(byte(value))
+	}
+	if drvbits&(1<<2) == 0 {
+		t.Fatalf("expected C: to be present in _drvbits, got %08x", drvbits)
 	}
 }
 

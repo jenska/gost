@@ -121,7 +121,14 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 	mfp.SetColorMonitor(cfg.ColorMonitor)
 	acia := devices.NewACIA(mfp.SetACIAInterrupt)
 	fdc := devices.NewFDC(ram, nil)
+	if cfg.HardDiskSizeMB > 0 {
+		sizeBytes := cfg.HardDiskSizeMB * 1024 * 1024
+		if err := fdc.CreateVirtualHardDisk(sizeBytes); err != nil {
+			return nil, fmt.Errorf("create virtual hard disk: %w", err)
+		}
+	}
 	psg := devices.NewPSG(cfg.ClockHz)
+	psg.SetPortAObserver(fdc.SetDriveControl)
 	vbl := devices.NewVBLSource(cfg.ClockHz, cfg.FrameHz)
 
 	bus := NewSTBus(
@@ -514,15 +521,35 @@ func (m *Machine) AudioSource() AudioSource {
 	return m.psg
 }
 
-func (m *Machine) InsertFloppy(side int, image []byte) error {
+func (m *Machine) InsertFloppy(side int, image *DiskImage) error {
 	if side != 0 {
 		return fmt.Errorf("only floppy side 0 is supported")
 	}
-	return m.fdc.InsertDisk(image)
+	if image == nil {
+		return fmt.Errorf("disk image is required")
+	}
+	return m.fdc.InsertDiskWithGeometry(
+		image.Data,
+		image.Geometry.SectorsPerTrack,
+		image.Geometry.Sides,
+		image.Geometry.Tracks,
+	)
 }
 
 func (m *Machine) RequestInterrupt(level uint8, vector *uint8) error {
 	return m.cpu.RequestInterrupt(level, vector)
+}
+
+func (m *Machine) HardDiskSizeBytes() int {
+	return m.fdc.HardDiskSizeBytes()
+}
+
+func (m *Machine) HardDiskImage() []byte {
+	return m.fdc.HardDiskImage()
+}
+
+func (m *Machine) SetHardDiskImage(image []byte) error {
+	return m.fdc.SetHardDiskImage(image)
 }
 
 func (m *Machine) LoadIntoRAM(address uint32, payload []byte) error {

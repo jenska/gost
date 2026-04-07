@@ -87,6 +87,23 @@ func TestPSGEmuTOSKeyclickSequenceGeneratesSamples(t *testing.T) {
 	}
 }
 
+func TestPSGNotifiesPortAObservers(t *testing.T) {
+	psg := NewPSG(8_000_000)
+	var values []byte
+	psg.SetPortAObserver(func(value byte) {
+		values = append(values, value)
+	})
+
+	writePSGRegister(t, psg, 14, 0x05)
+
+	if len(values) == 0 {
+		t.Fatalf("expected at least one port A notification")
+	}
+	if values[len(values)-1] != 0x05 {
+		t.Fatalf("unexpected final port A value: got %02x want 05", values[len(values)-1])
+	}
+}
+
 func writePSGRegister(t *testing.T, psg *PSG, reg, value byte) {
 	t.Helper()
 	if err := psg.Write(0, psgBase, uint32(reg)); err != nil {

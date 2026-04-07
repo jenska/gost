@@ -13,9 +13,10 @@ const (
 )
 
 type PSG struct {
-	address     byte
-	clockDomain *ym2149.ClockDomain
-	chip        *ym2149.Chip
+	address       byte
+	clockDomain   *ym2149.ClockDomain
+	chip          *ym2149.Chip
+	portAObserver func(byte)
 }
 
 func NewPSG(cpuClockHz uint64) *PSG {
@@ -40,6 +41,7 @@ func (p *PSG) Reset() {
 	p.address = 0
 	p.clockDomain.Reset()
 	p.chip.Reset()
+	p.notifyPortA()
 }
 
 func (p *PSG) Read(cpu.Size, uint32) (uint32, error) {
@@ -53,6 +55,9 @@ func (p *PSG) Write(size cpu.Size, address uint32, value uint32) error {
 		p.chip.SelectRegister(p.address)
 	case 2, 3:
 		p.chip.WriteData(byte(value))
+		if p.address == 7 || p.address == 14 {
+			p.notifyPortA()
+		}
 	}
 	return nil
 }
@@ -74,4 +79,16 @@ func (p *PSG) DrainMonoF32(dst []float32) int {
 
 func (p *PSG) OutputSampleRate() int {
 	return p.chip.OutputSampleRate()
+}
+
+func (p *PSG) SetPortAObserver(observer func(byte)) {
+	p.portAObserver = observer
+	p.notifyPortA()
+}
+
+func (p *PSG) notifyPortA() {
+	if p.portAObserver == nil {
+		return
+	}
+	p.portAObserver(p.chip.Ports().AOutput)
 }

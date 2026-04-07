@@ -11,6 +11,12 @@ type Config struct {
 	ROMPath string
 	// FloppyA points to the disk image inserted into floppy drive A.
 	FloppyA string
+	// HardDiskSizeMB configures an in-memory virtual ACSI hard disk size in MiB.
+	// Set to 0 to disable the virtual hard disk.
+	HardDiskSizeMB int
+	// HardDiskImagePath points to a persistent host file used as ACSI hard disk.
+	// When empty, the hard disk remains in-memory only.
+	HardDiskImagePath string
 	// Scale multiplies the rendered display size in windowed mode.
 	Scale float64
 	// Fullscreen starts the emulator in fullscreen mode.
@@ -39,11 +45,12 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Scale:      1.0,
-		TraceStart: bootTraceStart,
-		TraceEnd:   bootTraceEnd,
-		RAMSize:    DefaultRAMSize,
-		ClockHz:    DefaultClockHz,
-		FrameHz:    DefaultFrameHz,
+		Scale:          1.0,
+		TraceStart:     bootTraceStart,
+		TraceEnd:       bootTraceEnd,
+		RAMSize:        DefaultRAMSize,
+		ClockHz:        DefaultClockHz,
+		FrameHz:        DefaultFrameHz,
+		HardDiskSizeMB: 30,
 	}
 }

@@ -17,12 +17,13 @@ func TestDebugPDATS321FloppyTraffic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read floppy image: %v", err)
 	}
+	image := NewDiskImage(disk)
 
 	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
 	if err != nil {
 		t.Fatalf("create machine: %v", err)
 	}
-	if err := machine.InsertFloppy(0, disk); err != nil {
+	if err := machine.InsertFloppy(0, image); err != nil {
 		t.Fatalf("insert floppy: %v", err)
 	}
 
@@ -278,6 +279,48 @@ func TestDebugPDATS321AltAFDCTraffic(t *testing.T) {
 			t.Fatalf("post Alt+A frame %d: %v", frame, err)
 		}
 	}
+}
+
+func TestDebugACSITrafficAtBoot(t *testing.T) {
+	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create machine: %v", err)
+	}
+
+	var lastControl uint16
+	var acsiWrites int
+	var acsiStatusReads int
+	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+		addr := info.Address & 0xFFFFFF
+		if addr < 0xFF8600 || addr >= 0xFF8610 {
+			return
+		}
+		if info.Write && addr == 0xFF8606 {
+			lastControl = uint16(info.Value)
+			fmt.Printf("dmactl=%04x pc=%06x\n", lastControl, machine.Registers().PC&0xFFFFFF)
+			return
+		}
+		if info.Write && addr == 0xFF8604 && lastControl&0x0008 != 0 {
+			acsiWrites++
+			fmt.Printf("acsi cmd raw=%08x hi=%02x lo=%02x size=%d ctl=%04x pc=%06x\n",
+				info.Value, byte(info.Value>>8), byte(info.Value), info.Size, lastControl, machine.Registers().PC&0xFFFFFF)
+			return
+		}
+		if !info.Write && addr == 0xFF8604 && lastControl&0x0008 != 0 {
+			acsiStatusReads++
+			fmt.Printf("acsi status read raw=%08x hi=%02x lo=%02x size=%d ctl=%04x pc=%06x\n",
+				info.Value, byte(info.Value>>8), byte(info.Value), info.Size, lastControl, machine.Registers().PC&0xFFFFFF)
+			return
+		}
+	})
+	defer machine.cpu.SetBusTracer(nil)
+
+	for frame := 0; frame < 600; frame++ {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d: %v", frame, err)
+		}
+	}
+	fmt.Printf("acsi writes=%d status-reads=%d hd-bytes=%d\n", acsiWrites, acsiStatusReads, machine.HardDiskSizeBytes())
 }
 
 func moveMouseTo(t *testing.T, machine *Machine, targetX, targetY int) {

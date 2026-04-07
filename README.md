@@ -43,6 +43,7 @@ Current focus:
 - Atari ST Blitter register model exercised by live GEM/VDI boot
 - MFP timer and interrupt delivery
 - Floppy DMA/FDC path with `.st` and `.msa` image support
+- Virtual ACSI hard disk (30 MiB default) for hard-disk aware guest software
 - Desktop frontend via Ebitengine
 - Headless execution with PNG framebuffer dumping
 - CPU, boot, and verbose tracing for bring-up and debugging
@@ -135,11 +136,7 @@ go run ./cmd/gost --floppy-a /path/to/disk.msa
 Override the bundled OS:
 
 ```bash
-make run ARGS="--os /path/to/tos.rom"
-```
-
-```bash
-go run ./cmd/gost --os /path/to/tos.rom
+go run ./cmd/gost --rom /path/to/tos.rom
 ```
 
 ## WebAssembly
@@ -165,14 +162,15 @@ The repository also includes a GitHub Pages workflow at [`./.github/workflows/pa
 Current browser-build limitations:
 
 - The browser build always boots the bundled EmuTOS image.
-- CLI paths such as `--rom`, `--os`, `--floppy-a`, and `--dump-frame` remain desktop/headless features unless a browser-side file picker is added later.
+- CLI paths such as `--rom`, `--floppy-a`, `--hd-size-mb`, `--hd-image`, and `--dump-frame` remain desktop/headless features unless a browser-side file picker is added later.
 - The generated `.wasm` binary must be served over HTTP; opening `docs/index.html` directly from disk will not work.
 
 ### CLI Flags
 
 - `--rom <path>`: path to the TOS ROM image
-- `--os <path>`: alias for `--rom`
 - `--floppy-a <path>`: optional floppy disk image for drive A (`.st` or `.msa`)
+- `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
+- `--hd-image <path>`: optional persistent ACSI hard disk image file; loads if present, otherwise creates from `--hd-size-mb`
 - `--scale <n>`: window scale factor, default `2`
 - `--fullscreen`: start fullscreen
 - `--headless`: run without opening a window
@@ -250,7 +248,9 @@ This preserves deterministic emulation while creating room for asynchronous fram
 - The machine runs with an 8 MHz default clock and 50 Hz frame cadence.
 - The video path renders from RAM-backed bitplanes into an RGBA framebuffer for the host frontend.
 - Interrupts are routed into the CPU through the machine layer.
-- The floppy controller is intentionally simplified and currently models sector reads rather than full WD1772 behavior.
+- The floppy controller now covers WD1772 command groups (type I/II/III/IV) over sector images, including seek/step commands, sector and track DMA reads/writes, and read-address support.
+- A virtual ACSI hard disk is attached by default with 30 MiB capacity.
+- Use `--hd-image` to persist hard-disk contents across emulator restarts.
 
 ## Known Gaps
 
@@ -258,12 +258,12 @@ This preserves deterministic emulation while creating room for asynchronous fram
 - MMU/GLUE behavior is still incomplete
 - Shifter timing and register coverage are partial
 - IKBD protocol coverage is incomplete
-- No hard disk, MIDI, or copy-protected disk format support yet
+- MIDI and copy-protected disk format support are still missing
 
 ## Next Steps
 
 - Improve MMU/GLUE/Shifter behavior for broader TOS compatibility
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
-- Deepen WD1772 emulation beyond simple sector access
+- Improve ACSI hard-disk command coverage and real-software compatibility
 - Build debugger and trace tooling around the existing machine core

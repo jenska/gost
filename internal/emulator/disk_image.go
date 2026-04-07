@@ -8,13 +8,32 @@ import (
 
 const msaMagic = 0x0E0F
 
-func LoadDiskImage(path string) ([]byte, error) {
+type DiskGeometry struct {
+	SectorsPerTrack int
+	Sides           int
+	Tracks          int
+}
+
+type DiskImage struct {
+	Data     []byte
+	Geometry DiskGeometry
+}
+
+func NewDiskImage(data []byte) *DiskImage {
+	cloned := append([]byte(nil), data...)
+	return &DiskImage{
+		Data:     cloned,
+		Geometry: inferDiskGeometry(cloned),
+	}
+}
+
+func LoadDiskImage(path string) (*DiskImage, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	if !looksLikeMSA(data) {
-		return data, nil
+		return NewDiskImage(data), nil
 	}
 	return decodeMSA(data)
 }
@@ -23,7 +42,7 @@ func looksLikeMSA(data []byte) bool {
 	return len(data) >= 10 && binary.BigEndian.Uint16(data[:2]) == msaMagic
 }
 
-func decodeMSA(data []byte) ([]byte, error) {
+func decodeMSA(data []byte) (*DiskImage, error) {
 	if len(data) < 10 {
 		return nil, fmt.Errorf("MSA image too short")
 	}
@@ -82,5 +101,73 @@ func decodeMSA(data []byte) ([]byte, error) {
 		}
 	}
 
-	return out, nil
+	return &DiskImage{
+		Data: out,
+		Geometry: DiskGeometry{
+			SectorsPerTrack: sectorsPerTrack,
+			Sides:           sides,
+			Tracks:          endTrack - startTrack + 1,
+		},
+	}, nil
+}
+
+func inferDiskGeometry(data []byte) DiskGeometry {
+	if len(data) == 0 || len(data)%512 != 0 {
+		return DiskGeometry{}
+	}
+
+	type candidate struct {
+		geometry DiskGeometry
+		score    int
+	}
+
+	best := candidate{}
+	for _, sectorsPerTrack := range []int{9, 10, 11, 18} {
+		for _, sides := range []int{2, 1} {
+			bytesPerTrack := sectorsPerTrack * sides * 512
+			if bytesPerTrack == 0 || len(data)%bytesPerTrack != 0 {
+				continue
+			}
+			tracks := len(data) / bytesPerTrack
+			if tracks <= 0 || tracks > 255 {
+				continue
+			}
+
+			score := 0
+			if tracks == 80 {
+				score += 100
+			}
+			if sides == 2 {
+				score += 10
+			}
+			score -= absInt(tracks - 80)
+			if score > best.score {
+				best = candidate{
+					geometry: DiskGeometry{
+						SectorsPerTrack: sectorsPerTrack,
+						Sides:           sides,
+						Tracks:          tracks,
+					},
+					score: score,
+				}
+			}
+		}
+	}
+
+	if best.geometry.SectorsPerTrack != 0 {
+		return best.geometry
+	}
+
+	return DiskGeometry{
+		SectorsPerTrack: len(data) / 512,
+		Sides:           1,
+		Tracks:          1,
+	}
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
