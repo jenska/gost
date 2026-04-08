@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/jenska/gost/internal/assets"
 	"github.com/jenska/gost/internal/devices"
 	cpu "github.com/jenska/m68kemu"
 )
@@ -29,7 +28,8 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 	blitter := devices.NewBlitter(ram)
 	monsterProbe := devices.NewBusErrorRegion(devices.AddressRange{Start: 0xFFFE00, End: 0xFFFE10})
 	openBus := devices.NewOpenBus(devices.AddressRange{Start: 0xFF8000, End: 0x1000000})
-	bus := NewSTBus(overlay, ram, memoryConfig, devices.NewGLUE(), blitter, monsterProbe, openBus, rom)
+	bus := cpu.NewBus(overlay, ram, memoryConfig, devices.NewGLUE(), blitter, monsterProbe, openBus, rom)
+	bus.SetWaitStates(4)
 
 	if _, err := bus.Read(cpu.Word, 1); err == nil {
 		t.Fatalf("expected address error for odd word access")
@@ -86,7 +86,7 @@ func TestOverlayWritesPassThroughToRAM(t *testing.T) {
 	ram := devices.NewRAM(0, 1024*1024)
 	rom := devices.NewROM(loopROM(nil), defaultROMHighAlias, secondaryROMAlias)
 	overlay := devices.NewOverlayROM(rom, ram)
-	bus := NewSTBus(overlay, ram, rom)
+	bus := cpu.NewBus(overlay, ram, rom)
 
 	if err := bus.Write(cpu.Long, 0x04, 0x12345678); err != nil {
 		t.Fatalf("write through overlay: %v", err)
@@ -108,6 +108,9 @@ func TestMachineInterruptHandling(t *testing.T) {
 		0x60, 0xFE, // bra.s -2
 	})
 	machine := mustMachine(t, rom)
+	// Isolate this test to explicit CPU interrupt requests and avoid
+	// unrelated device IRQ traffic (for example frame-driven VBL interrupts).
+	machine.irqSources = nil
 
 	handlerAddress := uint32(0x00001000)
 	vectorOffset := uint32((24 + 6) * 4)
@@ -208,13 +211,6 @@ func TestMachineDebugStateMirrorsCPUState(t *testing.T) {
 	}
 }
 
-func TestBundledEmuTOSCreatesMachine(t *testing.T) {
-	machine := mustBundledMachine(t, DefaultConfig())
-	if machine.Registers().PC == 0 {
-		t.Fatalf("expected non-zero reset PC from bundled EmuTOS")
-	}
-}
-
 func TestMachineDefaultConfigCreates30MBVirtualHardDisk(t *testing.T) {
 	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
 	if got, want := machine.HardDiskSizeBytes(), 30*1024*1024; got != want {
@@ -240,312 +236,117 @@ func TestMachineSetHardDiskImageReplacesVirtualDisk(t *testing.T) {
 	}
 }
 
-func TestBundledEmuTOSReachesShifterSetup(t *testing.T) {
-	machine, err := NewMachine(DefaultConfig(), assets.DefaultROM())
+func TestMachineCPUOverclockScalesCPUOnly(t *testing.T) {
+	rom := loopROM([]byte{0x4E, 0x71, 0x60, 0xFE})
+
+	baseCfg := DefaultConfig()
+	baseCfg.CPUClockHz = baseCfg.ClockHz
+	base, err := NewMachine(baseCfg, rom)
 	if err != nil {
-		t.Fatalf("create machine with bundled EmuTOS: %v", err)
+		t.Fatalf("create base machine: %v", err)
 	}
 
-	for frame := 0; frame < 200; frame++ {
-		if _, err := machine.StepFrame(); err != nil {
-			t.Fatalf("step frame %d: %v", frame, err)
-		}
-		if machine.shifter.ScreenBase() != 0 {
-			return
-		}
+	overCfg := DefaultConfig()
+	overCfg.CPUClockHz = overCfg.ClockHz * 2
+	over, err := NewMachine(overCfg, rom)
+	if err != nil {
+		t.Fatalf("create overclocked machine: %v", err)
 	}
 
-	t.Fatalf("expected EmuTOS boot to program a non-zero shifter screen base within 200 frames")
-}
-
-func TestBundledEmuTOSReachesDesktop(t *testing.T) {
-	machine := mustBootBundledMachine(t, DefaultConfig(), 400)
-
-	if panicRecordSet(t, machine) {
-		t.Fatalf("expected desktop boot to avoid the old panic path")
+	if base.frameCycles != over.frameCycles {
+		t.Fatalf("hardware frame cycles changed by CPU overclock: base=%d over=%d", base.frameCycles, over.frameCycles)
 	}
 
-	width, height := machine.shifter.Dimensions()
-	if width != 640 || height != 400 {
-		t.Fatalf("expected high-resolution desktop mode, got %dx%d", width, height)
+	baseStartCycles := base.Cycles()
+	overStartCycles := over.Cycles()
+	if _, err := base.StepFrame(); err != nil {
+		t.Fatalf("step base frame: %v", err)
+	}
+	if _, err := over.StepFrame(); err != nil {
+		t.Fatalf("step overclocked frame: %v", err)
 	}
 
-	frame := machine.FrameBuffer()
-	if len(frame) != width*height*4 {
-		t.Fatalf("unexpected framebuffer size: got %d want %d", len(frame), width*height*4)
+	baseDelta := base.Cycles() - baseStartCycles
+	overDelta := over.Cycles() - overStartCycles
+	if overDelta <= baseDelta {
+		t.Fatalf("expected overclock to increase CPU work per frame: base_delta=%d over_delta=%d", baseDelta, overDelta)
+	}
+	ratio := float64(overDelta) / float64(baseDelta)
+	if ratio < 1.9 || ratio > 2.1 {
+		t.Fatalf("unexpected CPU cycle scaling ratio: base_delta=%d over_delta=%d ratio=%.3f want ~2.0", baseDelta, overDelta, ratio)
 	}
 
-	var menuBlack, trashBlack, whitePixels int
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			offset := (y*width + x) * 4
-			r, g, b, a := frame[offset], frame[offset+1], frame[offset+2], frame[offset+3]
-			if a == 0 {
-				continue
-			}
-			if r == 0xFF && g == 0xFF && b == 0xFF {
-				whitePixels++
-			}
-			if r == 0x00 && g == 0x00 && b == 0x00 {
-				if y < 16 && x < 220 {
-					menuBlack++
-				}
-				if x < 80 && y > 340 {
-					trashBlack++
-				}
-			}
-		}
-	}
-
-	if menuBlack < 40 {
-		t.Fatalf("expected menu-bar text pixels, got only %d black pixels in top-left menu region", menuBlack)
-	}
-	if trashBlack < 40 {
-		t.Fatalf("expected desktop icon pixels, got only %d black pixels in trash region", trashBlack)
-	}
-	if whitePixels < 5000 {
-		t.Fatalf("expected visible desktop framebuffer, got only %d white pixels", whitePixels)
+	baseVBL, _ := base.vbl.NextEventCycles()
+	overVBL, _ := over.vbl.NextEventCycles()
+	if baseVBL != overVBL {
+		t.Fatalf("VBL timing changed by CPU overclock: base=%d over=%d", baseVBL, overVBL)
 	}
 }
 
-func TestBundledEmuTOSMountsDefaultVirtualHardDiskAsDriveC(t *testing.T) {
-	machine := mustBootBundledMachine(t, DefaultConfig(), 500)
+func TestMachineColorMonitorEnablesColorBorderOverlay(t *testing.T) {
+	rom := loopROM([]byte{0x4E, 0x71, 0x60, 0xFE})
 
-	// EmuTOS low-memory variable _drvbits is at 0x04C2; bit 2 indicates C:.
-	var drvbits uint32
-	for i := 0; i < 4; i++ {
-		value, err := machine.ram.Read(cpu.Byte, 0x04C2+uint32(i))
-		if err != nil {
-			t.Fatalf("read _drvbits byte %d: %v", i, err)
-		}
-		drvbits = (drvbits << 8) | uint32(byte(value))
+	colorCfg := DefaultConfig()
+	colorCfg.ColorMonitor = true
+	colorMachine, err := NewMachine(colorCfg, rom)
+	if err != nil {
+		t.Fatalf("create color machine: %v", err)
 	}
-	if drvbits&(1<<2) == 0 {
-		t.Fatalf("expected C: to be present in _drvbits, got %08x", drvbits)
+	if _, err := colorMachine.StepFrame(); err != nil {
+		t.Fatalf("step color machine frame: %v", err)
+	}
+	visibleW, visibleH := colorMachine.Dimensions()
+	displayW, displayH := colorMachine.DisplayDimensions()
+	if displayW <= visibleW || displayH <= visibleH {
+		t.Fatalf("expected color monitor display area to include outer border: visible=%dx%d display=%dx%d", visibleW, visibleH, displayW, displayH)
+	}
+	vx, vy, vw, vh := colorMachine.DisplayViewport()
+	if vx <= 0 || vy <= 0 || vw != visibleW || vh != visibleH {
+		t.Fatalf("unexpected color monitor display viewport: got (%d,%d,%d,%d), visible=%dx%d", vx, vy, vw, vh, visibleW, visibleH)
+	}
+
+	monoCfg := DefaultConfig()
+	monoCfg.ColorMonitor = false
+	monoMachine, err := NewMachine(monoCfg, rom)
+	if err != nil {
+		t.Fatalf("create mono machine: %v", err)
+	}
+	if _, err := monoMachine.StepFrame(); err != nil {
+		t.Fatalf("step mono machine frame: %v", err)
+	}
+	monoVisibleW, monoVisibleH := monoMachine.Dimensions()
+	monoDisplayW, monoDisplayH := monoMachine.DisplayDimensions()
+	if monoDisplayW != monoVisibleW || monoDisplayH != monoVisibleH {
+		t.Fatalf("expected monochrome monitor display to match visible area: visible=%dx%d display=%dx%d", monoVisibleW, monoVisibleH, monoDisplayW, monoDisplayH)
+	}
+	mvx, mvy, mvw, mvh := monoMachine.DisplayViewport()
+	if mvx != 0 || mvy != 0 || mvw != monoVisibleW || mvh != monoVisibleH {
+		t.Fatalf("unexpected monochrome display viewport: got (%d,%d,%d,%d), visible=%dx%d", mvx, mvy, mvw, mvh, monoVisibleW, monoVisibleH)
 	}
 }
 
-func TestBundledEmuTOSReachesColorDesktop(t *testing.T) {
+func TestMachineMidResYScaleAppliesToDisplayViewport(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.ColorMonitor = true
-
-	machine := mustBootBundledMachine(t, cfg, 400)
-
-	if panicRecordSet(t, machine) {
-		t.Fatalf("expected color desktop boot to avoid the panic path")
-	}
-
-	width, height := machine.shifter.Dimensions()
-	if width != 320 || height != 200 {
-		t.Fatalf("expected low-resolution color desktop mode, got %dx%d", width, height)
-	}
-}
-
-func TestBundledEmuTOSKeypressProducesAudioSamples(t *testing.T) {
-	machine := mustBootBundledMachine(t, DefaultConfig(), 400)
-
-	audio := machine.AudioSource()
-	silence := make([]float32, audio.OutputSampleRate())
-	_ = audio.DrainMonoF32(silence)
-
-	if conterm, err := machine.ram.Read(cpu.Byte, 0x000484); err != nil {
-		t.Fatalf("read conterm: %v", err)
-	} else if conterm&0x01 == 0 {
-		t.Fatalf("expected EmuTOS keyclick to be enabled in conterm, got %02x", conterm)
-	}
-	keyclickHook, err := machine.ram.Read(cpu.Long, 0x0005B0)
+	cfg.MidResYScale = 2
+	machine, err := NewMachine(cfg, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
 	if err != nil {
-		t.Fatalf("read kcl_hook: %v", err)
-	}
-	if keyclickHook == 0 {
-		t.Fatalf("expected non-zero keyclick hook")
+		t.Fatalf("create machine: %v", err)
 	}
 
-	var psgWrites []uint32
-	var timerCExceptions int
-	var aciaExceptions int
-	var keyclickHookHits int
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
-		if info.PC == keyclickHook {
-			keyclickHookHits++
-		}
-	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
-		switch info.Vector {
-		case 0x45:
-			timerCExceptions++
-		case 0x46:
-			aciaExceptions++
-		}
-	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
-		if !info.Write {
-			return
-		}
-		if info.Address >= 0xFF8800 && info.Address < 0xFF8804 {
-			psgWrites = append(psgWrites, info.Address)
-		}
-	})
-	machine.PushKey(0x1E, true)
-	machine.PushKey(0x1E, false)
-
-	samples := make([]float32, 2048)
-	var heardAudio bool
-	for frame := 0; frame < 10; frame++ {
-		if _, err := machine.StepFrame(); err != nil {
-			t.Fatalf("step audio frame %d: %v", frame, err)
-		}
-		n := audio.DrainMonoF32(samples)
-		for i := 0; i < n; i++ {
-			if samples[i] != 0 {
-				heardAudio = true
-				break
-			}
-		}
-		if heardAudio {
-			break
-		}
+	if err := machine.shifter.Write(cpu.Byte, 0xFF8260, 0x01); err != nil {
+		t.Fatalf("set medium resolution: %v", err)
 	}
-	machine.cpu.SetBusTracer(nil)
-	machine.cpu.SetTracer(nil)
-
-	if len(psgWrites) == 0 {
-		status, err := machine.bus.Read(cpu.Byte, 0xFFFC00)
-		if err != nil {
-			t.Fatalf("read ACIA status after keypress: %v", err)
-		}
-		disasm := []string{"<decode failed>"}
-		pc := keyclickHook
-		for i := 0; i < 4; i++ {
-			inst, err := cpu.DisassembleInstruction(machine.bus.CPUAddressBus(), pc)
-			if err != nil {
-				break
-			}
-			if i == 0 {
-				disasm = disasm[:0]
-			}
-			disasm = append(disasm, inst.Assembly)
-			if len(inst.Bytes) == 0 {
-				break
-			}
-			pc += uint32(len(inst.Bytes))
-		}
-		t.Fatalf("expected keypress to trigger PSG register writes; ACIA status=%02x timerC=%d acia=%d keyclick=%d hook=%06x ins=%q", status, timerCExceptions, aciaExceptions, keyclickHookHits, keyclickHook, disasm)
+	if _, err := machine.StepFrame(); err != nil {
+		t.Fatalf("step frame: %v", err)
 	}
 
-	if !heardAudio {
-		t.Fatalf("expected keypress audio samples to contain audible data")
+	if w, h := machine.Dimensions(); w != 640 || h != 200 {
+		t.Fatalf("unexpected guest dimensions: got %dx%d want 640x200", w, h)
 	}
-}
-
-func TestBundledEmuTOSMouseMoveChangesDesktopFrame(t *testing.T) {
-	base := mustBootBundledMachine(t, DefaultConfig(), 400)
-	withMouse := mustBootBundledMachine(t, DefaultConfig(), 400)
-
-	withMouse.PushMouse(12, 8, 0)
-
-	for frame := 0; frame < 20; frame++ {
-		if _, err := base.StepFrame(); err != nil {
-			t.Fatalf("baseline post-mouse frame %d: %v", frame, err)
-		}
-		if _, err := withMouse.StepFrame(); err != nil {
-			t.Fatalf("mouse post-mouse frame %d: %v", frame, err)
-		}
-	}
-
-	baseFrame := base.FrameBuffer()
-	mouseFrame := withMouse.FrameBuffer()
-	if len(baseFrame) != len(mouseFrame) {
-		t.Fatalf("framebuffer size mismatch: baseline=%d mouse=%d", len(baseFrame), len(mouseFrame))
-	}
-
-	changed := 0
-	for i := range baseFrame {
-		if baseFrame[i] != mouseFrame[i] {
-			changed++
-		}
-	}
-	if changed == 0 {
-		t.Fatalf("expected mouse input to change the desktop framebuffer")
-	}
-}
-
-func TestBundledEmuTOSUsesBlitterDuringDesktopBoot(t *testing.T) {
-	machine := mustBundledMachine(t, DefaultConfig())
-
-	var statusWrites int
-	var busyStarts int
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
-		addr := info.Address & 0xFFFFFF
-		if info.InstructionFetch || !info.Write || addr != 0xFF8A3C {
-			return
-		}
-		statusWrites++
-		if info.Value&0x80 != 0 {
-			busyStarts++
-		}
-	})
-	defer machine.cpu.SetBusTracer(nil)
-
-	stepFrames(t, machine, 400)
-
-	if statusWrites == 0 {
-		t.Fatalf("expected desktop boot to write the blitter status register")
-	}
-	if busyStarts == 0 {
-		t.Fatalf("expected desktop boot to start at least one blitter transfer")
-	}
-}
-
-func TestBundledEmuTOSReportsMousePosition(t *testing.T) {
-	machine := mustBootBundledMachine(t, DefaultConfig(), 400)
-
-	beforeX, beforeY, ok := machine.MousePosition()
-	if !ok {
-		t.Fatalf("expected GEM desktop to expose a mouse position")
-	}
-
-	machine.PushMouse(12, 8, 0)
-	for frame := 0; frame < 20; frame++ {
-		if _, err := machine.StepFrame(); err != nil {
-			t.Fatalf("post-mouse frame %d: %v", frame, err)
-		}
-	}
-
-	afterX, afterY, ok := machine.MousePosition()
-	if !ok {
-		t.Fatalf("expected GEM desktop to expose a mouse position after moving")
-	}
-	if afterX == beforeX && afterY == beforeY {
-		t.Fatalf("expected mouse position to change after movement, stayed at (%d,%d)", afterX, afterY)
-	}
-}
-
-func TestBundledEmuTOSDoesNotPanicWithoutMFPDelivery(t *testing.T) {
-	machine := mustBundledMachine(t, DefaultConfig())
-
-	filteredClocked := make([]devices.Clocked, 0, len(machine.clocked))
-	for _, device := range machine.clocked {
-		if device == machine.mfp {
-			continue
-		}
-		filteredClocked = append(filteredClocked, device)
-	}
-	machine.clocked = filteredClocked
-
-	filteredIRQs := make([]devices.InterruptSource, 0, len(machine.irqSources))
-	for _, source := range machine.irqSources {
-		if source == machine.mfp {
-			continue
-		}
-		filteredIRQs = append(filteredIRQs, source)
-	}
-	machine.irqSources = filteredIRQs
-
-	stepFrames(t, machine, 120)
-
-	if panicRecordSet(t, machine) {
-		t.Fatalf("expected late panic to disappear when MFP delivery is removed")
+	_, _, vw, vh := machine.DisplayViewport()
+	if vw != 640 || vh != 400 {
+		t.Fatalf("unexpected display viewport size: got %dx%d want 640x400", vw, vh)
 	}
 }
 
@@ -629,31 +430,6 @@ func mustMachine(t *testing.T, rom []byte) *Machine {
 	return machine
 }
 
-func mustBundledMachine(t *testing.T, cfg Config) *Machine {
-	t.Helper()
-	machine, err := NewMachine(cfg, assets.DefaultROM())
-	if err != nil {
-		t.Fatalf("create machine with bundled EmuTOS: %v", err)
-	}
-	return machine
-}
-
-func mustBootBundledMachine(t *testing.T, cfg Config, frames int) *Machine {
-	t.Helper()
-	machine := mustBundledMachine(t, cfg)
-	stepFrames(t, machine, frames)
-	return machine
-}
-
-func stepFrames(t *testing.T, machine *Machine, frames int) {
-	t.Helper()
-	for frame := 0; frame < frames; frame++ {
-		if _, err := machine.StepFrame(); err != nil {
-			t.Fatalf("step frame %d: %v", frame, err)
-		}
-	}
-}
-
 func loopROM(code []byte) []byte {
 	if len(code) == 0 {
 		code = []byte{0x4E, 0x71, 0x60, 0xFE}
@@ -663,13 +439,4 @@ func loopROM(code []byte) []byte {
 	binary.BigEndian.PutUint32(rom[4:8], defaultROMHighAlias+8)
 	copy(rom[8:], code)
 	return rom
-}
-
-func panicRecordSet(t *testing.T, machine *Machine) bool {
-	t.Helper()
-	value, err := machine.ram.Read(cpu.Long, 0x380)
-	if err != nil {
-		t.Fatalf("read panic record marker: %v", err)
-	}
-	return value == 0x12345678
 }

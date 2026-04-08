@@ -44,12 +44,16 @@ func Run(machine *emulator.Machine, cfg emulator.Config) error {
 		prevKeys: make(map[ebitenlib.Key]bool),
 	}
 
-	width, height := machine.Dimensions()
+	width, height := machine.DisplayDimensions()
+	_, _, viewportWidth, viewportHeight := machine.DisplayViewport()
+	if viewportWidth <= 0 || viewportHeight <= 0 {
+		viewportWidth, viewportHeight = machine.Dimensions()
+	}
 	if app.scale <= 0 {
 		app.scale = 2
 	}
 	app.texture = ebitenlib.NewImage(width, height)
-	app.resetMouseTracking(width, height)
+	app.resetMouseTracking(viewportWidth, viewportHeight)
 
 	ebitenlib.SetWindowTitle("GoST Emulator")
 	ebitenlib.SetWindowSize(scaledWindowSize(width, height, app.scale))
@@ -76,13 +80,17 @@ func (a *App) Update() error {
 		return err
 	}
 	if changed {
-		width, height := a.machine.Dimensions()
+		width, height := a.machine.DisplayDimensions()
+		_, _, viewportWidth, viewportHeight := a.machine.DisplayViewport()
+		if viewportWidth <= 0 || viewportHeight <= 0 {
+			viewportWidth, viewportHeight = a.machine.Dimensions()
+		}
 		if a.texture == nil || a.texture.Bounds().Dx() != width || a.texture.Bounds().Dy() != height {
 			a.texture = ebitenlib.NewImage(width, height)
 			ebitenlib.SetWindowSize(scaledWindowSize(width, height, a.scale))
-			a.resetMouseTracking(width, height)
+			a.resetMouseTracking(viewportWidth, viewportHeight)
 		}
-		a.texture.WritePixels(a.machine.FrameBuffer())
+		a.texture.WritePixels(a.machine.DisplayFrameBuffer())
 	}
 	return nil
 }
@@ -95,7 +103,7 @@ func (a *App) Draw(screen *ebitenlib.Image) {
 }
 
 func (a *App) Layout(int, int) (int, int) {
-	return a.machine.Dimensions()
+	return a.machine.DisplayDimensions()
 }
 
 func (a *App) handleKeyboard() {
@@ -125,9 +133,19 @@ func (a *App) handleKeyboard() {
 
 func (a *App) handleMouse() {
 	x, y := ebitenlib.CursorPosition()
-	width, height := a.machine.Dimensions()
+	displayX, displayY, width, height := a.machine.DisplayViewport()
+	guestWidth, guestHeight := a.machine.Dimensions()
+	if guestWidth <= 0 || guestHeight <= 0 {
+		guestWidth, guestHeight = width, height
+	}
+	if width <= 0 || height <= 0 {
+		width, height = guestWidth, guestHeight
+		displayX, displayY = 0, 0
+	}
 	focused := ebitenlib.IsFocused()
-	inside := focused && x >= 0 && y >= 0 && x < width && y < height
+	inside := focused &&
+		x >= displayX && y >= displayY &&
+		x < displayX+width && y < displayY+height
 
 	var buttons byte
 	if ebitenlib.IsMouseButtonPressed(ebitenlib.MouseButtonLeft) {
@@ -177,7 +195,11 @@ func (a *App) handleMouse() {
 	}
 
 	a.setHostCursorHidden(true)
-	targetX, targetY := guestTargetPosition(x, y, width, height)
+	targetX, targetY := guestTargetPosition(
+		x-displayX, y-displayY,
+		width, height,
+		guestWidth, guestHeight,
+	)
 
 	if !a.mouseReady {
 		a.guestMouseX = guestX
@@ -261,8 +283,17 @@ func clampMouseSyncDelta(delta int) int {
 	}
 }
 
-func guestTargetPosition(hostX, hostY, width, height int) (int, int) {
-	return clampToBounds(hostX, hostY, width, height)
+func guestTargetPosition(hostX, hostY, displayWidth, displayHeight, guestWidth, guestHeight int) (int, int) {
+	hostX, hostY = clampToBounds(hostX, hostY, displayWidth, displayHeight)
+	if guestWidth <= 0 || guestHeight <= 0 {
+		return 0, 0
+	}
+	if displayWidth <= 1 || displayHeight <= 1 {
+		return clampToBounds(hostX, hostY, guestWidth, guestHeight)
+	}
+	guestX := hostX * guestWidth / displayWidth
+	guestY := hostY * guestHeight / displayHeight
+	return clampToBounds(guestX, guestY, guestWidth, guestHeight)
 }
 
 func absInt(value int) int {
@@ -480,6 +511,6 @@ func hostKeyFromEbiten(key ebitenlib.Key) inputmap.Key {
 }
 
 func (a *App) String() string {
-	width, height := a.machine.Dimensions()
+	width, height := a.machine.DisplayDimensions()
 	return fmt.Sprintf("gost %dx%d", width, height)
 }

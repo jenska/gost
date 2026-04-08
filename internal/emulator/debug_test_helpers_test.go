@@ -13,7 +13,7 @@ import (
 func dumpDisassemblyRange(t *testing.T, machine *Machine, start, length uint32, label string) {
 	t.Helper()
 
-	lines, err := cpu.DisassembleMemoryRange(machine.bus.CPUAddressBus(), start, length)
+	lines, err := cpu.DisassembleMemoryRange(machine.bus, start, length)
 	if err != nil {
 		t.Fatalf("disassemble %s %06x+%x: %v", label, start, length, err)
 	}

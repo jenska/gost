@@ -21,7 +21,7 @@ func TestFDCDMAReadSectorIntoRAM(t *testing.T) {
 	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrHigh, 0x00); err != nil {
 		t.Fatalf("write dma addr high: %v", err)
 	}
-	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrMed, 0x01); err != nil {
+	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrMed, fdcStatusBusy); err != nil {
 		t.Fatalf("write dma addr med: %v", err)
 	}
 	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrLow, 0x00); err != nil {
@@ -572,13 +572,13 @@ func TestFDCAcsiReadAndWriteSectors(t *testing.T) {
 	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrHigh, 0x00); err != nil {
 		t.Fatalf("write DMA high: %v", err)
 	}
-	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrMed, 0x08); err != nil {
+	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrMed, fdcStatusCRC); err != nil {
 		t.Fatalf("write DMA med: %v", err)
 	}
 	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrLow, 0x00); err != nil {
 		t.Fatalf("write DMA low: %v", err)
 	}
-	if status := sendACSICommand(t, fdc, []byte{0x0A, 0x00, 0x00, 0x01, 0x01, 0x00}); status != acsiStatusGood {
+	if status := sendACSICommand(t, fdc, []byte{0x0A, 0x00, 0x00, fdcStatusBusy, fdcStatusBusy, 0x00}); status != acsiStatusGood {
 		t.Fatalf("WRITE(6) status = %02x, want 00", status)
 	}
 	if got := fdc.hardDisk0[fdcSectorSize : fdcSectorSize+4]; got[0] != 0x11 || got[1] != 0x22 || got[2] != 0x33 || got[3] != 0x44 {

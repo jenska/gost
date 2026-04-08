@@ -27,6 +27,7 @@ type Config struct {
 	// state, "cpu-verbose" adds decoded instructions and more context, "boot"
 	// traces boot-related activity in the configured PC range, and
 	// "boot-verbose" adds verbose CPU state to boot tracing.
+	// "shifter" and "shifter-verbose" emit per-frame shifter instrumentation.
 	Trace string
 	// TraceStart is the first PC address included by the boot trace modes.
 	TraceStart uint32
@@ -35,22 +36,33 @@ type Config struct {
 	// RAMSize sets the amount of emulated RAM in bytes.
 	RAMSize uint32
 	// ClockHz sets the emulated CPU clock frequency in hertz.
+	// This is also the base machine clock used by time-sensitive hardware.
 	ClockHz uint64
+	// CPUClockHz sets the CPU execution frequency in hertz.
+	// When this differs from ClockHz, only CPU throughput changes while
+	// hardware timing stays tied to ClockHz.
+	CPUClockHz uint64
 	// FrameHz sets the target display refresh rate in hertz.
 	FrameHz uint64
 	// ColorMonitor reports a color monitor on the ST monitor-detect line.
 	// When false, the machine behaves like a monochrome monitor is attached.
 	ColorMonitor bool
+	// MidResYScale scales the displayed height of 640x200 medium resolution.
+	// This only affects host presentation, not guest-visible coordinates.
+	MidResYScale int
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Scale:          1.0,
+		Scale:          2.0,
 		TraceStart:     bootTraceStart,
 		TraceEnd:       bootTraceEnd,
 		RAMSize:        DefaultRAMSize,
 		ClockHz:        DefaultClockHz,
+		CPUClockHz:     20 * DefaultClockHz,
 		FrameHz:        DefaultFrameHz,
 		HardDiskSizeMB: 30,
+		ColorMonitor:   true,
+		MidResYScale:   2,
 	}
 }

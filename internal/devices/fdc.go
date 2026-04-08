@@ -607,7 +607,7 @@ func (f *FDC) writeACSIDataWord(value uint16) error {
 	b := byte(value)
 	if f.acsiCmdLen == 0 {
 		f.acsiExpectedLen = acsiCommandLength(b)
-		if f.acsiExpectedLen < 0 || f.acsiExpectedLen > len(f.acsiCmdBuf) {
+		if f.acsiExpectedLen > len(f.acsiCmdBuf) {
 			f.acsiExpectedLen = acsiDefaultCommandSize
 		}
 	}
@@ -938,7 +938,7 @@ func (f *FDC) failTypeIIStatus(extra byte) error {
 
 func (f *FDC) commandSectorCount(cmd byte) (count int, multi bool) {
 	count = int(f.sectorCount)
-	if count <= 0 {
+	if count == 0 {
 		count = 1
 	}
 	multi = cmd&fdcCmdFlagMultiSector != 0
@@ -1231,7 +1231,7 @@ func (f *FDC) execACSIInquiry(cmd []byte) error {
 		payload[2] = 0x01
 	}
 	if length > 4 {
-		payload[4] = byte(maxInt(0, length-5))
+		payload[4] = byte(length - 5)
 	}
 	copyAt(payload, 8, []byte("GoST    "))
 	copyAt(payload, 16, []byte("Virtual ACSI HD "))
@@ -1254,7 +1254,7 @@ func (f *FDC) execACSIModeSense(cmd []byte) error {
 	}
 	payload := make([]byte, length)
 	if len(payload) > 0 {
-		payload[0] = byte(maxInt(0, len(payload)-1))
+		payload[0] = byte(len(payload) - 1)
 	}
 	if f.ram != nil {
 		if err := f.ram.LoadAt(f.dmaAddr, payload); err != nil {
@@ -1277,28 +1277,25 @@ func (f *FDC) execACSIReadWrite(cmd []byte, write bool) error {
 		return nil
 	}
 
-	lba := int(uint32(cmd[1]&0x1F)<<16 | uint32(cmd[2])<<8 | uint32(cmd[3]))
-	count := int(cmd[4])
+	lba := uint32(cmd[1]&0x1F)<<16 | uint32(cmd[2])<<8 | uint32(cmd[3])
+	count := uint32(cmd[4])
 	if count == 0 {
 		count = 256
 	}
 	if f.sectorCount != 0 {
-		count = int(f.sectorCount)
+		count = uint32(f.sectorCount)
 	}
-	if lba < 0 || count < 0 {
-		f.finishACSI(acsiStatusCheckCondition, acsiSenseIllegalReq, true)
-		return nil
-	}
-	totalSectors := len(f.hardDisk0) / fdcSectorSize
-	if lba+count > totalSectors {
+	totalSectors := uint64(len(f.hardDisk0) / fdcSectorSize)
+	if uint64(lba)+uint64(count) > totalSectors {
 		f.finishACSI(acsiStatusCheckCondition, acsiSenseIllegalReq, true)
 		return nil
 	}
 
-	start := lba * fdcSectorSize
-	end := start + count*fdcSectorSize
+	start := int(lba) * fdcSectorSize
+	byteCount := int(count) * fdcSectorSize
+	end := start + byteCount
 	if write {
-		buffer := make([]byte, end-start)
+		buffer := make([]byte, byteCount)
 		if f.ram != nil {
 			if err := f.ram.CopyOut(f.dmaAddr, buffer); err != nil {
 				f.finishACSI(acsiStatusCheckCondition, acsiSenseMediumError, true)
@@ -1365,29 +1362,30 @@ func (f *FDC) execACSIReadWrite10(cdb []byte, write bool) error {
 		return nil
 	}
 
-	lba := int(binary.BigEndian.Uint32(cdb[2:6]))
-	count := int(binary.BigEndian.Uint16(cdb[7:9]))
+	lba := binary.BigEndian.Uint32(cdb[2:6])
+	count := uint32(binary.BigEndian.Uint16(cdb[7:9]))
 	if count == 0 {
 		count = 65536
 	}
 	if f.sectorCount != 0 {
-		count = int(f.sectorCount)
+		count = uint32(f.sectorCount)
 	}
-	if lba < 0 || count <= 0 {
+	if count == 0 {
 		f.finishACSI(acsiStatusCheckCondition, acsiSenseIllegalReq, true)
 		return nil
 	}
 
-	totalSectors := len(f.hardDisk0) / fdcSectorSize
-	if lba+count > totalSectors {
+	totalSectors := uint64(len(f.hardDisk0) / fdcSectorSize)
+	if uint64(lba)+uint64(count) > totalSectors {
 		f.finishACSI(acsiStatusCheckCondition, acsiSenseIllegalReq, true)
 		return nil
 	}
 
-	start := lba * fdcSectorSize
-	end := start + count*fdcSectorSize
+	start := int(lba) * fdcSectorSize
+	byteCount := int(count) * fdcSectorSize
+	end := start + byteCount
 	if write {
-		buffer := make([]byte, end-start)
+		buffer := make([]byte, byteCount)
 		if f.ram != nil {
 			if err := f.ram.CopyOut(f.dmaAddr, buffer); err != nil {
 				f.finishACSI(acsiStatusCheckCondition, acsiSenseMediumError, true)
@@ -1431,13 +1429,6 @@ func copyAt(dst []byte, offset int, src []byte) {
 			dst[i] = ' '
 		}
 	}
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func abs(value int) int {

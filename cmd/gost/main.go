@@ -15,6 +15,7 @@ func main() {
 	cfg := emulator.DefaultConfig()
 	var frames int
 	var dumpFramePath string
+	cpuMHz := float64(cfg.CPUClockHz) / 1_000_000.0
 	traceStart := fmt.Sprintf("0x%06x", cfg.TraceStart)
 	traceEnd := fmt.Sprintf("0x%06x", cfg.TraceEnd)
 
@@ -22,16 +23,32 @@ func main() {
 	flag.StringVar(&cfg.FloppyA, "floppy-a", "", "path to drive A disk image (.st or .msa)")
 	flag.IntVar(&cfg.HardDiskSizeMB, "hd-size-mb", cfg.HardDiskSizeMB, "virtual ACSI hard disk size in MiB (0 disables)")
 	flag.StringVar(&cfg.HardDiskImagePath, "hd-image", "", "path to persistent virtual hard disk image file")
+	flag.Float64Var(&cpuMHz, "cpu-mhz", cpuMHz, "CPU frequency in MHz (hardware timing remains unchanged)")
 	flag.Float64Var(&cfg.Scale, "scale", cfg.Scale, "display scale factor")
 	flag.BoolVar(&cfg.Fullscreen, "fullscreen", false, "run in fullscreen mode")
 	flag.BoolVar(&cfg.Headless, "headless", false, "run without a window")
-	flag.BoolVar(&cfg.ColorMonitor, "color-monitor", false, "emulate an Atari color monitor instead of monochrome")
-	flag.StringVar(&cfg.Trace, "trace", "", "enable tracing: cpu|cpu-verbose|boot|boot-verbose")
+	flag.BoolVar(&cfg.ColorMonitor, "color-monitor", cfg.ColorMonitor, "emulate an Atari color monitor instead of monochrome")
+	flag.IntVar(&cfg.MidResYScale, "midres-y-scale", cfg.MidResYScale, "vertical host scaling for medium resolution (>=1)")
+	flag.StringVar(&cfg.Trace, "trace", "", "enable tracing: cpu|cpu-verbose|boot|boot-verbose|shifter|shifter-verbose")
 	flag.StringVar(&traceStart, "trace-start", traceStart, "first PC included in boot traces (hex or decimal)")
 	flag.StringVar(&traceEnd, "trace-end", traceEnd, "last PC included in boot traces (hex or decimal)")
 	flag.StringVar(&dumpFramePath, "dump-frame", "", "write the last rendered framebuffer to a PNG file")
 	flag.IntVar(&frames, "frames", 500, "frames to run in headless mode")
 	flag.Parse()
+
+	if cpuMHz <= 0 {
+		fmt.Fprintf(os.Stderr, "invalid cpu-mhz %.3f: must be > 0\n", cpuMHz)
+		os.Exit(1)
+	}
+	cfg.CPUClockHz = uint64(cpuMHz * 1_000_000.0)
+	if cfg.CPUClockHz == 0 {
+		fmt.Fprintf(os.Stderr, "invalid cpu-mhz %.6f: effective CPU clock rounded to 0 Hz\n", cpuMHz)
+		os.Exit(1)
+	}
+	if cfg.MidResYScale < 1 {
+		fmt.Fprintf(os.Stderr, "invalid midres-y-scale %d: must be >= 1\n", cfg.MidResYScale)
+		os.Exit(1)
+	}
 
 	var err error
 	cfg.TraceStart, err = parseTraceAddress(traceStart)

@@ -171,12 +171,14 @@ Current browser-build limitations:
 - `--floppy-a <path>`: optional floppy disk image for drive A (`.st` or `.msa`)
 - `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
 - `--hd-image <path>`: optional persistent ACSI hard disk image file; loads if present, otherwise creates from `--hd-size-mb`
+- `--cpu-mhz <n>`: CPU frequency in MHz (default `8`); increases/decreases CPU speed without changing other hardware timing
 - `--scale <n>`: window scale factor, default `2`
 - `--fullscreen`: start fullscreen
 - `--headless`: run without opening a window
 - `--color-monitor`: emulate an Atari color monitor instead of monochrome
+- `--midres-y-scale <n>`: scale medium-resolution display height on host output (`1` = off)
 - `--frames <n>`: number of frames to run in headless mode, default `300`
-- `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, or `boot-verbose`
+- `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, `boot-verbose`, `shifter`, or `shifter-verbose`
 - `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces, default `0xE00000`
 - `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces, default `0xE01000`
 - `--dump-frame <path>`: write the last rendered framebuffer to a PNG file

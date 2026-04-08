@@ -79,18 +79,7 @@ func (b *Blitter) offsetFor(address uint32, size cpu.Size) (uint32, error) {
 		return 0, cpu.BusError(address)
 	}
 	offset := address - blitterBase
-	var width uint32
-	switch size {
-	case cpu.Byte:
-		width = 1
-	case cpu.Word:
-		width = 2
-	case cpu.Long:
-		width = 4
-	default:
-		return 0, fmt.Errorf("unsupported blitter access size %d", size)
-	}
-	if offset+width > blitterSize {
+	if offset+uint32(size) > blitterSize {
 		return 0, cpu.BusError(address)
 	}
 	return offset, nil
@@ -133,34 +122,36 @@ func (b *Blitter) execute() {
 
 			if srcXInc >= 0 {
 				if first && skew&blitterFXSR != 0 {
-					srcIn, _ = b.readWordSafe(srcAddr)
-					srcAddr = uint32(int32(srcAddr) + int32(srcXInc))
+					srcWord, _ := b.readWordSafe(srcAddr)
+					srcIn = uint32(srcWord)
+					srcAddr = addSignedAddressDelta(srcAddr, int32(srcXInc))
 				}
 				srcIn <<= 16
 
 				if last && skew&blitterNFSR != 0 {
-					srcAddr = uint32(int32(srcAddr) - int32(srcXInc))
+					srcAddr = addSignedAddressDelta(srcAddr, -int32(srcXInc))
 				} else {
 					nextWord, _ := b.readWordSafe(srcAddr)
-					srcIn |= nextWord
+					srcIn |= uint32(nextWord)
 					if !last {
-						srcAddr = uint32(int32(srcAddr) + int32(srcXInc))
+						srcAddr = addSignedAddressDelta(srcAddr, int32(srcXInc))
 					}
 				}
 			} else {
 				if first && skew&blitterFXSR != 0 {
-					srcIn, _ = b.readWordSafe(srcAddr)
-					srcAddr = uint32(int32(srcAddr) + int32(srcXInc))
+					srcWord, _ := b.readWordSafe(srcAddr)
+					srcIn = uint32(srcWord)
+					srcAddr = addSignedAddressDelta(srcAddr, int32(srcXInc))
 				} else {
 					srcIn >>= 16
 				}
 				if last && skew&blitterNFSR != 0 {
-					srcAddr = uint32(int32(srcAddr) - int32(srcXInc))
+					srcAddr = addSignedAddressDelta(srcAddr, -int32(srcXInc))
 				} else {
 					nextWord, _ := b.readWordSafe(srcAddr)
-					srcIn |= nextWord << 16
+					srcIn |= uint32(nextWord) << 16
 					if !last {
-						srcAddr = uint32(int32(srcAddr) + int32(srcXInc))
+						srcAddr = addSignedAddressDelta(srcAddr, int32(srcXInc))
 					}
 				}
 			}
@@ -170,13 +161,13 @@ func (b *Blitter) execute() {
 			hopOut := applyBlitterHOP(b.hop(), halftone, srcOut)
 
 			dstIn, _ := b.readWordSafe(dstAddr)
-			dstOut := applyBlitterOP(b.op(), hopOut, uint16(dstIn))
+			dstOut := applyBlitterOP(b.op(), hopOut, dstIn)
 			mask := b.wordMask(first, last)
-			final := (dstOut & mask) | (uint16(dstIn) &^ mask)
+			final := (dstOut & mask) | (dstIn &^ mask)
 			_ = b.writeWordSafe(dstAddr, final)
 
 			if !last {
-				dstAddr = uint32(int32(dstAddr) + int32(dstXInc))
+				dstAddr = addSignedAddressDelta(dstAddr, int32(dstXInc))
 			}
 			first = false
 		}
@@ -186,8 +177,8 @@ func (b *Blitter) execute() {
 		} else {
 			status = (status &^ blitterLineNo) | ((status + 15) & blitterLineNo)
 		}
-		srcAddr = uint32(int32(srcAddr) + int32(srcYInc))
-		dstAddr = uint32(int32(dstAddr) + int32(dstYInc))
+		srcAddr = addSignedAddressDelta(srcAddr, int32(srcYInc))
+		dstAddr = addSignedAddressDelta(dstAddr, int32(dstYInc))
 	}
 
 	b.setSrcAddr(srcAddr)
@@ -196,11 +187,15 @@ func (b *Blitter) execute() {
 	b.regs[0x3C] = (status &^ blitterBusy) | (b.regs[0x3C] & (blitterHog | blitterSmudge))
 }
 
-func (b *Blitter) readWordSafe(address uint32) (uint32, error) {
+func (b *Blitter) readWordSafe(address uint32) (uint16, error) {
 	if b.ram == nil {
 		return 0, cpu.BusError(address)
 	}
-	return b.ram.Read(cpu.Word, address)
+	value, err := b.ram.Read(cpu.Word, address)
+	if err != nil {
+		return 0, err
+	}
+	return uint16(value), nil
 }
 
 func (b *Blitter) writeWordSafe(address uint32, value uint16) error {
@@ -288,6 +283,13 @@ func (b *Blitter) setDstAddr(value uint32) {
 
 func (b *Blitter) setYCount(value uint16) {
 	writeBySize(b.regs[:], 0x38, cpu.Word, uint32(value))
+}
+
+func addSignedAddressDelta(address uint32, delta int32) uint32 {
+	if delta >= 0 {
+		return address + uint32(delta)
+	}
+	return address - uint32(-delta)
 }
 
 func applyBlitterHOP(hop byte, halftone, source uint16) uint16 {

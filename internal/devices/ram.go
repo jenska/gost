@@ -8,9 +8,14 @@ import (
 
 // RAM is the main ST memory and doubles as the framebuffer backing store.
 type RAM struct {
-	base uint32
-	data []byte
-	mmu  *MemoryConfig
+	base       uint32
+	data       []byte
+	mmu        *MemoryConfig
+	contention RAMContentionSource
+}
+
+type RAMContentionSource interface {
+	WaitStatesForRAMAccess(cpu.Size, uint32) uint32
 }
 
 func NewRAM(base, size uint32) *RAM {
@@ -36,6 +41,10 @@ func (r *RAM) SetMemoryConfig(mmu *MemoryConfig) {
 	r.mmu = mmu
 }
 
+func (r *RAM) SetContentionSource(source RAMContentionSource) {
+	r.contention = source
+}
+
 func (r *RAM) Contains(address uint32) bool {
 	limit := uint32(len(r.data))
 	if r.mmu != nil {
@@ -44,8 +53,11 @@ func (r *RAM) Contains(address uint32) bool {
 	return address >= r.base && address < r.base+limit
 }
 
-func (r *RAM) WaitStates(cpu.Size, uint32) uint32 {
-	return 0
+func (r *RAM) WaitStates(size cpu.Size, address uint32) uint32 {
+	if r.contention == nil {
+		return 0
+	}
+	return r.contention.WaitStatesForRAMAccess(size, address)
 }
 
 func (r *RAM) Read(size cpu.Size, address uint32) (uint32, error) {

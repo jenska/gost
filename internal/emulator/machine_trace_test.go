@@ -1,6 +1,8 @@
 package emulator
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/jenska/gost/internal/devices"
@@ -25,6 +27,24 @@ func TestIsBootTraceAddress(t *testing.T) {
 				t.Fatalf("isBootTraceAddress(%08x) = %v, want %v", tt.address, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMachineShifterTraceModeEmitsFrameSummary(t *testing.T) {
+	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+	var out bytes.Buffer
+	machine.EnableTrace("shifter", &out)
+
+	if _, err := machine.StepFrame(); err != nil {
+		t.Fatalf("step frame: %v", err)
+	}
+
+	log := out.String()
+	if !strings.Contains(log, "shifter frame=1") {
+		t.Fatalf("expected shifter trace output, got %q", log)
+	}
+	if !strings.Contains(log, "pixels=") {
+		t.Fatalf("expected shifter trace to include pixel stats, got %q", log)
 	}
 }
 
