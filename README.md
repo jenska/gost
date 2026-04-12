@@ -54,7 +54,8 @@ Current focus:
 
 ```text
 cmd/gost                CLI entrypoint
-internal/emulator       Machine orchestration, config, and ST bus wiring
+internal/config         Presets, JSON config loading, and CLI flag parsing
+internal/emulator       Machine orchestration and ST bus wiring
 internal/devices        Atari ST hardware device models
 internal/platform       Host frontend integrations
 ```
@@ -177,6 +178,8 @@ Run with the config file and optionally override individual settings on the CLI:
 go run ./cmd/gost --config /path/to/gost.json --headless --frames 400
 ```
 
+Load order is: preset defaults, then JSON config file, then CLI flags.
+
 JSON config keys use the same names as the CLI flags, just without the leading `--`.
 
 ## WebAssembly
@@ -216,7 +219,7 @@ Current browser-build limitations:
 - `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
 - `--hd-image <path>`: optional persistent ACSI hard disk image file; loads if present, otherwise creates from `--hd-size-mb`
 - `--cpu-mhz <n>`: CPU frequency in MHz (default `8`); increases/decreases CPU speed without changing other hardware timing
-- `--frame-hz <n>`: display and VBL refresh rate in Hz
+- `--frame-hz <n>`: display and VBL refresh rate in Hz; frame timing is derived from `clock-hz / frame-hz`
 - `--scale <n>`: window scale factor, default `1`
 - `--fullscreen`: start fullscreen
 - `--headless`: run without opening a window
