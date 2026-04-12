@@ -37,4 +37,3 @@ func TestFixedValueRegionReturnsConfiguredValue(t *testing.T) {
 		t.Fatalf("unexpected long value: got %08x want ffffffff", value)
 	}
 }
-

@@ -59,7 +59,7 @@ func decodeMSA(data []byte) (*DiskImage, error) {
 	out := make([]byte, 0, (endTrack-startTrack+1)*sides*trackSize)
 	pos := 10
 	for track := startTrack; track <= endTrack; track++ {
-		for side := 0; side < sides; side++ {
+		for range sides {
 			if pos+2 > len(data) {
 				return nil, fmt.Errorf("unexpected end of MSA image")
 			}
@@ -90,7 +90,7 @@ func decodeMSA(data []byte) (*DiskImage, error) {
 				value := data[pos]
 				count := int(binary.BigEndian.Uint16(data[pos+1 : pos+3]))
 				pos += 3
-				for i := 0; i < count; i++ {
+				for range count {
 					trackData = append(trackData, value)
 				}
 			}

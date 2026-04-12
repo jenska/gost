@@ -145,7 +145,7 @@ func TestBlitterFillsMultipleWordsAcrossRows(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	blitter := NewBlitter(ram)
 
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		mustWriteBlitter(t, blitter, uint32(i*2), cpu.Word, 0xFFFF)
 	}
 

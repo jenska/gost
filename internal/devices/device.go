@@ -1,6 +1,10 @@
 package devices
 
-import cpu "github.com/jenska/m68kemu"
+import (
+	"encoding/binary"
+
+	cpu "github.com/jenska/m68kemu"
+)
 
 // Interrupt models a pending CPU interrupt coming from a device.
 type Interrupt struct {
@@ -25,14 +29,11 @@ type InterruptSource interface {
 }
 
 func readUint16BE(buf []byte, offset uint32) uint16 {
-	return uint16(buf[offset])<<8 | uint16(buf[offset+1])
+	return binary.BigEndian.Uint16(buf[offset:])
 }
 
 func readUint32BE(buf []byte, offset uint32) uint32 {
-	return uint32(buf[offset])<<24 |
-		uint32(buf[offset+1])<<16 |
-		uint32(buf[offset+2])<<8 |
-		uint32(buf[offset+3])
+	return binary.BigEndian.Uint32(buf[offset:])
 }
 
 func writeBySize(buf []byte, offset uint32, size cpu.Size, value uint32) {
@@ -40,12 +41,8 @@ func writeBySize(buf []byte, offset uint32, size cpu.Size, value uint32) {
 	case cpu.Byte:
 		buf[offset] = byte(value)
 	case cpu.Word:
-		buf[offset] = byte(value >> 8)
-		buf[offset+1] = byte(value)
+		binary.BigEndian.PutUint16(buf[offset:], uint16(value))
 	case cpu.Long:
-		buf[offset] = byte(value >> 24)
-		buf[offset+1] = byte(value >> 16)
-		buf[offset+2] = byte(value >> 8)
-		buf[offset+3] = byte(value)
+		binary.BigEndian.PutUint32(buf[offset:], value)
 	}
 }

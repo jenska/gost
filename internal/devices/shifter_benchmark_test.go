@@ -3,6 +3,7 @@ package devices
 import (
 	"testing"
 
+	"github.com/jenska/gost/internal/config"
 	cpu "github.com/jenska/m68kemu"
 )
 
@@ -34,7 +35,7 @@ func BenchmarkShifterRender(b *testing.B) {
 			b.SetBytes(bytesPerFrame)
 			b.ResetTimer()
 
-			for i := 0; i < b.N; i++ {
+			for i := range b.N {
 				if !shifter.Render(uint64(i + 2)) {
 					b.Fatalf("render unexpectedly reported no change at iteration %d", i)
 				}
@@ -56,7 +57,7 @@ func BenchmarkShifterFrameLifecycle(b *testing.B) {
 		b.SetBytes(bytesPerFrame)
 		b.ResetTimer()
 
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			runLowResMidFrameBlankToggle(b, shifter)
 		}
 	})
@@ -74,7 +75,7 @@ func BenchmarkShifterFrameLifecycle(b *testing.B) {
 		b.SetBytes(bytesPerFrame)
 		b.ResetTimer()
 
-		for i := 0; i < b.N; i++ {
+		for i := range b.N {
 			runMediumResMidFramePaletteSplit(b, shifter, i)
 		}
 	})
@@ -89,10 +90,10 @@ func BenchmarkShifterRAMContention(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		_ = ram.WaitStates(cpu.Word, 0x000100)
 		shifter.AdvanceFrame(8)
-		if shifter.frameCyclePos >= shifter.frameCycles {
+		if shifter.frameCyclePos >= shifter.frameCycles() {
 			if !shifter.EndFrame() {
 				b.Fatalf("expected completed frame at iteration %d", i)
 			}
@@ -105,13 +106,14 @@ func newBenchmarkShifter(b *testing.B, tc shifterBenchmarkCase) (*Shifter, *RAM,
 	b.Helper()
 
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetTiming(8_000_000, 50)
-	shifter.SetDebug(tc.debug)
-	shifter.SetColorBorderVisible(tc.colorBorder)
-	if tc.midResYScale > 0 {
-		shifter.SetMidResYScale(tc.midResYScale)
+	cfg := &config.Config{
+		ColorMonitor: tc.colorBorder,
+		MidResYScale: tc.midResYScale,
+		ClockHz:      defaultShifterClockHz,
+		FrameHz:      defaultShifterFrameHz,
 	}
+	shifter := NewSTShifter(cfg, ram)
+	shifter.SetDebug(tc.debug)
 	if tc.enableContention {
 		ram.SetContentionSource(shifter)
 	}
@@ -168,7 +170,7 @@ func runLowResMidFrameBlankToggle(b *testing.B, shifter *Shifter) {
 	b.Helper()
 	shifter.BeginFrame()
 
-	lineCycles := shifter.frameCycles / 200
+	lineCycles := shifter.frameCycles() / 200
 	if lineCycles == 0 {
 		lineCycles = 1
 	}
@@ -185,8 +187,8 @@ func runLowResMidFrameBlankToggle(b *testing.B, shifter *Shifter) {
 	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, 0x00); err != nil {
 		b.Fatalf("disable blank sync: %v", err)
 	}
-	if shifter.frameCyclePos < shifter.frameCycles {
-		shifter.AdvanceFrame(shifter.frameCycles - shifter.frameCyclePos)
+	if shifter.frameCyclePos < shifter.frameCycles() {
+		shifter.AdvanceFrame(shifter.frameCycles() - shifter.frameCyclePos)
 	}
 	if !shifter.EndFrame() {
 		b.Fatalf("expected frame completion")
@@ -201,7 +203,7 @@ func warmMediumResMidFramePaletteSplit(b *testing.B, shifter *Shifter) {
 func runMediumResMidFramePaletteSplit(b *testing.B, shifter *Shifter, i int) {
 	b.Helper()
 	shifter.BeginFrame()
-	shifter.AdvanceFrame(shifter.frameCycles / 2)
+	shifter.AdvanceFrame(shifter.frameCycles() / 2)
 
 	color := uint16(0x0070)
 	if i&1 == 1 {
@@ -211,8 +213,8 @@ func runMediumResMidFramePaletteSplit(b *testing.B, shifter *Shifter, i int) {
 		b.Fatalf("mid-frame palette write: %v", err)
 	}
 
-	if shifter.frameCyclePos < shifter.frameCycles {
-		shifter.AdvanceFrame(shifter.frameCycles - shifter.frameCyclePos)
+	if shifter.frameCyclePos < shifter.frameCycles() {
+		shifter.AdvanceFrame(shifter.frameCycles() - shifter.frameCyclePos)
 	}
 	if !shifter.EndFrame() {
 		b.Fatalf("expected frame completion")
@@ -225,9 +227,9 @@ func solidMonoHighResFrame() []byte {
 		stride = 80
 	)
 	frame := make([]byte, lines*stride)
-	for y := 0; y < lines; y++ {
+	for y := range lines {
 		line := frame[y*stride : (y+1)*stride]
-		for group := 0; group < 40; group++ {
+		for group := range 40 {
 			offset := group * 2
 			line[offset] = 0xFF
 			line[offset+1] = 0xFF

@@ -408,7 +408,7 @@ func TestFDCReadTrackTransfersEntireTrack(t *testing.T) {
 	fdc := NewFDC(ram, nil)
 
 	image := make([]byte, 2*fdcSectorSize)
-	for i := 0; i < fdcSectorSize; i++ {
+	for i := range fdcSectorSize {
 		image[i] = 0x11
 		image[fdcSectorSize+i] = 0x22
 	}

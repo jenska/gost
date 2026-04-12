@@ -1,11 +1,13 @@
 package devices
 
-import cpu "github.com/jenska/m68kemu"
+import (
+	"github.com/jenska/gost/internal/config"
+	cpu "github.com/jenska/m68kemu"
+)
 
 const (
-	mfpBase               = 0xFFFA00
-	mfpSize               = 0x40
-	defaultMFPHostClockHz = 8_000_000
+	mfpBase = 0xFFFA00
+	mfpSize = 0x40
 	// Timer C divide-by-64 with data 192 is the ST's 200 Hz system timer,
 	// which implies a 2.4576 MHz MFP timer input clock.
 	mfpTimerInputHz = 2_457_600
@@ -47,23 +49,19 @@ type mfpTimer struct {
 
 // MFP models the STF's 68901 interrupt controller with timer-backed IRQs.
 type MFP struct {
+	cfg            *config.Config
 	registers      [mfpSize]byte
 	vectorBase     uint8
 	softwareEOI    bool
 	inFlight       [16]bool
 	aciaIRQActive  bool
-	colorMonitor   bool
 	timers         [4]mfpTimer
 	serialBuffer   byte
-	hostClockHz    uint64
 	clockRemainder uint64
 }
 
-func NewMFP(hostClockHz uint64) *MFP {
-	if hostClockHz == 0 {
-		hostClockHz = defaultMFPHostClockHz
-	}
-	m := &MFP{hostClockHz: hostClockHz}
+func NewMFP(cfg *config.Config) *MFP {
+	m := &MFP{cfg: cfg}
 	m.Reset()
 	return m
 }
@@ -94,11 +92,6 @@ func (m *MFP) Reset() {
 	m.aciaIRQActive = false
 }
 
-// SetColorMonitor controls the monitor-detect input presented on GPIP bit 7.
-func (m *MFP) SetColorMonitor(enabled bool) {
-	m.colorMonitor = enabled
-}
-
 func (m *MFP) Read(size cpu.Size, address uint32) (uint32, error) {
 	offset := address - mfpBase
 	switch size {
@@ -127,8 +120,8 @@ func (m *MFP) Write(size cpu.Size, address uint32, value uint32) error {
 
 func (m *MFP) Advance(cycles uint64) {
 	m.clockRemainder += cycles * mfpTimerInputHz
-	ticks := m.clockRemainder / m.hostClockHz
-	m.clockRemainder %= m.hostClockHz
+	ticks := m.clockRemainder / m.cfg.ClockHz
+	m.clockRemainder %= m.cfg.ClockHz
 	if ticks == 0 {
 		return
 	}
@@ -182,7 +175,7 @@ func (m *MFP) NextEventCycles() (uint64, bool) {
 		return 0, false
 	}
 
-	numerator := minTicks*m.hostClockHz - m.clockRemainder
+	numerator := minTicks*m.cfg.ClockHz - m.clockRemainder
 	if numerator == 0 {
 		return 1, true
 	}
@@ -341,7 +334,7 @@ func (m *MFP) SetACIAInterrupt(asserted bool) {
 
 func (m *MFP) gpipState() byte {
 	value := m.registers[mfpGPIP]
-	if m.colorMonitor {
+	if m.cfg.ColorMonitor {
 		value |= 0x80
 	} else {
 		value &^= 0x80
@@ -444,7 +437,7 @@ func serviceOffsetToChannelBase(offset uint32) int {
 }
 
 func (m *MFP) clearInFlightBits(channelBase int, bits byte) {
-	for bit := 0; bit < 8; bit++ {
+	for bit := range 8 {
 		mask := byte(1 << uint(bit))
 		if bits&mask == 0 {
 			continue

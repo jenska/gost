@@ -41,7 +41,7 @@ func TestPSGAdvanceGeneratesSamples(t *testing.T) {
 	}
 
 	var nonZero bool
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if samples[i] != 0 {
 			nonZero = true
 			break
@@ -76,7 +76,7 @@ func TestPSGEmuTOSKeyclickSequenceGeneratesSamples(t *testing.T) {
 	}
 
 	var nonZero bool
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if samples[i] != 0 {
 			nonZero = true
 			break

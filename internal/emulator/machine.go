@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/jenska/gost/internal/config"
 	"github.com/jenska/gost/internal/devices"
 	"github.com/jenska/m68kdasm"
 	cpu "github.com/jenska/m68kemu"
@@ -19,8 +20,6 @@ const (
 	defaultROMHighAlias = 0xFC0000
 	secondaryROMAlias   = 0xE00000
 	stepQuantumCycles   = 512
-	bootTraceStart      = 0xE00000
-	bootTraceEnd        = 0xE01000
 	guestMouseXAddr     = 0x001E6C
 	guestMouseYAddr     = 0x001E6E
 )
@@ -53,54 +52,31 @@ var bootTraceAddresses = []uint32{
 }
 
 type Machine struct {
-	cfg             Config
-	bus             *cpu.Bus
-	cpu             cpu.CPU
-	ram             *devices.RAM
-	rom             *devices.ROM
-	overlayROM      *devices.OverlayROM
-	memoryConfig    *devices.MemoryConfig
-	shifter         *devices.Shifter
-	blitter         *devices.Blitter
-	mfp             *devices.MFP
-	acia            *devices.ACIA
-	fdc             *devices.FDC
-	psg             *devices.PSG
-	vbl             *devices.VBLSource
-	clocked         []devices.Clocked
-	irqSources      []devices.InterruptSource
-	hardwareClockHz uint64
-	cpuClockHz      uint64
-	frameCycles     uint64
-	cpuCycleCarry   uint64
-	traceMode       string
-	traceWriter     io.Writer
-	frameCounter    uint64
+	cfg           *config.Config
+	bus           *cpu.Bus
+	cpu           cpu.CPU
+	ram           *devices.RAM
+	overlayROM    *devices.OverlayROM
+	memoryConfig  *devices.MemoryConfig
+	shifter       *devices.Shifter
+	acia          *devices.ACIA
+	fdc           *devices.FDC
+	psg           *devices.PSG
+	clocked       []devices.Clocked
+	irqSources    []devices.InterruptSource
+	frameCycles   uint64
+	cpuCycleCarry uint64
+	traceWriter   io.Writer
+	frameCounter  uint64
 }
 
-func LoadROM(path string) ([]byte, error) {
-	return os.ReadFile(path)
-}
-
-func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
+func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 	if len(romImage) == 0 {
 		return nil, fmt.Errorf("ROM image is required")
 	}
-	if cfg.RAMSize == 0 {
-		cfg.RAMSize = DefaultRAMSize
-	}
-	if cfg.ClockHz == 0 {
-		cfg.ClockHz = DefaultClockHz
-	}
-	if cfg.FrameHz == 0 {
-		cfg.FrameHz = DefaultFrameHz
-	}
-	if cfg.CPUClockHz == 0 {
-		cfg.CPUClockHz = cfg.ClockHz
-	}
-	if cfg.TraceStart == 0 && cfg.TraceEnd == 0 {
-		cfg.TraceStart = bootTraceStart
-		cfg.TraceEnd = bootTraceEnd
+	frameCycles := cfg.FrameCycles()
+	if frameCycles == 0 {
+		return nil, fmt.Errorf("invalid frame timing: clock-hz %d / frame-hz %d yields 0 frame cycles", cfg.ClockHz, cfg.FrameHz)
 	}
 
 	ram := devices.NewRAM(0x000000, cfg.RAMSize)
@@ -121,14 +97,18 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 		devices.AddressRange{Start: secondaryROMAlias + uint32(len(romImage)), End: defaultROMHighAlias},
 		devices.AddressRange{Start: 0xFF8000, End: 0x1000000},
 	)
-	shifter := devices.NewShifter(ram)
-	shifter.SetTiming(cfg.ClockHz, cfg.FrameHz)
-	shifter.SetColorBorderVisible(cfg.ColorMonitor)
-	shifter.SetMidResYScale(cfg.MidResYScale)
-	ram.SetContentionSource(shifter)
+	var shifter *devices.Shifter
+	switch cfg.Model {
+	case config.MachineModelST:
+		shifter = devices.NewSTShifter(cfg, ram)
+	case config.MachineModelSTE:
+		shifter = devices.NewSTEShifter(cfg, ram)
+	default:
+		return nil, fmt.Errorf("unsupported machine model %q", cfg.Model)
+	}
+
 	blitter := devices.NewBlitter(ram)
-	mfp := devices.NewMFP(cfg.ClockHz)
-	mfp.SetColorMonitor(cfg.ColorMonitor)
+	mfp := devices.NewMFP(cfg)
 	acia := devices.NewACIA(mfp.SetACIAInterrupt)
 	fdc := devices.NewFDC(ram, nil)
 	if cfg.HardDiskSizeMB > 0 {
@@ -139,7 +119,7 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 	}
 	psg := devices.NewPSG(cfg.ClockHz)
 	psg.SetPortAObserver(fdc.SetDriveControl)
-	vbl := devices.NewVBLSource(cfg.ClockHz, cfg.FrameHz)
+	vbl := devices.NewVBLSource(cfg)
 
 	bus := cpu.NewBus(
 		overlayROM,
@@ -166,27 +146,20 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 	}
 
 	machine := &Machine{
-		cfg:             cfg,
-		bus:             bus,
-		cpu:             cpu,
-		ram:             ram,
-		rom:             rom,
-		overlayROM:      overlayROM,
-		memoryConfig:    memoryConfig,
-		shifter:         shifter,
-		blitter:         blitter,
-		mfp:             mfp,
-		acia:            acia,
-		fdc:             fdc,
-		psg:             psg,
-		vbl:             vbl,
-		clocked:         []devices.Clocked{mfp, acia, fdc, psg, vbl},
-		irqSources:      []devices.InterruptSource{vbl, mfp, acia, fdc},
-		hardwareClockHz: cfg.ClockHz,
-		cpuClockHz:      cfg.CPUClockHz,
-		frameCycles:     cfg.ClockHz / cfg.FrameHz,
-		traceMode:       cfg.Trace,
-		traceWriter:     io.Discard,
+		cfg:          cfg,
+		bus:          bus,
+		cpu:          cpu,
+		ram:          ram,
+		overlayROM:   overlayROM,
+		memoryConfig: memoryConfig,
+		shifter:      shifter,
+		acia:         acia,
+		fdc:          fdc,
+		psg:          psg,
+		clocked:      []devices.Clocked{mfp, acia, fdc, psg, vbl},
+		irqSources:   []devices.InterruptSource{vbl, mfp, acia, fdc},
+		frameCycles:  frameCycles,
+		traceWriter:  io.Discard,
 	}
 
 	if cfg.Trace == "cpu" {
@@ -197,7 +170,7 @@ func NewMachine(cfg Config, romImage []byte) (*Machine, error) {
 }
 
 func (m *Machine) EnableTrace(mode string, writer io.Writer) {
-	m.traceMode = mode
+	m.cfg.Trace = mode
 	if writer == nil {
 		writer = io.Discard
 	}
@@ -229,6 +202,7 @@ func (m *Machine) EnableTrace(mode string, writer io.Writer) {
 }
 
 func (m *Machine) enableBootTrace(verbose bool) {
+	// TODO cleanup this mess of trace modes and boot trace addresses
 	m.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
 		address := info.Address & 0xFFFFFF
 		if info.InstructionFetch || !isBootTraceAddress(address) {
@@ -294,10 +268,6 @@ func (m *Machine) enableBootTrace(verbose bool) {
 func (m *Machine) tracePCInRange(pc uint32) bool {
 	start := m.cfg.TraceStart & 0xFFFFFF
 	end := m.cfg.TraceEnd & 0xFFFFFF
-	if start == 0 && end == 0 {
-		start = bootTraceStart
-		end = bootTraceEnd
-	}
 	if end < start {
 		start, end = end, start
 	}
@@ -388,7 +358,7 @@ func (m *Machine) StepFrame() (bool, error) {
 
 	m.frameCounter++
 	rendered := m.shifter.EndFrame()
-	if m.traceMode == "shifter" || m.traceMode == "shifter-verbose" {
+	if m.cfg.Trace == "shifter" || m.cfg.Trace == "shifter-verbose" {
 		m.traceShifterFrame(rendered)
 	}
 	return rendered, nil
@@ -398,11 +368,11 @@ func (m *Machine) traceShifterFrame(rendered bool) {
 	stats := m.shifter.DebugStats()
 	displayW, displayH := m.shifter.DisplayDimensions()
 	viewportX, viewportY, viewportW, viewportH := m.shifter.DisplayViewport()
-	if m.traceMode == "shifter-verbose" {
-		fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t mode=%d size=%dx%d display=%dx%d viewport=%d,%d,%d,%d base=%06x vaddr=%06x frame_pos=%d/%d render_ns=%d pixels=%d blank=%d words=%d faults=%d waits=%d totals{render_ns=%d pixels=%d blank=%d words=%d faults=%d waits=%d}\n",
+	// TODO cleanup this mess of trace modes and stats
+	if m.cfg.Trace == "shifter-verbose" {
+		fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t size=%dx%d display=%dx%d viewport=%d,%d,%d,%d base=%06x vaddr=%06x frame_pos=%d/%d render_ns=%d pixels=%d blank=%d words=%d faults=%d waits=%d totals{render_ns=%d pixels=%d blank=%d words=%d faults=%d waits=%d}\n",
 			m.frameCounter,
 			rendered,
-			stats.LastMode,
 			stats.LastWidth,
 			stats.LastHeight,
 			displayW,
@@ -430,10 +400,9 @@ func (m *Machine) traceShifterFrame(rendered bool) {
 		)
 		return
 	}
-	fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t mode=%d size=%dx%d display=%dx%d viewport=%d,%d,%d,%d render_ns=%d pixels=%d blank=%d words=%d waits=%d\n",
+	fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t size=%dx%d display=%dx%d viewport=%d,%d,%d,%d render_ns=%d pixels=%d blank=%d words=%d waits=%d\n",
 		m.frameCounter,
 		rendered,
-		stats.LastMode,
 		stats.LastWidth,
 		stats.LastHeight,
 		displayW,
@@ -451,16 +420,16 @@ func (m *Machine) traceShifterFrame(rendered bool) {
 }
 
 func (m *Machine) cpuCyclesForHardwareCycles(hardwareCycles uint64) uint64 {
-	if hardwareCycles == 0 || m.hardwareClockHz == 0 {
+	if hardwareCycles == 0 || m.cfg.ClockHz == 0 {
 		return 0
 	}
-	if m.cpuClockHz == m.hardwareClockHz {
+	if m.cfg.CPUClockHz == m.cfg.ClockHz {
 		return hardwareCycles
 	}
 
-	total := hardwareCycles*m.cpuClockHz + m.cpuCycleCarry
-	cpuCycles := total / m.hardwareClockHz
-	m.cpuCycleCarry = total % m.hardwareClockHz
+	total := hardwareCycles*m.cfg.CPUClockHz + m.cpuCycleCarry
+	cpuCycles := total / m.cfg.ClockHz
+	m.cpuCycleCarry = total % m.cfg.ClockHz
 	return cpuCycles
 }
 
@@ -663,8 +632,4 @@ func (m *Machine) SetHardDiskImage(image []byte) error {
 
 func (m *Machine) LoadIntoRAM(address uint32, payload []byte) error {
 	return m.ram.LoadAt(address, payload)
-}
-
-func (m *Machine) ROM() *devices.ROM {
-	return m.rom
 }

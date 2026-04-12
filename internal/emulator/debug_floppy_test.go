@@ -40,7 +40,7 @@ func TestDebugPDATS321FloppyTraffic(t *testing.T) {
 	})
 	defer machine.cpu.SetBusTracer(nil)
 
-	for frame := 0; frame < 400; frame++ {
+	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -63,7 +63,7 @@ func TestDebugPDATS321DMABuffer(t *testing.T) {
 		t.Fatalf("insert floppy: %v", err)
 	}
 
-	for frame := 0; frame < 400; frame++ {
+	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -71,7 +71,7 @@ func TestDebugPDATS321DMABuffer(t *testing.T) {
 
 	for _, base := range []uint32{0x001004, 0x002004, 0x004004} {
 		fmt.Printf("dma=%06x", base)
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			value, err := machine.ram.Read(cpu.Byte, base+uint32(i))
 			if err != nil {
 				t.Fatalf("read dma buffer %06x: %v", base+uint32(i), err)
@@ -98,7 +98,7 @@ func TestDebugPDATS321DesktopOpenDriveA(t *testing.T) {
 				t.Fatalf("insert floppy: %v", err)
 			}
 		}
-		for frame := 0; frame < 400; frame++ {
+		for frame := range 400 {
 			if _, err := machine.StepFrame(); err != nil {
 				t.Fatalf("step frame %d: %v", frame, err)
 			}
@@ -149,7 +149,7 @@ func TestDebugPDATS321DesktopSearchDriveA(t *testing.T) {
 		if err := machine.InsertFloppy(0, disk); err != nil {
 			t.Fatalf("insert floppy: %v", err)
 		}
-		for frame := 0; frame < 400; frame++ {
+		for frame := range 400 {
 			if _, err := machine.StepFrame(); err != nil {
 				t.Fatalf("step frame %d: %v", frame, err)
 			}
@@ -157,7 +157,7 @@ func TestDebugPDATS321DesktopSearchDriveA(t *testing.T) {
 		before := append([]byte(nil), machine.FrameBuffer()...)
 		moveMouseTo(t, machine, target[0], target[1])
 		quickDoubleClick(t, machine)
-		for i := 0; i < 120; i++ {
+		for i := range 120 {
 			if _, err := machine.StepFrame(); err != nil {
 				t.Fatalf("settle frame %d: %v", i, err)
 			}
@@ -189,7 +189,7 @@ func TestDebugPDATS321AltAOpensDrive(t *testing.T) {
 				t.Fatalf("insert floppy: %v", err)
 			}
 		}
-		for frame := 0; frame < 400; frame++ {
+		for frame := range 400 {
 			if _, err := machine.StepFrame(); err != nil {
 				t.Fatalf("step frame %d: %v", frame, err)
 			}
@@ -203,7 +203,7 @@ func TestDebugPDATS321AltAOpensDrive(t *testing.T) {
 		machine.PushKey(0x1E, true)
 		machine.PushKey(0x1E, false)
 		machine.PushKey(0x38, false)
-		for i := 0; i < 120; i++ {
+		for i := range 120 {
 			if _, err := machine.StepFrame(); err != nil {
 				t.Fatalf("post Alt+A frame %d: %v", i, err)
 			}
@@ -245,7 +245,7 @@ func TestDebugPDATS321AltAFDCTraffic(t *testing.T) {
 	if err := machine.InsertFloppy(0, disk); err != nil {
 		t.Fatalf("insert floppy: %v", err)
 	}
-	for frame := 0; frame < 400; frame++ {
+	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -274,7 +274,7 @@ func TestDebugPDATS321AltAFDCTraffic(t *testing.T) {
 	machine.PushKey(0x1E, true)
 	machine.PushKey(0x1E, false)
 	machine.PushKey(0x38, false)
-	for frame := 0; frame < 40; frame++ {
+	for frame := range 40 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post Alt+A frame %d: %v", frame, err)
 		}
@@ -315,7 +315,7 @@ func TestDebugACSITrafficAtBoot(t *testing.T) {
 	})
 	defer machine.cpu.SetBusTracer(nil)
 
-	for frame := 0; frame < 600; frame++ {
+	for frame := range 600 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -325,7 +325,7 @@ func TestDebugACSITrafficAtBoot(t *testing.T) {
 
 func moveMouseTo(t *testing.T, machine *Machine, targetX, targetY int) {
 	t.Helper()
-	for step := 0; step < 40; step++ {
+	for step := range 40 {
 		x, y, ok := machine.MousePosition()
 		if !ok {
 			t.Fatalf("mouse position unavailable")
@@ -352,7 +352,7 @@ func clickMouse(t *testing.T, machine *Machine) {
 	if _, err := machine.StepFrame(); err != nil {
 		t.Fatalf("mouse up: %v", err)
 	}
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-click frame %d: %v", i, err)
 		}
@@ -361,7 +361,7 @@ func clickMouse(t *testing.T, machine *Machine) {
 
 func quickDoubleClick(t *testing.T, machine *Machine) {
 	t.Helper()
-	for n := 0; n < 2; n++ {
+	for n := range 2 {
 		machine.PushMouse(0, 0, 0x02)
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("mouse down %d: %v", n, err)
@@ -371,7 +371,7 @@ func quickDoubleClick(t *testing.T, machine *Machine) {
 			t.Fatalf("mouse up %d: %v", n, err)
 		}
 	}
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-double-click frame %d: %v", i, err)
 		}

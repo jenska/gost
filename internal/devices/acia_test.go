@@ -1,6 +1,10 @@
 package devices
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jenska/gost/internal/config"
+)
 
 func TestACIAReceivesIKBDBytes(t *testing.T) {
 	acia := NewACIA(nil)
@@ -69,7 +73,7 @@ func TestACIAKeyboardDoesNotQueueDirectCPUInterrupt(t *testing.T) {
 }
 
 func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 	acia := NewACIA(mfp.SetACIAInterrupt)
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {

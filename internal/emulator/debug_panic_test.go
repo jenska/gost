@@ -49,7 +49,7 @@ func TestDebugMFPStateAfterBoot(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 400; frame++ {
+	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -101,7 +101,7 @@ func TestDebugFirstLateMFPInterrupt(t *testing.T) {
 		}
 	})
 
-	for frame := 0; frame < 400; frame++ {
+	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -160,7 +160,7 @@ func TestDebugFirstVector68Interrupt(t *testing.T) {
 		}
 	})
 
-	for frame := 0; frame < 400; frame++ {
+	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -212,7 +212,7 @@ func TestDebugTraceLowRAMExecution(t *testing.T) {
 			addr, info.Size, info.Value, machine.cpu.Registers().PC&0xFFFFFF))
 	})
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -231,7 +231,7 @@ func TestDebugScreenStateAfterPanicFrame(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -253,7 +253,7 @@ func TestDebugEmuTOSPanicRecord(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -285,7 +285,7 @@ func TestDebugWritesNear2300(t *testing.T) {
 		counts[pc]++
 	})
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -344,7 +344,7 @@ func TestDebugFirstPanicRecordSet(t *testing.T) {
 			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR))
 	})
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -392,7 +392,7 @@ func TestDebugPanicWindowBytes(t *testing.T) {
 			pc, info.Bytes, info.SR, info.Registers.A[7], machine.decodeTraceInstruction(info)))
 	})
 
-	for frame := 0; frame < 60; frame++ {
+	for frame := range 60 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -445,7 +445,7 @@ func TestDebugPanicTriggerPoint(t *testing.T) {
 		}
 	})
 
-	for frame := 0; frame < 60; frame++ {
+	for frame := range 60 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -466,7 +466,7 @@ func TestDebugPanicWithoutIRQs(t *testing.T) {
 
 	machine.irqSources = nil
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -506,7 +506,7 @@ func TestDebugPanicWithoutVBL(t *testing.T) {
 	}
 	machine.irqSources = filteredIRQs
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -543,7 +543,7 @@ func TestDebugPanicWithoutMFP(t *testing.T) {
 	}
 	machine.irqSources = filteredIRQs
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -562,7 +562,7 @@ func TestDebugPanicWithoutTimerD(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 30; frame++ {
+	for frame := range 30 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -586,7 +586,7 @@ func TestDebugPanicWithoutTimerC(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -609,7 +609,7 @@ func TestDebugFirstMixedIRQException(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -641,13 +641,13 @@ func TestDebugFirstNonInterruptException(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
 	}
 
-	for steps := 0; steps < 500_000; steps++ {
+	for range 500_000 {
 		result, err := machine.RunUntil(cpu.RunUntilOptions{
 			MaxInstructions: 1,
 			StopOnException: true,
@@ -680,7 +680,7 @@ func TestDebugTraceIllegalVector(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -697,7 +697,10 @@ func TestDebugTraceIllegalVector(t *testing.T) {
 		caught = info
 	})
 
-	for frame := 0; frame < 120 && !hit; frame++ {
+	for frame := range 120 {
+		if hit {
+			break
+		}
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -720,7 +723,7 @@ func TestDebugTraceLateIllegalHistory(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -776,7 +779,7 @@ func TestDebugPanicWithInstructionGranularity(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		target := machine.Cycles() + machine.frameCycles
 		for machine.Cycles() < target {
 			if _, err := machine.RunUntil(cpu.RunUntilOptions{MaxInstructions: 1}); err != nil {
@@ -801,7 +804,7 @@ func TestDebugSingleStepLateBranchWindow(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -818,7 +821,7 @@ func TestDebugSingleStepLateBranchWindow(t *testing.T) {
 		t.Fatalf("unexpected stop pc=%06x reason=%v", result.PC&0xFFFFFF, result.Reason)
 	}
 
-	for step := 0; step < 12; step++ {
+	for step := range 12 {
 		regs := machine.Registers()
 		fmt.Printf("before step=%d pc=%06x sr=%04x d0=%08x d1=%08x d2=%08x a7=%08x\n",
 			step, regs.PC&0xFFFFFF, regs.SR, uint32(regs.D[0]), uint32(regs.D[1]), uint32(regs.D[2]), regs.A[7])
@@ -848,7 +851,7 @@ func TestDebugLateIllegalStackWindow(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -904,7 +907,7 @@ func TestDebugIRQReturnStackWindow(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -960,7 +963,7 @@ func TestDebugLateVBLTimerCStackWindow(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -1101,7 +1104,7 @@ func TestDebugLateIllegalInstructionSite(t *testing.T) {
 		}
 	})
 
-	for frame := 0; frame < 400; frame++ {
+	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -1164,7 +1167,7 @@ func TestDebugLateAddressErrorSite(t *testing.T) {
 		}
 	})
 
-	for frame := 0; frame < 400; frame++ {
+	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}

@@ -1,7 +1,6 @@
 package devices
 
 import (
-	"github.com/jenska/m68kemu"
 	cpu "github.com/jenska/m68kemu"
 )
 
@@ -47,7 +46,7 @@ func (a *ACIA) WaitStates(cpu.Size, uint32) uint32 {
 // Reset restores each channel to its post-reset control and status state.
 func (a *ACIA) Reset() {
 	a.ikbd.Reset()
-	for i := 0; i < aciaChannelCt; i++ {
+	for i := range aciaChannelCt {
 		a.control[i] = 0
 		a.status[i] = 0x02
 		a.data[i] = 0
@@ -58,7 +57,7 @@ func (a *ACIA) Reset() {
 
 // Read serves the status or data register selected by the CPU address and
 // updates receive state when a data byte is consumed.
-func (a *ACIA) Read(size m68kemu.Size, address uint32) (uint32, error) {
+func (a *ACIA) Read(size cpu.Size, address uint32) (uint32, error) {
 	channel := aciaChannelIndex(address)
 	if !a.rxCooldown[channel] {
 		a.pollIKBD()
@@ -82,7 +81,7 @@ func (a *ACIA) Read(size m68kemu.Size, address uint32) (uint32, error) {
 
 // Write updates a control register or forwards keyboard-channel data bytes to
 // the IKBD command parser.
-func (a *ACIA) Write(size m68kemu.Size, address uint32, value uint32) error {
+func (a *ACIA) Write(size cpu.Size, address uint32, value uint32) error {
 	channel := aciaChannelIndex(address)
 	switch (address - aciaBase) % aciaChannelSize {
 	case 0, 1:

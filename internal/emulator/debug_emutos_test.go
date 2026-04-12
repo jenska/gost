@@ -24,7 +24,7 @@ func TestBundledEmuTOSReachesShifterSetup(t *testing.T) {
 		t.Fatalf("create machine with bundled EmuTOS: %v", err)
 	}
 
-	for frame := 0; frame < 200; frame++ {
+	for frame := range 200 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -56,8 +56,8 @@ func TestBundledEmuTOSReachesDesktop(t *testing.T) {
 	}
 
 	var menuBlack, trashBlack, whitePixels int
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			offset := (y*width + x) * 4
 			r, g, b, a := frame[offset], frame[offset+1], frame[offset+2], frame[offset+3]
 			if a == 0 {
@@ -93,7 +93,7 @@ func TestBundledEmuTOSMountsDefaultVirtualHardDiskAsDriveC(t *testing.T) {
 
 	// EmuTOS low-memory variable _drvbits is at 0x04C2; bit 2 indicates C:.
 	var drvbits uint32
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		value, err := machine.ram.Read(cpu.Byte, 0x04C2+uint32(i))
 		if err != nil {
 			t.Fatalf("read _drvbits byte %d: %v", i, err)
@@ -171,12 +171,12 @@ func TestBundledEmuTOSKeypressProducesAudioSamples(t *testing.T) {
 
 	samples := make([]float32, 2048)
 	var heardAudio bool
-	for frame := 0; frame < 10; frame++ {
+	for frame := range 10 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step audio frame %d: %v", frame, err)
 		}
 		n := audio.DrainMonoF32(samples)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if samples[i] != 0 {
 				heardAudio = true
 				break
@@ -196,7 +196,7 @@ func TestBundledEmuTOSKeypressProducesAudioSamples(t *testing.T) {
 		}
 		disasm := []string{"<decode failed>"}
 		pc := keyclickHook
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			inst, err := cpu.DisassembleInstruction(machine.bus, pc)
 			if err != nil {
 				break
@@ -224,7 +224,7 @@ func TestBundledEmuTOSMouseMoveChangesDesktopFrame(t *testing.T) {
 
 	withMouse.PushMouse(12, 8, 0)
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := base.StepFrame(); err != nil {
 			t.Fatalf("baseline post-mouse frame %d: %v", frame, err)
 		}
@@ -286,7 +286,7 @@ func TestBundledEmuTOSReportsMousePosition(t *testing.T) {
 	}
 
 	machine.PushMouse(12, 8, 0)
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-mouse frame %d: %v", frame, err)
 		}
@@ -347,7 +347,7 @@ func mustBootBundledMachine(t *testing.T, cfg Config, frames int) *Machine {
 
 func stepFrames(t *testing.T, machine *Machine, frames int) {
 	t.Helper()
-	for frame := 0; frame < frames; frame++ {
+	for frame := range frames {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}

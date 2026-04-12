@@ -1,5 +1,7 @@
 package devices
 
+import "github.com/jenska/gost/internal/config"
+
 // VBLSource generates the ST's 50 Hz vertical blank autovector interrupt.
 type VBLSource struct {
 	cyclesPerVBL uint64
@@ -7,11 +9,12 @@ type VBLSource struct {
 	pending      []Interrupt
 }
 
-func NewVBLSource(clockHz, frameHz uint64) *VBLSource {
+func NewVBLSource(cfg *config.Config) *VBLSource {
+	frameHz := cfg.FrameHz
 	if frameHz == 0 {
 		frameHz = 50
 	}
-	cyclesPerVBL := clockHz / frameHz
+	cyclesPerVBL := cfg.ClockHz / frameHz
 	if cyclesPerVBL == 0 {
 		cyclesPerVBL = 1
 	}

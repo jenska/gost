@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/jenska/gost/internal/assets"
+	"github.com/jenska/gost/internal/config"
 	"github.com/jenska/gost/internal/devices"
 	cpu "github.com/jenska/m68kemu"
 )
@@ -18,6 +20,47 @@ func TestMachineResetVectors(t *testing.T) {
 	if regs.A[7] != 0x00080000 {
 		t.Fatalf("unexpected reset SSP: got %08x want %08x", regs.A[7], 0x00080000)
 	}
+}
+
+func TestMachineSupportsTwoMegRAMWithoutBusError(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMSize = 2 * 1024 * 1024
+	machine, err := NewMachine(cfg, loopROM(nil))
+	if err != nil {
+		t.Fatalf("create machine: %v", err)
+	}
+	if _, err := machine.StepFrame(); err != nil {
+		t.Fatalf("step frame with 2MB RAM: %v", err)
+	}
+}
+
+func TestMachineTwoMegRAMBootsBundledROMToActiveScreenBase(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RAMSize = 2 * 1024 * 1024
+	cfg.Model = config.MachineModelST
+
+	machine, err := NewMachine(cfg, assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create machine: %v", err)
+	}
+
+	for frame := range 200 {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d: %v", frame, err)
+		}
+		if machine.shifter.ScreenBase() != 0 {
+			phystop, err := machine.ram.Read(cpu.Long, 0x042E)
+			if err != nil {
+				t.Fatalf("read phystop: %v", err)
+			}
+			if phystop != 0x00200000 {
+				t.Fatalf("unexpected phystop after 2MB boot: got %08x want 00200000", phystop)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("expected bundled ROM boot to program non-zero screen base within 200 frames")
 }
 
 func TestSTBusAlignmentAndMapping(t *testing.T) {
@@ -101,6 +144,59 @@ func TestOverlayWritesPassThroughToRAM(t *testing.T) {
 	}
 }
 
+func TestMachineSTEModelEnablesShifterLowScreenBaseRegister(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Model = config.MachineModelSTE
+	machine, err := NewMachine(cfg, loopROM(nil))
+	if err != nil {
+		t.Fatalf("create machine: %v", err)
+	}
+
+	if err := machine.bus.Write(cpu.Byte, 0xFF8201, 0x12); err != nil {
+		t.Fatalf("write base high: %v", err)
+	}
+	if err := machine.bus.Write(cpu.Byte, 0xFF8203, 0x34); err != nil {
+		t.Fatalf("write base mid: %v", err)
+	}
+	if err := machine.bus.Write(cpu.Byte, 0xFF820D, 0x56); err != nil {
+		t.Fatalf("write base low: %v", err)
+	}
+
+	if got, want := machine.shifter.ScreenBase(), uint32(0x123456); got != want {
+		t.Fatalf("unexpected STE screen base: got %06x want %06x", got, want)
+	}
+
+	value, err := machine.bus.Read(cpu.Byte, 0xFF8209)
+	if err != nil {
+		t.Fatalf("read STE video counter low: %v", err)
+	}
+	if byte(value) != 0x56 {
+		t.Fatalf("unexpected STE video counter low: got %02x want 56", byte(value))
+	}
+
+	if err := machine.bus.Write(cpu.Byte, 0xFF820F, 0x03); err != nil {
+		t.Fatalf("write STE line offset: %v", err)
+	}
+	value, err = machine.bus.Read(cpu.Byte, 0xFF820F)
+	if err != nil {
+		t.Fatalf("read STE line offset: %v", err)
+	}
+	if byte(value) != 0x03 {
+		t.Fatalf("unexpected STE line offset readback: got %02x want 03", byte(value))
+	}
+
+	if err := machine.bus.Write(cpu.Byte, 0xFF8265, 0x0F); err != nil {
+		t.Fatalf("write STE fine scroll: %v", err)
+	}
+	value, err = machine.bus.Read(cpu.Byte, 0xFF8265)
+	if err != nil {
+		t.Fatalf("read STE fine scroll: %v", err)
+	}
+	if byte(value) != 0x0F {
+		t.Fatalf("unexpected STE fine scroll readback: got %02x want 0f", byte(value))
+	}
+}
+
 func TestMachineInterruptHandling(t *testing.T) {
 	rom := loopROM([]byte{
 		0x46, 0xFC, 0x20, 0x00, // move #$2000,sr
@@ -130,7 +226,7 @@ func TestMachineInterruptHandling(t *testing.T) {
 		t.Fatalf("request interrupt: %v", err)
 	}
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", i, err)
 		}
@@ -144,7 +240,7 @@ func TestMachineInterruptHandling(t *testing.T) {
 func TestHeadlessMachineStepsFrames(t *testing.T) {
 	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", i, err)
 		}
@@ -239,14 +335,14 @@ func TestMachineSetHardDiskImageReplacesVirtualDisk(t *testing.T) {
 func TestMachineCPUOverclockScalesCPUOnly(t *testing.T) {
 	rom := loopROM([]byte{0x4E, 0x71, 0x60, 0xFE})
 
-	baseCfg := DefaultConfig()
+	baseCfg := config.DefaultConfig()
 	baseCfg.CPUClockHz = baseCfg.ClockHz
 	base, err := NewMachine(baseCfg, rom)
 	if err != nil {
 		t.Fatalf("create base machine: %v", err)
 	}
 
-	overCfg := DefaultConfig()
+	overCfg := config.DefaultConfig()
 	overCfg.CPUClockHz = overCfg.ClockHz * 2
 	over, err := NewMachine(overCfg, rom)
 	if err != nil {
@@ -275,18 +371,12 @@ func TestMachineCPUOverclockScalesCPUOnly(t *testing.T) {
 	if ratio < 1.9 || ratio > 2.1 {
 		t.Fatalf("unexpected CPU cycle scaling ratio: base_delta=%d over_delta=%d ratio=%.3f want ~2.0", baseDelta, overDelta, ratio)
 	}
-
-	baseVBL, _ := base.vbl.NextEventCycles()
-	overVBL, _ := over.vbl.NextEventCycles()
-	if baseVBL != overVBL {
-		t.Fatalf("VBL timing changed by CPU overclock: base=%d over=%d", baseVBL, overVBL)
-	}
 }
 
 func TestMachineColorMonitorEnablesColorBorderOverlay(t *testing.T) {
 	rom := loopROM([]byte{0x4E, 0x71, 0x60, 0xFE})
 
-	colorCfg := DefaultConfig()
+	colorCfg := config.DefaultConfig()
 	colorCfg.ColorMonitor = true
 	colorMachine, err := NewMachine(colorCfg, rom)
 	if err != nil {
@@ -305,7 +395,7 @@ func TestMachineColorMonitorEnablesColorBorderOverlay(t *testing.T) {
 		t.Fatalf("unexpected color monitor display viewport: got (%d,%d,%d,%d), visible=%dx%d", vx, vy, vw, vh, visibleW, visibleH)
 	}
 
-	monoCfg := DefaultConfig()
+	monoCfg := config.DefaultConfig()
 	monoCfg.ColorMonitor = false
 	monoMachine, err := NewMachine(monoCfg, rom)
 	if err != nil {
@@ -326,7 +416,7 @@ func TestMachineColorMonitorEnablesColorBorderOverlay(t *testing.T) {
 }
 
 func TestMachineMidResYScaleAppliesToDisplayViewport(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := config.DefaultConfig()
 	cfg.ColorMonitor = true
 	cfg.MidResYScale = 2
 	machine, err := NewMachine(cfg, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
@@ -352,6 +442,10 @@ func TestMachineMidResYScaleAppliesToDisplayViewport(t *testing.T) {
 
 func TestMachineResetRestoresColdBootState(t *testing.T) {
 	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+	initialConfigValue, err := machine.memoryConfig.Read(cpu.Byte, 0xFF8001)
+	if err != nil {
+		t.Fatalf("read initial MMU config: %v", err)
+	}
 
 	if err := machine.LoadIntoRAM(0x000008, []byte{0xAA, 0x55}); err != nil {
 		t.Fatalf("seed RAM: %v", err)
@@ -379,8 +473,8 @@ func TestMachineResetRestoresColdBootState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read MMU config after reset: %v", err)
 	}
-	if got := byte(configValue); got != 0x05 {
-		t.Fatalf("expected cold reset MMU config 05, got %02x", got)
+	if got, want := byte(configValue), byte(initialConfigValue); got != want {
+		t.Fatalf("expected cold reset MMU config %02x, got %02x", want, got)
 	}
 	if !machine.overlayROM.Enabled() {
 		t.Fatalf("expected cold reset to re-enable ROM overlay")
@@ -423,7 +517,7 @@ func TestVBLInterruptRunsHandler(t *testing.T) {
 
 func mustMachine(t *testing.T, rom []byte) *Machine {
 	t.Helper()
-	machine, err := NewMachine(DefaultConfig(), rom)
+	machine, err := NewMachine(config.DefaultConfig(), rom)
 	if err != nil {
 		t.Fatalf("create machine: %v", err)
 	}

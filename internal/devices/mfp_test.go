@@ -1,9 +1,13 @@
 package devices
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jenska/gost/internal/config"
+)
 
 func TestMFPTimerQueuesInterrupt(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
 		t.Fatalf("write vector base: %v", err)
@@ -35,7 +39,7 @@ func TestMFPTimerQueuesInterrupt(t *testing.T) {
 }
 
 func TestMFPTimerCQueuesInterrupt(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
 		t.Fatalf("write vector base: %v", err)
@@ -64,7 +68,7 @@ func TestMFPTimerCQueuesInterrupt(t *testing.T) {
 }
 
 func TestMFPSoftwareEOIBlocksLowerPriorityInterrupts(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x48); err != nil {
 		t.Fatalf("write vector base with software eoi: %v", err)
@@ -124,7 +128,7 @@ func TestMFPSoftwareEOIBlocksLowerPriorityInterrupts(t *testing.T) {
 }
 
 func TestMFPWritingPendingRegisterClearsPendingInterrupt(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	if err := mfp.Write(1, mfpBase+mfpIERA, 0x20); err != nil {
 		t.Fatalf("write interrupt enable: %v", err)
@@ -151,7 +155,7 @@ func TestMFPWritingPendingRegisterClearsPendingInterrupt(t *testing.T) {
 }
 
 func TestMFPTimerAccumulatesFractionalCPUClock(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
 		t.Fatalf("write vector base: %v", err)
@@ -185,7 +189,7 @@ func TestMFPTimerAccumulatesFractionalCPUClock(t *testing.T) {
 }
 
 func TestMFPAutoEOITimerCRepeats(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
 		t.Fatalf("write vector base: %v", err)
@@ -220,7 +224,7 @@ func TestMFPAutoEOITimerCRepeats(t *testing.T) {
 }
 
 func TestMFPTimerNextEventCycles(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	if err := mfp.Write(1, mfpBase+mfpTCDR, 1); err != nil {
 		t.Fatalf("write timer c data: %v", err)
@@ -248,7 +252,7 @@ func TestMFPTimerNextEventCycles(t *testing.T) {
 }
 
 func TestMFPSoftwareEOIPreventsDuplicateTimerDispatchBeforeServiceClear(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x48); err != nil {
 		t.Fatalf("write vector base with software eoi: %v", err)
@@ -291,7 +295,7 @@ func TestMFPSoftwareEOIPreventsDuplicateTimerDispatchBeforeServiceClear(t *testi
 }
 
 func TestMFPGPIPBit4ReflectsACIAInterruptLine(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 
 	idle, err := mfp.Read(1, mfpBase+mfpGPIP)
 	if err != nil {
@@ -321,7 +325,8 @@ func TestMFPGPIPBit4ReflectsACIAInterruptLine(t *testing.T) {
 }
 
 func TestMFPGPIPBit7ReflectsMonitorType(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	cfg := config.Config{ClockHz: 8_000_000, ColorMonitor: false}
+	mfp := NewMFP(&cfg)
 
 	mono, err := mfp.Read(1, mfpBase+mfpGPIP)
 	if err != nil {
@@ -331,7 +336,7 @@ func TestMFPGPIPBit7ReflectsMonitorType(t *testing.T) {
 		t.Fatalf("expected monochrome monitor to clear GPIP bit 7, GPIP=%02x", byte(mono))
 	}
 
-	mfp.SetColorMonitor(true)
+	cfg.ColorMonitor = true
 	color, err := mfp.Read(1, mfpBase+mfpGPIP)
 	if err != nil {
 		t.Fatalf("read color GPIP: %v", err)
@@ -342,7 +347,7 @@ func TestMFPGPIPBit7ReflectsMonitorType(t *testing.T) {
 }
 
 func TestMFPGPIPBit5DefaultsHighWithoutICDRTC(t *testing.T) {
-	mfp := NewMFP(8_000_000)
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000, ColorMonitor: false})
 
 	value, err := mfp.Read(1, mfpBase+mfpGPIP)
 	if err != nil {

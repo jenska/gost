@@ -155,6 +155,14 @@ type MemoryConfig struct {
 	mmuBank1Size uint32
 }
 
+type MemoryAddressState uint8
+
+const (
+	memoryAddressInvalid MemoryAddressState = iota
+	memoryAddressPresent
+	memoryAddressAbsent
+)
+
 func NewMemoryConfig(overlay *OverlayROM, ramSize uint32) *MemoryConfig {
 	bank0, bank1, value := physicalBanksForRAM(ramSize)
 	m := &MemoryConfig{
@@ -215,8 +223,13 @@ func (m *MemoryConfig) LogicalSize() uint32 {
 }
 
 func (m *MemoryConfig) TranslateAddress(address uint32) (uint32, bool) {
+	offset, state := m.ResolveAddress(address)
+	return offset, state == memoryAddressPresent
+}
+
+func (m *MemoryConfig) ResolveAddress(address uint32) (uint32, MemoryAddressState) {
 	if address >= m.LogicalSize() {
-		return 0, false
+		return 0, memoryAddressInvalid
 	}
 
 	bankStart := uint32(0)
@@ -227,12 +240,15 @@ func (m *MemoryConfig) TranslateAddress(address uint32) (uint32, bool) {
 		ramBankSize = m.ramBank1Size
 		mmuBankSize = m.mmuBank1Size
 	}
-	if ramBankSize == 0 || mmuBankSize == 0 {
-		return 0, false
+	if mmuBankSize == 0 {
+		return 0, memoryAddressInvalid
+	}
+	if ramBankSize == 0 {
+		return 0, memoryAddressAbsent
 	}
 
 	translated := translateSTBank(address, ramBankSize, mmuBankSize)
-	return bankStart + translated, true
+	return bankStart + translated, memoryAddressPresent
 }
 
 func (m *MemoryConfig) setValue(value byte) {
@@ -256,14 +272,20 @@ func mmuBankSize(code byte) uint32 {
 
 func physicalBanksForRAM(ramSize uint32) (uint32, uint32, byte) {
 	switch ramSize {
+	case 128 * 1024:
+		return mmuBankSize128K, 0, physicalConfigValue(mmuBankSize128K, 0)
 	case 256 * 1024:
 		return mmuBankSize128K, mmuBankSize128K, 0x00
+	case 512 * 1024:
+		return mmuBankSize512K, 0, physicalConfigValue(mmuBankSize512K, 0)
 	case 1024 * 1024:
 		return mmuBankSize512K, mmuBankSize512K, 0x05
+	case 2 * 1024 * 1024:
+		return mmuBankSize2M, 0, physicalConfigValue(mmuBankSize2M, 0)
 	case 4 * 1024 * 1024:
 		return mmuBankSize2M, mmuBankSize2M, 0x0A
 	default:
-		return ramSize, 0, 0
+		return ramSize, 0, physicalConfigValue(ramSize, 0)
 	}
 }
 
@@ -273,6 +295,9 @@ func physicalConfigValue(bank0, bank1 uint32) byte {
 
 func mmuBankCode(size uint32) byte {
 	switch size {
+	case 0:
+		// MMU code 3 marks the bank as absent.
+		return 3
 	case mmuBankSize128K:
 		return 0
 	case mmuBankSize512K:

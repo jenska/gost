@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jenska/gost/internal/config"
 	"github.com/jenska/gost/internal/devices"
 	cpu "github.com/jenska/m68kemu"
 )
@@ -70,7 +71,7 @@ func TestTraceValueString(t *testing.T) {
 }
 
 func TestMachineTracePCInRange(t *testing.T) {
-	machine := &Machine{cfg: Config{TraceStart: 0x00E16780, TraceEnd: 0x00E1679A}}
+	machine := &Machine{cfg: &config.Config{TraceStart: 0x00E16780, TraceEnd: 0x00E1679A}}
 
 	tests := []struct {
 		name string
@@ -91,20 +92,10 @@ func TestMachineTracePCInRange(t *testing.T) {
 	}
 }
 
-func TestMachineTracePCInRangeDefaults(t *testing.T) {
-	machine := &Machine{}
-
-	if !machine.tracePCInRange(0x00E003CE) {
-		t.Fatalf("expected default trace range to include early boot PC")
-	}
-	if machine.tracePCInRange(0x00E16794) {
-		t.Fatalf("expected default trace range to exclude late boot PC")
-	}
-}
-
 func TestMachineNextDeviceEventCycles(t *testing.T) {
-	vbl := devices.NewVBLSource(8_000_000, 50)
-	mfp := devices.NewMFP(8_000_000)
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50, ColorMonitor: false}
+	vbl := devices.NewVBLSource(cfg)
+	mfp := devices.NewMFP(cfg)
 	if err := mfp.Write(1, 0xFFFA23, 1); err != nil {
 		t.Fatalf("write timer c data: %v", err)
 	}

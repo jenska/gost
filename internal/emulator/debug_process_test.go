@@ -19,7 +19,7 @@ func TestDebugLateMFPState(t *testing.T) {
 	}
 
 	dumpMFPState(t, machine, "reset")
-	for frame := 0; frame < 60; frame++ {
+	for frame := range 60 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -35,7 +35,7 @@ func TestDebugLateTrapStackBanks(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 20; frame++ {
+	for frame := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -167,7 +167,7 @@ func TestDebugLowMemProcessPointerWrites(t *testing.T) {
 		}
 	})
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -238,7 +238,7 @@ func TestDebugProcessPointerProducer(t *testing.T) {
 	})
 
 	pushHistory(fmt.Sprintf("frame=%d 649c=%08x 64a0=%08x", 0, readLong(0x649C), readLong(0x64A0)))
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -305,7 +305,7 @@ func TestDebugProcessDescriptorInitialization(t *testing.T) {
 		}
 	})
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -413,7 +413,7 @@ func TestDebugAltRAMProbeAccesses(t *testing.T) {
 		))
 	})
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			fmt.Printf("%s\n", strings.Join(history, "\n"))
 			t.Fatalf("step frame %d: %v", frame, err)
@@ -474,7 +474,10 @@ func TestDebugAltRAMDescriptorCaller(t *testing.T) {
 		}
 	})
 
-	for frame := 0; frame < 120 && !hit; frame++ {
+	for frame := range 120 {
+		if hit {
+			break
+		}
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}

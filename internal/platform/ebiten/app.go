@@ -7,6 +7,7 @@ import (
 	ebitenlib "github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/jenska/gost/internal/config"
 	"github.com/jenska/gost/internal/emulator"
 	"github.com/jenska/gost/internal/platform/inputmap"
 	"github.com/jenska/ym2149/renderer/atarist"
@@ -37,7 +38,7 @@ const (
 	audioBufferSize        = 75 * time.Millisecond
 )
 
-func Run(machine *emulator.Machine, cfg emulator.Config) error {
+func Run(machine *emulator.Machine, cfg config.Config) error {
 	app := &App{
 		machine:  machine,
 		scale:    cfg.Scale,

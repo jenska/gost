@@ -217,10 +217,7 @@ func (f *FDC) SetHardDiskImage(image []byte) error {
 	return nil
 }
 
-func (f *FDC) CreateVirtualHardDisk(sizeBytes int) error {
-	if sizeBytes < 0 {
-		return fmt.Errorf("hard disk size cannot be negative")
-	}
+func (f *FDC) CreateVirtualHardDisk(sizeBytes uint32) error {
 	if sizeBytes == 0 {
 		f.hardDisk0 = nil
 		return nil
@@ -330,7 +327,7 @@ func formatFAT16Partition(partition []byte, partitionSectors, hiddenSectors int)
 
 	fatOffset := fat16DefaultReservedSectors * fdcSectorSize
 	fatBytes := layout.sectorsPerFAT * fdcSectorSize
-	for fatIndex := 0; fatIndex < fat16DefaultFATCount; fatIndex++ {
+	for fatIndex := range fat16DefaultFATCount {
 		start := fatOffset + fatIndex*fatBytes
 		end := start + fatBytes
 		if end > len(partition) {
@@ -379,7 +376,7 @@ func fat16SectorsPerFAT(totalSectors, sectorsPerCluster, rootDirSectors int) (in
 	}
 
 	sectorsPerFAT := 1
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		dataSectors := totalSectors - fat16DefaultReservedSectors - rootDirSectors - fat16DefaultFATCount*sectorsPerFAT
 		if dataSectors <= 0 {
 			return 0, 0, false
@@ -779,7 +776,7 @@ func (f *FDC) execReadSectors(cmd byte) error {
 	}
 
 	buffer := make([]byte, 0, count*fdcSectorSize)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		offset, ok := f.diskOffset(int(f.track), baseSector+i)
 		if !ok {
 			return f.failTypeIIStatus(fdcStatusRNF)
@@ -822,7 +819,7 @@ func (f *FDC) execWriteSectors(cmd byte) error {
 			return f.failTypeIIStatus(fdcStatusRNF | fdcStatusLostData)
 		}
 	}
-	for i := 0; i < count; i++ {
+	for i := range count {
 		offset, ok := f.diskOffset(int(f.track), baseSector+i)
 		if !ok {
 			return f.failTypeIIStatus(fdcStatusRNF)

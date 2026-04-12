@@ -3,6 +3,7 @@ package devices
 import (
 	"time"
 
+	"github.com/jenska/gost/internal/config"
 	cpu "github.com/jenska/m68kemu"
 )
 
@@ -11,13 +12,16 @@ const (
 	paletteBase       = 0xFF8240
 	paletteRegisterCt = 16
 
-	shifterRegBaseHigh             = 0xFF8201
-	shifterRegBaseMid              = 0xFF8203
-	shifterRegVideoAddrHigh        = 0xFF8205
-	shifterRegVideoAddrMid         = 0xFF8207
-	shifterRegSyncMode             = 0xFF820A
-	shifterRegResolution           = 0xFF8260
-	stPaletteColorMask      uint16 = 0x0777
+	shifterRegBaseHigh      = 0xFF8201
+	shifterRegBaseMid       = 0xFF8203
+	shifterRegVideoAddrHigh = 0xFF8205
+	shifterRegVideoAddrMid  = 0xFF8207
+	shifterRegVideoAddrLow  = 0xFF8209
+	shifterRegSyncMode      = 0xFF820A
+	shifterRegBaseLow       = 0xFF820D
+	shifterRegLineOffset    = 0xFF820F
+	shifterRegResolution    = 0xFF8260
+	shifterRegFineScroll    = 0xFF8265
 
 	defaultShifterClockHz = 8_000_000
 	defaultShifterFrameHz = 50
@@ -29,7 +33,10 @@ const (
 	shifterContentionWaitStates         = 1
 
 	shifterSyncBlankDisplayBit = 0x01
-	shifterRasterSegments      = 8
+	// Track blank/display state at a finer horizontal resolution than the
+	// original coarse 8-way split so short border/blank pulses map to much
+	// narrower spans on screen.
+	shifterRasterSegments = 64
 	// Approximate STF color-border geometry for 50 Hz timing.
 	// Medium resolution keeps roughly the same time-domain border,
 	// therefore horizontal border is doubled in pixels.
@@ -39,26 +46,38 @@ const (
 	shifterDisplayBorderMedRight = 64
 	shifterDisplayBorderTop      = 28
 	shifterDisplayBorderBottom   = 28
-	defaultMidResYScale          = 1
 )
 
+type shifterModel interface {
+	containsRegister(address uint32) bool
+	screenBase(s *Shifter) uint32
+	screenBaseFromState(state shifterLineState) uint32
+	sameScreenBase(a, b shifterLineState) bool
+	lineStrideBytes(state shifterLineState, mode byte) uint32
+	fineScroll(state shifterLineState) int
+	paletteMask() uint16
+	paletteColorChannels(colorValue uint16) (r, g, b byte)
+	readByte(s *Shifter, address uint32) (byte, bool)
+	writeByte(s *Shifter, address uint32, value byte) bool
+}
+
 var (
+	// Lookup tables pre-expand bitplane nibbles/bytes into palette indices or
+	// RGBA spans to keep the inner render loops branch-light.
 	lowModeNibbleIndices    [1 << 16][4]byte
 	mediumModeNibbleIndices [1 << 8][4]byte
 	monoByteRGBA            [1 << 8][32]byte
 )
 
 func init() {
-	initShifterLookupTables()
-}
-
-func initShifterLookupTables() {
-	for key := 0; key < len(lowModeNibbleIndices); key++ {
+	// Low resolution: 4 bitplanes produce 16 pixels per 4 words.
+	// Each key represents one nibble from each plane.
+	for key := range len(lowModeNibbleIndices) {
 		p0 := byte((key >> 12) & 0x0F)
 		p1 := byte((key >> 8) & 0x0F)
 		p2 := byte((key >> 4) & 0x0F)
 		p3 := byte(key & 0x0F)
-		for pixel := 0; pixel < 4; pixel++ {
+		for pixel := range 4 {
 			mask := byte(1 << (3 - pixel))
 			var index byte
 			if p0&mask != 0 {
@@ -77,10 +96,11 @@ func initShifterLookupTables() {
 		}
 	}
 
-	for key := 0; key < len(mediumModeNibbleIndices); key++ {
+	// Medium resolution: 2 bitplanes produce 16 pixels per 2 words.
+	for key := range len(mediumModeNibbleIndices) {
 		p0 := byte((key >> 4) & 0x0F)
 		p1 := byte(key & 0x0F)
-		for pixel := 0; pixel < 4; pixel++ {
+		for pixel := range 4 {
 			mask := byte(1 << (3 - pixel))
 			var index byte
 			if p0&mask != 0 {
@@ -93,8 +113,9 @@ func initShifterLookupTables() {
 		}
 	}
 
-	for value := 0; value < len(monoByteRGBA); value++ {
-		for pixel := 0; pixel < 8; pixel++ {
+	// High resolution: expand one byte into 8 monochrome RGBA pixels.
+	for value := range len(monoByteRGBA) {
+		for pixel := range 8 {
 			dst := pixel * 4
 			if value&(1<<(7-pixel)) != 0 {
 				monoByteRGBA[value][dst] = 0x00
@@ -112,9 +133,12 @@ func initShifterLookupTables() {
 }
 
 type shifterLineState struct {
-	baseHigh byte
-	baseMid  byte
-	palette  [paletteRegisterCt]uint16
+	baseHigh   byte
+	baseMid    byte
+	baseLow    byte
+	lineOffset byte
+	fineScroll byte
+	palette    [paletteRegisterCt]uint16
 }
 
 // ShifterDebugStats exposes optional per-frame instrumentation for performance
@@ -122,7 +146,6 @@ type shifterLineState struct {
 type ShifterDebugStats struct {
 	FramesRendered uint64
 
-	LastMode        byte
 	LastWidth       int
 	LastHeight      int
 	LastRenderNanos int64
@@ -146,92 +169,56 @@ type ShifterDebugStats struct {
 	VideoAddress  uint32
 }
 
-// Shifter implements a small but useful subset of the STF video hardware.
 type Shifter struct {
-	ram                *RAM
-	baseHigh           byte
-	baseMid            byte
-	syncMode           byte
-	resolution         byte
-	palette            [paletteRegisterCt]uint16
-	framebuffer        []byte
-	width              int
-	height             int
-	videoCounter       uint32
-	frameCycles        uint64
-	frameCyclePos      uint64
-	frameMode          byte
-	frameActive        bool
-	lineStates         []shifterLineState
-	slotSyncModes      []byte
-	lastRendered       uint64
-	debugEnabled       bool
-	debugStats         ShifterDebugStats
-	framePixelsDrawn   uint64
-	frameBlankPixels   uint64
-	frameVideoWords    uint64
-	frameReadFaults    uint64
-	frameWaitHits      uint64
-	colorBorderVisible bool
-	displayBuffer      []byte
-	displayWidth       int
-	displayHeight      int
-	displayOffsetX     int
-	displayOffsetY     int
-	displayViewportW   int
-	displayViewportH   int
-	midResYScale       int
-}
-
-func NewShifter(ram *RAM) *Shifter {
-	s := &Shifter{
-		ram:          ram,
-		width:        320,
-		height:       200,
-		midResYScale: defaultMidResYScale,
-	}
-	s.framebuffer = make([]byte, s.width*s.height*4)
-	s.SetTiming(defaultShifterClockHz, defaultShifterFrameHz)
-	return s
-}
-
-func (s *Shifter) SetTiming(clockHz, frameHz uint64) {
-	if clockHz == 0 {
-		clockHz = defaultShifterClockHz
-	}
-	if frameHz == 0 {
-		frameHz = defaultShifterFrameHz
-	}
-	s.frameCycles = clockHz / frameHz
-	if s.frameCycles == 0 {
-		s.frameCycles = 1
-	}
+	cfg              *config.Config
+	ram              *RAM
+	model            shifterModel
+	baseHigh         byte
+	baseMid          byte
+	baseLow          byte
+	lineOffset       byte
+	fineScroll       byte
+	syncMode         byte
+	resolution       byte
+	palette          [paletteRegisterCt]uint16
+	framebuffer      []byte
+	width            int
+	height           int
+	videoCounter     uint32
+	frameCyclePos    uint64
+	frameRenderer    func(s *Shifter)
+	frameActive      bool
+	lineStates       []shifterLineState
+	slotSyncModes    []byte
+	lastRendered     uint64
+	debugEnabled     bool
+	debugStats       ShifterDebugStats
+	framePixelsDrawn uint64
+	frameBlankPixels uint64
+	frameVideoWords  uint64
+	frameReadFaults  uint64
+	frameWaitHits    uint64
+	displayBuffer    []byte
+	displayWidth     int
+	displayHeight    int
+	displayOffsetX   int
+	displayOffsetY   int
+	displayViewportW int
+	displayViewportH int
 }
 
 func (s *Shifter) SetDebug(enabled bool) {
 	s.debugEnabled = enabled
 }
 
-func (s *Shifter) SetColorBorderVisible(visible bool) {
-	s.colorBorderVisible = visible
-}
-
-func (s *Shifter) SetMidResYScale(scale int) {
-	if scale < 1 {
-		scale = 1
-	}
-	s.midResYScale = scale
-}
-
 func (s *Shifter) DebugStats() ShifterDebugStats {
 	stats := s.debugStats
 	stats.FrameActive = s.frameActive
 	stats.FrameCyclePos = s.frameCyclePos
-	stats.FrameCycles = s.frameCycles
+	stats.FrameCycles = s.frameCycles()
 	stats.ScreenBase = s.ScreenBase()
 	stats.VideoAddress = s.currentVideoAddress()
 	if s.frameActive {
-		stats.LastMode = s.frameMode
 		stats.LastWidth = s.width
 		stats.LastHeight = s.height
 		stats.LastPixelsDrawn = s.framePixelsDrawn
@@ -243,11 +230,18 @@ func (s *Shifter) DebugStats() ShifterDebugStats {
 	return stats
 }
 
+func (s *Shifter) frameCycles() uint64 {
+	if s.cfg == nil {
+		return 0
+	}
+	return s.cfg.FrameCycles()
+}
+
 func (s *Shifter) Contains(address uint32) bool {
 	if isPaletteAddress(address) {
 		return true
 	}
-	return isShifterRegisterAddress(address)
+	return s.model.containsRegister(address)
 }
 
 func (s *Shifter) WaitStates(cpu.Size, uint32) uint32 {
@@ -257,6 +251,9 @@ func (s *Shifter) WaitStates(cpu.Size, uint32) uint32 {
 func (s *Shifter) Reset() {
 	s.baseHigh = 0
 	s.baseMid = 0
+	s.baseLow = 0
+	s.lineOffset = 0
+	s.fineScroll = 0
 	s.syncMode = 0
 	s.resolution = 0
 	for i := range s.palette {
@@ -267,7 +264,7 @@ func (s *Shifter) Reset() {
 	s.framebuffer = make([]byte, s.width*s.height*4)
 	s.videoCounter = 0
 	s.frameCyclePos = 0
-	s.frameMode = 0
+	s.frameRenderer = renderLow
 	s.frameActive = false
 	s.lineStates = s.lineStates[:0]
 	s.slotSyncModes = s.slotSyncModes[:0]
@@ -285,7 +282,6 @@ func (s *Shifter) Reset() {
 	s.displayOffsetY = 0
 	s.displayViewportW = 0
 	s.displayViewportH = 0
-	s.midResYScale = defaultMidResYScale
 }
 
 func (s *Shifter) Read(size cpu.Size, address uint32) (uint32, error) {
@@ -351,20 +347,20 @@ func (s *Shifter) DisplayDimensions() (int, int) {
 
 func (s *Shifter) DisplayViewport() (x, y, width, height int) {
 	guestWidth, guestHeight := s.Dimensions()
-	if guestWidth <= 0 || guestHeight <= 0 {
+	if guestWidth == 0 || guestHeight == 0 {
 		return 0, 0, 0, 0
 	}
 	if s.displayWidth == 0 || s.displayHeight == 0 {
 		return 0, 0, guestWidth, guestHeight
 	}
-	if s.displayViewportW <= 0 || s.displayViewportH <= 0 {
+	if s.displayViewportW == 0 || s.displayViewportH == 0 {
 		return s.displayOffsetX, s.displayOffsetY, guestWidth, guestHeight
 	}
 	return s.displayOffsetX, s.displayOffsetY, s.displayViewportW, s.displayViewportH
 }
 
 func (s *Shifter) ScreenBase() uint32 {
-	return uint32(s.baseHigh)<<16 | uint32(s.baseMid)<<8
+	return s.model.screenBase(s)
 }
 
 func (s *Shifter) Render(cpuCycles uint64) bool {
@@ -373,19 +369,26 @@ func (s *Shifter) Render(cpuCycles uint64) bool {
 	}
 	s.lastRendered = cpuCycles
 	s.BeginFrame()
-	s.AdvanceFrame(s.frameCycles)
+	s.AdvanceFrame(s.frameCycles())
 	return s.EndFrame()
 }
 
 func (s *Shifter) BeginFrame() {
-	mode := s.resolution & 0x03
+	mode := s.resolution & 3
 	width, height := dimensionsForResolution(mode)
 	if width != s.width || height != s.height || len(s.framebuffer) != width*height*4 {
 		s.width = width
 		s.height = height
 		s.framebuffer = make([]byte, width*height*4)
 	}
-	s.frameMode = mode
+	switch mode {
+	case 0:
+		s.frameRenderer = renderLow
+	case 1:
+		s.frameRenderer = renderMedium
+	default:
+		s.frameRenderer = renderHigh
+	}
 	s.frameCyclePos = 0
 	s.frameActive = true
 	s.framePixelsDrawn = 0
@@ -401,6 +404,8 @@ func (s *Shifter) BeginFrame() {
 		s.lineStates = s.lineStates[:lineCount]
 	}
 	if lineCount > 0 {
+		// New lines inherit the current register/palette state until
+		// AdvanceFrame snapshots a new state boundary.
 		state := s.snapshotLineState()
 		for i := range s.lineStates {
 			s.lineStates[i] = state
@@ -422,13 +427,16 @@ func (s *Shifter) AdvanceFrame(cycles uint64) {
 	if !s.frameActive || len(s.lineStates) == 0 || cycles == 0 {
 		return
 	}
+	frameCycles := s.frameCycles()
 	prevPos := s.frameCyclePos
 	prevLine := s.frameLineIndex(prevPos)
 	s.frameCyclePos += cycles
-	if s.frameCyclePos > s.frameCycles {
-		s.frameCyclePos = s.frameCycles
+	if s.frameCyclePos > frameCycles {
+		s.frameCyclePos = frameCycles
 	}
 	nextLine := s.frameLineIndex(s.frameCyclePos)
+	// Snapshot state transitions per scanline so mid-frame register writes
+	// affect only the lines rendered after the write.
 	for line := prevLine + 1; line <= nextLine && line < len(s.lineStates); line++ {
 		s.lineStates[line] = s.snapshotLineState()
 	}
@@ -438,6 +446,7 @@ func (s *Shifter) AdvanceFrame(cycles uint64) {
 	}
 	prevSlot := s.frameSlotIndex(prevPos)
 	nextSlot := s.frameSlotIndex(s.frameCyclePos)
+	// Sync mode is captured in coarser horizontal raster segments.
 	for slot := prevSlot + 1; slot <= nextSlot && slot < len(s.slotSyncModes); slot++ {
 		s.slotSyncModes[slot] = s.syncMode
 	}
@@ -447,28 +456,21 @@ func (s *Shifter) EndFrame() bool {
 	if !s.frameActive {
 		return false
 	}
-	if s.frameCyclePos < s.frameCycles {
-		s.AdvanceFrame(s.frameCycles - s.frameCyclePos)
+	frameCycles := s.frameCycles()
+	if s.frameCyclePos < frameCycles {
+		s.AdvanceFrame(frameCycles - s.frameCyclePos)
 	}
 
 	var renderStart time.Time
 	if s.debugEnabled {
 		renderStart = time.Now()
 	}
-	switch s.frameMode {
-	case 0:
-		s.renderLow()
-	case 1:
-		s.renderMedium()
-	case 2:
-		s.renderHigh()
-	default:
-		s.renderUnsupported()
-	}
+
+	s.frameRenderer(s)
+
 	if s.debugEnabled {
 		renderNanos := time.Since(renderStart).Nanoseconds()
 		s.debugStats.FramesRendered++
-		s.debugStats.LastMode = s.frameMode
 		s.debugStats.LastWidth = s.width
 		s.debugStats.LastHeight = s.height
 		s.debugStats.LastRenderNanos = renderNanos
@@ -490,18 +492,20 @@ func (s *Shifter) EndFrame() bool {
 }
 
 func (s *Shifter) WaitStatesForRAMAccess(cpu.Size, uint32) uint32 {
-	if !s.frameActive || s.frameCycles == 0 {
+	frameCycles := s.frameCycles()
+	if !s.frameActive || frameCycles == 0 {
 		return 0
 	}
 	if len(s.lineStates) == 0 {
 		return 0
 	}
 
-	lineCycles := s.frameCycles / uint64(len(s.lineStates))
+	lineCycles := frameCycles / uint64(len(s.lineStates))
 	if lineCycles == 0 {
 		lineCycles = 1
 	}
 	posInLine := s.frameCyclePos % lineCycles
+	// The shifter only contends with CPU RAM access while fetching display data.
 	if posInLine >= s.contentionWindowCycles(lineCycles) {
 		return 0
 	}
@@ -523,7 +527,7 @@ func dimensionsForResolution(resolution byte) (int, int) {
 }
 
 func (s *Shifter) contentionWindowCycles(lineCycles uint64) uint64 {
-	switch s.frameMode {
+	switch s.resolution & 3 {
 	case 0, 1:
 		window := (lineCycles * shifterContentionLowMediumNumerator) / shifterContentionLowMediumDenom
 		if window == 0 {
@@ -541,26 +545,39 @@ func (s *Shifter) contentionWindowCycles(lineCycles uint64) uint64 {
 	}
 }
 
-func (s *Shifter) renderLow() {
+func renderLow(s *Shifter) {
 	fb := s.framebuffer
 	debug := s.debugEnabled
+	model := s.model
 	var drawn uint64
-	stride := uint32(160)
 	videoData, linearVideo := s.linearVideoRAM()
 	videoLen := uint32(len(videoData))
-	for y := 0; y < 200; y++ {
+	var lineAddr uint32
+	var prevState shifterLineState
+	for y := range 200 {
 		lineState := s.lineState(y)
-		base := screenBaseFromState(lineState)
-		rowOffset := y * s.width * 4
-		var reds, greens, blues [paletteRegisterCt]byte
-		for i := 0; i < paletteRegisterCt; i++ {
-			reds[i], greens[i], blues[i] = stColorChannels(lineState.palette[i])
+		if y == 0 {
+			lineAddr = model.screenBaseFromState(lineState)
+		} else {
+			if model.sameScreenBase(prevState, lineState) {
+				lineAddr += model.lineStrideBytes(prevState, 0)
+			} else {
+				lineAddr = model.screenBaseFromState(lineState)
+			}
 		}
-		line := base + uint32(y)*stride
-		for group := 0; group < 20; group++ {
-			offset := line + uint32(group*8)
+		rowOffset := y * s.width * 4
+		row := fb[rowOffset : rowOffset+s.width*4]
+		var reds, greens, blues [paletteRegisterCt]byte
+		for i := range paletteRegisterCt {
+			reds[i], greens[i], blues[i] = model.paletteColorChannels(lineState.palette[i])
+		}
+		scroll := model.fineScroll(lineState)
+		groups := 20 + ((scroll + 15) / 16)
+		for group := range groups {
+			offset := lineAddr + uint32(group*8)
 			var p0, p1, p2, p3 uint16
 			if linearVideo {
+				// Fast path when RAM is identity mapped.
 				if videoLen < 8 || offset > videoLen-8 {
 					if debug {
 						s.frameReadFaults++
@@ -576,6 +593,7 @@ func (s *Shifter) renderLow() {
 					s.frameVideoWords += 4
 				}
 			} else {
+				// Fallback path for MMU/translated reads.
 				var ok bool
 				p0, ok = s.readVideoWord(offset)
 				if !ok {
@@ -594,71 +612,72 @@ func (s *Shifter) renderLow() {
 					continue
 				}
 			}
-			groupOffset := rowOffset + group*64
-			for chunk := 0; chunk < 4; chunk++ {
+			groupX := group*16 - scroll
+			for chunk := range 4 {
 				shift := uint(12 - chunk*4)
 				key := ((p0 >> shift) & 0x000F) << 12
 				key |= ((p1 >> shift) & 0x000F) << 8
 				key |= ((p2 >> shift) & 0x000F) << 4
 				key |= (p3 >> shift) & 0x000F
 				indices := lowModeNibbleIndices[key]
-				dst := groupOffset + chunk*16
+				baseX := groupX + chunk*4
 
-				i0 := indices[0]
-				fb[dst] = reds[i0]
-				fb[dst+1] = greens[i0]
-				fb[dst+2] = blues[i0]
-				fb[dst+3] = 0xFF
-
-				i1 := indices[1]
-				fb[dst+4] = reds[i1]
-				fb[dst+5] = greens[i1]
-				fb[dst+6] = blues[i1]
-				fb[dst+7] = 0xFF
-
-				i2 := indices[2]
-				fb[dst+8] = reds[i2]
-				fb[dst+9] = greens[i2]
-				fb[dst+10] = blues[i2]
-				fb[dst+11] = 0xFF
-
-				i3 := indices[3]
-				fb[dst+12] = reds[i3]
-				fb[dst+13] = greens[i3]
-				fb[dst+14] = blues[i3]
-				fb[dst+15] = 0xFF
+				for pixel := range 4 {
+					x := baseX + pixel
+					if x < 0 || x >= s.width {
+						continue
+					}
+					dst := x * 4
+					index := indices[pixel]
+					row[dst] = reds[index]
+					row[dst+1] = greens[index]
+					row[dst+2] = blues[index]
+					row[dst+3] = 0xFF
+				}
 			}
 			if debug {
 				drawn += 16
 			}
 		}
+		prevState = lineState
 	}
 	if debug {
 		s.framePixelsDrawn += drawn
 	}
-	lastBase := screenBaseFromState(s.lineState(199))
-	s.videoCounter = lastBase + 200*stride
-	s.applyBlankSegmentsLowMedium()
+	s.videoCounter = lineAddr + model.lineStrideBytes(prevState, 0)
+	s.applyBlankSegments()
 }
 
-func (s *Shifter) renderMedium() {
+func renderMedium(s *Shifter) {
 	fb := s.framebuffer
 	debug := s.debugEnabled
+	model := s.model
 	var drawn uint64
-	stride := uint32(160)
 	videoData, linearVideo := s.linearVideoRAM()
 	videoLen := uint32(len(videoData))
-	for y := 0; y < 200; y++ {
+	var lineAddr uint32
+	var prevState shifterLineState
+	for y := range 200 {
 		lineState := s.lineState(y)
-		base := screenBaseFromState(lineState)
-		rowOffset := y * s.width * 4
-		var reds, greens, blues [paletteRegisterCt]byte
-		for i := 0; i < paletteRegisterCt; i++ {
-			reds[i], greens[i], blues[i] = stColorChannels(lineState.palette[i])
+		if y == 0 {
+			lineAddr = model.screenBaseFromState(lineState)
+		} else {
+			if model.sameScreenBase(prevState, lineState) {
+				lineAddr += model.lineStrideBytes(prevState, 1)
+			} else {
+				lineAddr = model.screenBaseFromState(lineState)
+			}
 		}
-		line := base + uint32(y)*stride
-		for group := 0; group < 40; group++ {
-			offset := line + uint32(group*4)
+		rowOffset := y * s.width * 4
+		row := fb[rowOffset : rowOffset+s.width*4]
+		var reds, greens, blues [paletteRegisterCt]byte
+		for i := range paletteRegisterCt {
+			reds[i], greens[i], blues[i] = model.paletteColorChannels(lineState.palette[i])
+		}
+		scroll := model.fineScroll(lineState)
+		groups := 40 + ((scroll + 15) / 16)
+		for group := range groups {
+			offset := lineAddr + uint32(group*4)
 			var p0, p1 uint16
 			if linearVideo {
 				if videoLen < 4 || offset > videoLen-4 {
@@ -684,64 +703,63 @@ func (s *Shifter) renderMedium() {
 					continue
 				}
 			}
-			groupOffset := rowOffset + group*64
-			for chunk := 0; chunk < 4; chunk++ {
+			groupX := group*16 - scroll
+			for chunk := range 4 {
 				shift := uint(12 - chunk*4)
 				key := ((p0 >> shift) & 0x000F) << 4
 				key |= (p1 >> shift) & 0x000F
 				indices := mediumModeNibbleIndices[key]
-				dst := groupOffset + chunk*16
+				baseX := groupX + chunk*4
 
-				i0 := indices[0]
-				fb[dst] = reds[i0]
-				fb[dst+1] = greens[i0]
-				fb[dst+2] = blues[i0]
-				fb[dst+3] = 0xFF
-
-				i1 := indices[1]
-				fb[dst+4] = reds[i1]
-				fb[dst+5] = greens[i1]
-				fb[dst+6] = blues[i1]
-				fb[dst+7] = 0xFF
-
-				i2 := indices[2]
-				fb[dst+8] = reds[i2]
-				fb[dst+9] = greens[i2]
-				fb[dst+10] = blues[i2]
-				fb[dst+11] = 0xFF
-
-				i3 := indices[3]
-				fb[dst+12] = reds[i3]
-				fb[dst+13] = greens[i3]
-				fb[dst+14] = blues[i3]
-				fb[dst+15] = 0xFF
+				for pixel := range 4 {
+					x := baseX + pixel
+					if x < 0 || x >= s.width {
+						continue
+					}
+					dst := x * 4
+					index := indices[pixel]
+					row[dst] = reds[index]
+					row[dst+1] = greens[index]
+					row[dst+2] = blues[index]
+					row[dst+3] = 0xFF
+				}
 			}
 			if debug {
 				drawn += 16
 			}
 		}
+		prevState = lineState
 	}
 	if debug {
 		s.framePixelsDrawn += drawn
 	}
-	lastBase := screenBaseFromState(s.lineState(199))
-	s.videoCounter = lastBase + 200*stride
-	s.applyBlankSegmentsLowMedium()
+	s.videoCounter = lineAddr + model.lineStrideBytes(prevState, 1)
+	s.applyBlankSegments()
 }
 
-func (s *Shifter) renderHigh() {
+func renderHigh(s *Shifter) {
 	fb := s.framebuffer
 	debug := s.debugEnabled
+	model := s.model
 	var drawn uint64
-	stride := uint32(80)
 	videoData, linearVideo := s.linearVideoRAM()
 	videoLen := uint32(len(videoData))
-	for y := 0; y < 400; y++ {
-		base := screenBaseFromState(s.lineState(y))
+	var lineAddr uint32
+	var prevState shifterLineState
+	for y := range 400 {
+		lineState := s.lineState(y)
+		if y == 0 {
+			lineAddr = model.screenBaseFromState(lineState)
+		} else {
+			if model.sameScreenBase(prevState, lineState) {
+				lineAddr += model.lineStrideBytes(prevState, 2)
+			} else {
+				lineAddr = model.screenBaseFromState(lineState)
+			}
+		}
 		rowOffset := y * s.width * 4
-		line := base + uint32(y)*stride
-		for group := 0; group < 40; group++ {
-			offset := line + uint32(group*2)
+		for group := range 40 {
+			offset := lineAddr + uint32(group*2)
 			var pixels uint16
 			if linearVideo {
 				if videoLen < 2 || offset > videoLen-2 {
@@ -771,30 +789,13 @@ func (s *Shifter) renderHigh() {
 				drawn += 16
 			}
 		}
+		prevState = lineState
 	}
 	if debug {
 		s.framePixelsDrawn += drawn
 	}
-	lastBase := screenBaseFromState(s.lineState(399))
-	s.videoCounter = lastBase + 400*stride
-	s.applyBlankSegmentsHigh()
-}
-
-func (s *Shifter) renderUnsupported() {
-	for i := 0; i < len(s.framebuffer); i += 4 {
-		s.framebuffer[i] = 0
-		s.framebuffer[i+1] = 0
-		s.framebuffer[i+2] = 0
-		s.framebuffer[i+3] = 0xFF
-	}
-	s.videoCounter = s.ScreenBase()
-}
-
-func stColorChannels(colorValue uint16) (r, g, b byte) {
-	r = byte(((colorValue >> 8) & 0x07) * 255 / 7)
-	g = byte(((colorValue >> 4) & 0x07) * 255 / 7)
-	b = byte((colorValue & 0x07) * 255 / 7)
-	return r, g, b
+	s.videoCounter = lineAddr + model.lineStrideBytes(prevState, 2)
+	s.applyBlankSegments()
 }
 
 func displayBorderForMode(mode byte) (left, right, top, bottom int) {
@@ -811,6 +812,7 @@ func displayBorderForMode(mode byte) (left, right, top, bottom int) {
 }
 
 func (s *Shifter) readVideoWord(address uint32) (uint16, bool) {
+	// Fast path for plain RAM mapping; avoids per-byte translation overhead.
 	if s.ram != nil && s.ram.base == 0 && s.ram.mmu == nil {
 		dataLen := uint32(len(s.ram.data))
 		if dataLen < 2 || address > dataLen-2 {
@@ -826,14 +828,14 @@ func (s *Shifter) readVideoWord(address uint32) (uint16, bool) {
 		return uint16(s.ram.data[offset])<<8 | uint16(s.ram.data[offset+1]), true
 	}
 
-	hi, err := s.ram.translate(address)
+	hi, hiPresent, err := s.ram.translate(address)
 	if err != nil {
 		if s.debugEnabled {
 			s.frameReadFaults++
 		}
 		return 0, false
 	}
-	lo, err := s.ram.translate(address + 1)
+	lo, loPresent, err := s.ram.translate(address + 1)
 	if err != nil {
 		if s.debugEnabled {
 			s.frameReadFaults++
@@ -843,7 +845,14 @@ func (s *Shifter) readVideoWord(address uint32) (uint16, bool) {
 	if s.debugEnabled {
 		s.frameVideoWords++
 	}
-	return uint16(s.ram.data[hi])<<8 | uint16(s.ram.data[lo]), true
+	var value uint16
+	if hiPresent {
+		value |= uint16(s.ram.data[hi]) << 8
+	}
+	if loPresent {
+		value |= uint16(s.ram.data[lo])
+	}
+	return value, true
 }
 
 func (s *Shifter) linearVideoRAM() ([]byte, bool) {
@@ -851,24 +860,6 @@ func (s *Shifter) linearVideoRAM() ([]byte, bool) {
 		return nil, false
 	}
 	return s.ram.data, true
-}
-
-func isShifterRegisterAddress(address uint32) bool {
-	switch address {
-	case shifterRegBaseHigh - 1,
-		shifterRegBaseHigh,
-		shifterRegBaseMid - 1,
-		shifterRegBaseMid,
-		shifterRegVideoAddrHigh - 1,
-		shifterRegVideoAddrHigh,
-		shifterRegVideoAddrMid - 1,
-		shifterRegVideoAddrMid,
-		shifterRegSyncMode,
-		shifterRegResolution:
-		return true
-	default:
-		return false
-	}
 }
 
 func isPaletteAddress(address uint32) bool {
@@ -890,11 +881,11 @@ func (s *Shifter) readByte(address uint32) byte {
 	case shifterRegResolution:
 		return s.resolution
 	default:
+		if value, handled := s.model.readByte(s, address); handled {
+			return value
+		}
 		if isPaletteAddress(address) {
-			index := int((address - paletteBase) / 2)
-			if index >= paletteRegisterCt {
-				return 0
-			}
+			index := (address - paletteBase) >> 1
 			value := s.palette[index]
 			if address&1 == 0 {
 				return byte(value >> 8)
@@ -916,18 +907,18 @@ func (s *Shifter) writeByte(address uint32, value byte) {
 	case shifterRegResolution:
 		s.resolution = value & 0x03
 	default:
+		if s.model.writeByte(s, address, value) {
+			return
+		}
 		if isPaletteAddress(address) {
-			index := int((address - paletteBase) / 2)
-			if index >= paletteRegisterCt {
-				return
-			}
+			index := (address - paletteBase) >> 1
 			current := s.palette[index]
 			if address&1 == 0 {
 				current = (current & 0x00FF) | uint16(value)<<8
 			} else {
 				current = (current & 0xFF00) | uint16(value)
 			}
-			s.palette[index] = current & stPaletteColorMask
+			s.palette[index] = current & s.model.paletteMask()
 		}
 	}
 }
@@ -941,81 +932,93 @@ func (s *Shifter) currentVideoAddress() uint32 {
 
 func (s *Shifter) snapshotLineState() shifterLineState {
 	return shifterLineState{
-		baseHigh: s.baseHigh,
-		baseMid:  s.baseMid,
-		palette:  s.palette,
+		baseHigh:   s.baseHigh,
+		baseMid:    s.baseMid,
+		baseLow:    s.baseLow,
+		lineOffset: s.lineOffset,
+		fineScroll: s.fineScroll,
+		palette:    s.palette,
 	}
 }
 
 func (s *Shifter) lineState(line int) shifterLineState {
-	if line < 0 || line >= len(s.lineStates) {
+	if line >= len(s.lineStates) {
 		return s.snapshotLineState()
 	}
 	return s.lineStates[line]
 }
 
 func (s *Shifter) frameLineIndex(cycles uint64) int {
-	if len(s.lineStates) == 0 || s.frameCycles == 0 {
-		return 0
-	}
-	index := int(cycles * uint64(len(s.lineStates)) / s.frameCycles)
-	if index > len(s.lineStates) {
-		return len(s.lineStates)
-	}
-	return index
+	return frameIndex(cycles, s.frameCycles(), len(s.lineStates))
 }
 
 func (s *Shifter) frameSlotIndex(cycles uint64) int {
-	if len(s.slotSyncModes) == 0 || s.frameCycles == 0 {
+	return frameIndex(cycles, s.frameCycles(), len(s.slotSyncModes))
+}
+
+func frameIndex(cycles, frameCycles uint64, count int) int {
+	// Map frame cycle position to a [0,count] segment index.
+	if count == 0 || frameCycles == 0 {
 		return 0
 	}
-	index := int(cycles * uint64(len(s.slotSyncModes)) / s.frameCycles)
-	if index > len(s.slotSyncModes) {
-		return len(s.slotSyncModes)
+	index := int(cycles * uint64(count) / frameCycles)
+	if index > count {
+		return count
 	}
 	return index
 }
 
-func (s *Shifter) slotSyncMode(line, segment int) byte {
-	if line < 0 || segment < 0 {
+func (s *Shifter) slotSyncMode(line, segment uint32) byte {
+	if line >= uint32(len(s.lineStates)) || segment >= shifterRasterSegments {
 		return s.syncMode
 	}
 	idx := line*shifterRasterSegments + segment
-	if idx < 0 || idx >= len(s.slotSyncModes) {
+	if idx >= uint32(len(s.slotSyncModes)) {
 		return s.syncMode
 	}
 	return s.slotSyncModes[idx]
 }
 
-func screenBaseFromState(state shifterLineState) uint32 {
-	return uint32(state.baseHigh)<<16 | uint32(state.baseMid)<<8
-}
-
-func (s *Shifter) applyBlankSegmentsLowMedium() {
-	if len(s.slotSyncModes) == 0 || s.width <= 0 || s.height <= 0 {
+func (s *Shifter) applyBlankSegments() {
+	if len(s.slotSyncModes) == 0 || s.width == 0 || s.height == 0 {
 		return
 	}
 	fb := s.framebuffer
 	debug := s.debugEnabled
+	model := s.model
 	var blanked uint64
-	for y := 0; y < s.height; y++ {
-		lineState := s.lineState(y)
-		border := lineState.palette[0]
-		r, g, b := stColorChannels(border)
+	mono := s.resolution&0x3 == 2
+	monoBorder := [4]byte{0xFF, 0xFF, 0xFF, 0xFF}
+	for y := range s.height {
 		rowOffset := y * s.width * 4
-		for seg := 0; seg < shifterRasterSegments; seg++ {
-			if s.slotSyncMode(y, seg)&shifterSyncBlankDisplayBit == 0 {
+		row := fb[rowOffset : rowOffset+s.width*4]
+		borderRGBA := monoBorder
+		if !mono {
+			borderColor := s.lineState(y).palette[0]
+			borderRGBA = colorToRGBA(borderColor, model)
+		}
+		blankStart := -1
+		for seg := range shifterRasterSegments {
+			// BLANK_DISPLAY is tracked per raster segment.
+			blankedSegment := s.slotSyncMode(uint32(y), uint32(seg))&shifterSyncBlankDisplayBit != 0
+			if blankedSegment {
+				if blankStart < 0 {
+					blankStart = seg
+				}
 				continue
 			}
-			x0 := (seg * s.width) / shifterRasterSegments
-			x1 := ((seg + 1) * s.width) / shifterRasterSegments
-			for x := x0; x < x1; x++ {
-				dst := rowOffset + x*4
-				fb[dst] = r
-				fb[dst+1] = g
-				fb[dst+2] = b
-				fb[dst+3] = 0xFF
+			if blankStart >= 0 {
+				x0, x1 := blankSegmentSpan(blankStart, seg, s.width)
+				fillRowRGBA(row, x0, x1, borderRGBA)
+				if debug {
+					blanked += uint64(x1 - x0)
+				}
+				blankStart = -1
 			}
+		}
+		if blankStart >= 0 {
+			x0, x1 := blankSegmentSpan(blankStart, shifterRasterSegments, s.width)
+			fillRowRGBA(row, x0, x1, borderRGBA)
 			if debug {
 				blanked += uint64(x1 - x0)
 			}
@@ -1026,36 +1029,10 @@ func (s *Shifter) applyBlankSegmentsLowMedium() {
 	}
 }
 
-func (s *Shifter) applyBlankSegmentsHigh() {
-	if len(s.slotSyncModes) == 0 || s.width <= 0 || s.height <= 0 {
-		return
-	}
-	fb := s.framebuffer
-	debug := s.debugEnabled
-	var blanked uint64
-	for y := 0; y < s.height; y++ {
-		rowOffset := y * s.width * 4
-		for seg := 0; seg < shifterRasterSegments; seg++ {
-			if s.slotSyncMode(y, seg)&shifterSyncBlankDisplayBit == 0 {
-				continue
-			}
-			x0 := (seg * s.width) / shifterRasterSegments
-			x1 := ((seg + 1) * s.width) / shifterRasterSegments
-			for x := x0; x < x1; x++ {
-				dst := rowOffset + x*4
-				fb[dst] = 0xFF
-				fb[dst+1] = 0xFF
-				fb[dst+2] = 0xFF
-				fb[dst+3] = 0xFF
-			}
-			if debug {
-				blanked += uint64(x1 - x0)
-			}
-		}
-	}
-	if debug {
-		s.frameBlankPixels += blanked
-	}
+func blankSegmentSpan(startSegment, endSegment, width int) (x0, x1 int) {
+	x0 = (startSegment * width) / shifterRasterSegments
+	x1 = (endSegment * width) / shifterRasterSegments
+	return x0, x1
 }
 
 func (s *Shifter) composeDisplayFrame() {
@@ -1066,22 +1043,24 @@ func (s *Shifter) composeDisplayFrame() {
 	s.displayViewportW = s.width
 	s.displayViewportH = s.height
 
-	if s.width <= 0 || s.height <= 0 {
+	if s.width == 0 || s.height == 0 {
 		s.displayBuffer = s.displayBuffer[:0]
 		return
 	}
 
 	yScale := 1
-	if s.frameMode == 1 {
-		yScale = s.midResYScale
+	if s.resolution&3 == 1 {
+		// Medium-resolution output can be vertically stretched without changing
+		// guest timing or address generation.
+		yScale = s.cfg.MidResYScale
 		if yScale < 1 {
 			yScale = 1
 		}
 	}
 
 	left, right, top, bottom := 0, 0, 0, 0
-	if s.colorBorderVisible && (s.frameMode == 0 || s.frameMode == 1) {
-		left, right, top, bottom = displayBorderForMode(s.frameMode)
+	if s.cfg.ColorMonitor && (s.resolution&3 < 2) {
+		left, right, top, bottom = displayBorderForMode(s.resolution & 3)
 	}
 
 	outW := s.width + left + right
@@ -1091,7 +1070,7 @@ func (s *Shifter) composeDisplayFrame() {
 		s.displayBuffer = s.displayBuffer[:0]
 		return
 	}
-	if outW <= 0 || outH <= 0 {
+	if outW == 0 || outH == 0 {
 		s.displayBuffer = append(s.displayBuffer[:0], s.framebuffer...)
 		return
 	}
@@ -1111,11 +1090,12 @@ func (s *Shifter) composeDisplayFrame() {
 	if len(s.lineStates) > 0 {
 		bottomColor = s.lineStates[len(s.lineStates)-1].palette[0]
 	}
-	topRGBA := colorToRGBA(topColor)
-	bottomRGBA := colorToRGBA(bottomColor)
+	model := s.model
+	topRGBA := colorToRGBA(topColor, model)
+	bottomRGBA := colorToRGBA(bottomColor, model)
 	prevActiveSrcY := -1
 
-	for y := 0; y < outH; y++ {
+	for y := range outH {
 		row := s.displayBuffer[y*outW*4 : (y+1)*outW*4]
 		switch {
 		case y < top:
@@ -1124,6 +1104,7 @@ func (s *Shifter) composeDisplayFrame() {
 			fillRowRGBA(row, 0, outW, bottomRGBA)
 		default:
 			srcY := (y - top) / yScale
+			// For scaled medium mode, duplicate the previous active row.
 			if srcY == prevActiveSrcY && y > 0 {
 				prev := s.displayBuffer[(y-1)*outW*4 : y*outW*4]
 				copy(row, prev)
@@ -1133,7 +1114,7 @@ func (s *Shifter) composeDisplayFrame() {
 			if srcY < len(s.lineStates) {
 				borderColor = s.lineStates[srcY].palette[0]
 			}
-			borderRGBA := colorToRGBA(borderColor)
+			borderRGBA := colorToRGBA(borderColor, model)
 			if left > 0 {
 				fillRowRGBA(row, 0, left, borderRGBA)
 			}
@@ -1153,8 +1134,8 @@ func (s *Shifter) composeDisplayFrame() {
 	s.displayHeight = outH
 }
 
-func colorToRGBA(color uint16) [4]byte {
-	r, g, b := stColorChannels(color)
+func colorToRGBA(color uint16, model shifterModel) [4]byte {
+	r, g, b := model.paletteColorChannels(color)
 	return [4]byte{r, g, b, 0xFF}
 }
 
@@ -1178,6 +1159,7 @@ func fillRowRGBA(row []byte, x0, x1 int, rgba [4]byte) {
 	segment[3] = rgba[3]
 
 	filled := 4
+	// Geometric copy fill is faster than writing RGBA per pixel.
 	for filled < len(segment) {
 		copy(segment[filled:], segment[:filled])
 		filled *= 2

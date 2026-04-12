@@ -32,7 +32,7 @@ func TestDebugFontCopy(t *testing.T) {
 		lastValues[address] = info.Value
 	})
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -110,7 +110,7 @@ func TestDebugFontCopyWriters(t *testing.T) {
 		)
 	})
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}
@@ -123,7 +123,7 @@ func TestDebugFontCopyCompareSource(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 120; frame++ {
+	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("step frame %d: %v", frame, err)
 		}

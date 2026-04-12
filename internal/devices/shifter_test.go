@@ -3,12 +3,20 @@ package devices
 import (
 	"testing"
 
+	"github.com/jenska/gost/internal/config"
 	cpu "github.com/jenska/m68kemu"
 )
 
+func testShifterConfig(frameCycles uint64) *config.Config {
+	return &config.Config{
+		ClockHz: frameCycles,
+		FrameHz: 1,
+	}
+}
+
 func TestShifterLowResolutionPixelConversion(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
+	shifter := NewSTShifter(&config.Config{}, ram)
 
 	if err := shifter.Write(1, 0xFF8201, 0x00); err != nil {
 		t.Fatalf("write base high: %v", err)
@@ -37,7 +45,7 @@ func TestShifterLowResolutionPixelConversion(t *testing.T) {
 
 func TestShifterMediumResolutionPixelConversion(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
+	shifter := NewSTShifter(&config.Config{}, ram)
 
 	if err := shifter.Write(1, 0xFF8260, 0x01); err != nil {
 		t.Fatalf("write resolution: %v", err)
@@ -77,7 +85,7 @@ func TestShifterMediumResolutionPixelConversion(t *testing.T) {
 
 func TestShifterHighResolutionMonochromeConversion(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
+	shifter := NewSTShifter(&config.Config{}, ram)
 
 	if err := shifter.Write(1, 0xFF8260, 0x02); err != nil {
 		t.Fatalf("write resolution: %v", err)
@@ -111,11 +119,11 @@ func TestShifterReadsFramebufferThroughMMUTranslation(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	rom := NewROM([]byte{0, 0, 0, 0, 0, 0, 0, 0}, 0xFC0000)
 	overlay := NewOverlayROM(rom, ram)
-	config := NewMemoryConfig(overlay, ram.Size())
-	ram.SetMemoryConfig(config)
+	mcfg := NewMemoryConfig(overlay, ram.Size())
+	ram.SetMemoryConfig(mcfg)
 
-	shifter := NewShifter(ram)
-	if err := config.Write(1, memoryConfigBase+1, 0x0A); err != nil {
+	shifter := NewSTShifter(&config.Config{}, ram)
+	if err := mcfg.Write(1, memoryConfigBase+1, 0x0A); err != nil {
 		t.Fatalf("write MMU config: %v", err)
 	}
 	if err := shifter.Write(1, 0xFF8201, 0x04); err != nil {
@@ -142,7 +150,7 @@ func TestShifterReadsFramebufferThroughMMUTranslation(t *testing.T) {
 
 func TestShifterWordWritesAtEvenAddressesUpdateScreenBase(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
+	shifter := NewSTShifter(&config.Config{}, ram)
 
 	if err := shifter.Write(2, shifterBase, 0x0012); err != nil {
 		t.Fatalf("write base high pair: %v", err)
@@ -164,8 +172,141 @@ func TestShifterWordWritesAtEvenAddressesUpdateScreenBase(t *testing.T) {
 	}
 }
 
+func TestShifterSTELowScreenBaseRegisterAffectsScreenBase(t *testing.T) {
+	shifter := NewSTEShifter(&config.Config{}, NewRAM(0, 1024*1024))
+
+	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, 0x12); err != nil {
+		t.Fatalf("write base high: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, 0x34); err != nil {
+		t.Fatalf("write base mid: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseLow, 0x56); err != nil {
+		t.Fatalf("write base low: %v", err)
+	}
+
+	if got, want := shifter.ScreenBase(), uint32(0x123456); got != want {
+		t.Fatalf("unexpected STE screen base: got %06x want %06x", got, want)
+	}
+
+	value, err := shifter.Read(cpu.Byte, shifterRegBaseLow)
+	if err != nil {
+		t.Fatalf("read base low: %v", err)
+	}
+	if byte(value) != 0x56 {
+		t.Fatalf("unexpected base low readback: got %02x want 56", byte(value))
+	}
+}
+
+func TestShifterSTModeIgnoresSTELowScreenBaseRegister(t *testing.T) {
+	shifter := NewSTShifter(&config.Config{}, NewRAM(0, 1024*1024))
+
+	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, 0x12); err != nil {
+		t.Fatalf("write base high: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, 0x34); err != nil {
+		t.Fatalf("write base mid: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseLow, 0x56); err != nil {
+		t.Fatalf("write base low: %v", err)
+	}
+
+	if got, want := shifter.ScreenBase(), uint32(0x123400); got != want {
+		t.Fatalf("unexpected ST screen base: got %06x want %06x", got, want)
+	}
+}
+
+func TestShifterSTEFineHorizontalScrollShiftsVisiblePixels(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := NewSTEShifter(&config.Config{}, ram)
+
+	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, 0x00); err != nil {
+		t.Fatalf("write base high: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, 0x00); err != nil {
+		t.Fatalf("write base mid: %v", err)
+	}
+	if err := shifter.Write(cpu.Word, paletteBase+2, 0x0F00); err != nil {
+		t.Fatalf("write palette index1: %v", err)
+	}
+	// Alternating 1/0 pixels on plane 0.
+	if err := ram.LoadAt(0, []byte{0xAA, 0xAA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}); err != nil {
+		t.Fatalf("load source line: %v", err)
+	}
+
+	if !shifter.Render(1) {
+		t.Fatalf("expected initial render")
+	}
+	fb := shifter.FrameBuffer()
+	first := fb[:4]
+	if first[0] != 255 || first[1] != 0 || first[2] != 0 {
+		t.Fatalf("expected first pixel to be red without scroll, got %v", first)
+	}
+
+	if err := shifter.Write(cpu.Byte, shifterRegFineScroll, 0x01); err != nil {
+		t.Fatalf("write fine scroll: %v", err)
+	}
+	if !shifter.Render(2) {
+		t.Fatalf("expected render after fine-scroll write")
+	}
+	fb = shifter.FrameBuffer()
+	first = fb[:4]
+	if first[0] != 0 || first[1] != 0 || first[2] != 0 {
+		t.Fatalf("expected first pixel to shift to black with fine scroll, got %v", first)
+	}
+}
+
+func TestShifterSTELineOffsetAffectsNextScanlineAddress(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := NewSTEShifter(&config.Config{}, ram)
+
+	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, 0x00); err != nil {
+		t.Fatalf("write base high: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, 0x00); err != nil {
+		t.Fatalf("write base mid: %v", err)
+	}
+	if err := shifter.Write(cpu.Word, paletteBase+2, 0x0F00); err != nil {
+		t.Fatalf("write palette index1: %v", err)
+	}
+	if err := shifter.Write(cpu.Word, paletteBase+4, 0x00F0); err != nil {
+		t.Fatalf("write palette index2: %v", err)
+	}
+	// Line 1 when stride is 160: first pixel index1 (red).
+	line1Default := []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	if err := ram.LoadAt(160, line1Default); err != nil {
+		t.Fatalf("seed default line1 data: %v", err)
+	}
+	// Line 1 when stride is 160 + 6 words: first pixel index2 (green).
+	line1Offset := []byte{0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00}
+	if err := ram.LoadAt(172, line1Offset); err != nil {
+		t.Fatalf("seed offset line1 data: %v", err)
+	}
+
+	if !shifter.Render(1) {
+		t.Fatalf("expected initial render")
+	}
+	fb := shifter.FrameBuffer()
+	line1 := fb[(1*320+0)*4 : (1*320+0)*4+4]
+	if line1[0] != 255 || line1[1] != 0 || line1[2] != 0 {
+		t.Fatalf("expected line1 pixel to be red without line offset, got %v", line1)
+	}
+
+	if err := shifter.Write(cpu.Byte, shifterRegLineOffset, 0x06); err != nil {
+		t.Fatalf("write line offset: %v", err)
+	}
+	if !shifter.Render(2) {
+		t.Fatalf("expected render after line-offset write")
+	}
+	fb = shifter.FrameBuffer()
+	line1 = fb[(1*320+0)*4 : (1*320+0)*4+4]
+	if line1[0] != 0 || line1[1] != 255 || line1[2] != 0 {
+		t.Fatalf("expected line1 pixel to be green with line offset, got %v", line1)
+	}
+}
+
 func TestShifterSyncModeRegisterMasksToLowBits(t *testing.T) {
-	shifter := NewShifter(NewRAM(0, 1024*1024))
+	shifter := NewSTShifter(&config.Config{}, NewRAM(0, 1024*1024))
 	if err := shifter.Write(1, 0xFF820A, 0xFF); err != nil {
 		t.Fatalf("write sync mode: %v", err)
 	}
@@ -181,7 +322,7 @@ func TestShifterSyncModeRegisterMasksToLowBits(t *testing.T) {
 
 func TestShifterVideoCounterReadbackFollowsRenderedFrame(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
+	shifter := NewSTShifter(&config.Config{}, ram)
 	if err := shifter.Write(1, 0xFF8201, 0x12); err != nil {
 		t.Fatalf("write base high: %v", err)
 	}
@@ -207,7 +348,7 @@ func TestShifterVideoCounterReadbackFollowsRenderedFrame(t *testing.T) {
 }
 
 func TestShifterPaletteWritesMaskToSTColorDepth(t *testing.T) {
-	shifter := NewShifter(NewRAM(0, 1024*1024))
+	shifter := NewSTShifter(&config.Config{}, NewRAM(0, 1024*1024))
 	if err := shifter.Write(2, paletteBase, 0xFFFF); err != nil {
 		t.Fatalf("write palette word: %v", err)
 	}
@@ -221,10 +362,46 @@ func TestShifterPaletteWritesMaskToSTColorDepth(t *testing.T) {
 	}
 }
 
+func TestShifterSTEPalettePreservesFourthIntensityBit(t *testing.T) {
+	shifter := NewSTEShifter(&config.Config{}, NewRAM(0, 1024*1024))
+
+	if err := shifter.Write(cpu.Word, paletteBase, 0x0FFF); err != nil {
+		t.Fatalf("write STE palette word: %v", err)
+	}
+
+	value, err := shifter.Read(cpu.Word, paletteBase)
+	if err != nil {
+		t.Fatalf("read STE palette word: %v", err)
+	}
+	if value != 0x0FFF {
+		t.Fatalf("unexpected STE palette value: got %04x want 0fff", value)
+	}
+}
+
+func TestShifterSTEPaletteRendersExtendedIntensityBit(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := NewSTEShifter(&config.Config{}, ram)
+
+	if err := shifter.Write(cpu.Word, paletteBase+2, 0x0800); err != nil {
+		t.Fatalf("write STE palette entry: %v", err)
+	}
+	if err := ram.LoadAt(0, []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}); err != nil {
+		t.Fatalf("load bitplanes: %v", err)
+	}
+
+	if !shifter.Render(1) {
+		t.Fatalf("expected render to report a change")
+	}
+
+	pixel := shifter.FrameBuffer()[:4]
+	if pixel[0] != 17 || pixel[1] != 0 || pixel[2] != 0 || pixel[3] != 255 {
+		t.Fatalf("unexpected STE extended-intensity pixel: got %v want [17 0 0 255]", pixel)
+	}
+}
+
 func TestShifterMidFramePaletteChangeAffectsSubsequentScanlines(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetTiming(8_000_000, 50)
+	shifter := NewSTShifter(testShifterConfig(16000), ram)
 
 	if err := shifter.Write(1, 0xFF8201, 0x00); err != nil {
 		t.Fatalf("write base high: %v", err)
@@ -239,7 +416,7 @@ func TestShifterMidFramePaletteChangeAffectsSubsequentScanlines(t *testing.T) {
 	// Set bitplane 0 so the first pixel on each line uses palette index 1.
 	stride := 160
 	frame := make([]byte, 200*stride)
-	for line := 0; line < 200; line++ {
+	for line := range 200 {
 		frame[line*stride] = 0x80
 	}
 	if err := ram.LoadAt(0, frame); err != nil {
@@ -247,11 +424,11 @@ func TestShifterMidFramePaletteChangeAffectsSubsequentScanlines(t *testing.T) {
 	}
 
 	shifter.BeginFrame()
-	shifter.AdvanceFrame(shifter.frameCycles / 2)
+	shifter.AdvanceFrame(shifter.frameCycles() / 2)
 	if err := shifter.Write(2, paletteBase+2, 0x0070); err != nil {
 		t.Fatalf("write updated palette: %v", err)
 	}
-	shifter.AdvanceFrame(shifter.frameCycles - shifter.frameCycles/2)
+	shifter.AdvanceFrame(shifter.frameCycles() - shifter.frameCycles()/2)
 	if !shifter.EndFrame() {
 		t.Fatalf("expected end-frame render to report changes")
 	}
@@ -270,8 +447,7 @@ func TestShifterMidFramePaletteChangeAffectsSubsequentScanlines(t *testing.T) {
 
 func TestShifterRAMContentionAddsWaitStatesDuringActiveFetchWindow(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetTiming(8_000_000, 50)
+	shifter := NewSTShifter(testShifterConfig(16000), ram)
 	ram.SetContentionSource(shifter)
 
 	shifter.BeginFrame()
@@ -279,7 +455,7 @@ func TestShifterRAMContentionAddsWaitStatesDuringActiveFetchWindow(t *testing.T)
 		t.Fatalf("expected non-zero wait states at frame start during shifter fetch window")
 	}
 
-	shifter.AdvanceFrame(shifter.frameCycles / 2)
+	shifter.AdvanceFrame(shifter.frameCycles() / 2)
 	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
 		t.Fatalf("expected non-zero wait states while frame is active")
 	}
@@ -294,12 +470,11 @@ func TestShifterRAMContentionAddsWaitStatesDuringActiveFetchWindow(t *testing.T)
 
 func TestShifterRAMContentionDropsOutsideFetchWindow(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetTiming(8_000_000, 50)
+	shifter := NewSTShifter(testShifterConfig(16000), ram)
 	ram.SetContentionSource(shifter)
 
 	shifter.BeginFrame()
-	lineCycles := shifter.frameCycles / 200
+	lineCycles := shifter.frameCycles() / 200
 	if lineCycles == 0 {
 		lineCycles = 1
 	}
@@ -312,8 +487,7 @@ func TestShifterRAMContentionDropsOutsideFetchWindow(t *testing.T) {
 
 func TestShifterMidFrameBlankSegmentsCreateHorizontalBorderBand(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetTiming(8_000_000, 50)
+	shifter := NewSTShifter(testShifterConfig(16000), ram)
 
 	if err := shifter.Write(cpu.Word, paletteBase, 0x0000); err != nil {
 		t.Fatalf("write border palette: %v", err)
@@ -325,7 +499,7 @@ func TestShifterMidFrameBlankSegmentsCreateHorizontalBorderBand(t *testing.T) {
 		t.Fatalf("seed video frame: %v", err)
 	}
 
-	lineCycles := shifter.frameCycles / 200
+	lineCycles := shifter.frameCycles() / 200
 	if lineCycles == 0 {
 		lineCycles = 1
 	}
@@ -343,7 +517,7 @@ func TestShifterMidFrameBlankSegmentsCreateHorizontalBorderBand(t *testing.T) {
 	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, 0x00); err != nil {
 		t.Fatalf("re-enable display segment: %v", err)
 	}
-	shifter.AdvanceFrame(shifter.frameCycles)
+	shifter.AdvanceFrame(shifter.frameCycles())
 	if !shifter.EndFrame() {
 		t.Fatalf("expected completed frame")
 	}
@@ -353,22 +527,72 @@ func TestShifterMidFrameBlankSegmentsCreateHorizontalBorderBand(t *testing.T) {
 	if left[0] != 255 || left[1] != 0 || left[2] != 0 {
 		t.Fatalf("expected left segment to remain active video, got %v", left)
 	}
-	midOff := (0*320 + 140) * 4
+	x0, x1 := blankSegmentSpan(2, 4, 320)
+	midX := (x0 + x1) / 2
+	midOff := (0*320 + midX) * 4
 	mid := fb[midOff : midOff+4]
 	if mid[0] != 0 || mid[1] != 0 || mid[2] != 0 {
 		t.Fatalf("expected middle segment to be blank border color, got %v", mid)
 	}
-	rightOff := (0*320 + 220) * 4
+	rightX := x1 + 5
+	rightOff := (0*320 + rightX) * 4
 	right := fb[rightOff : rightOff+4]
 	if right[0] != 255 || right[1] != 0 || right[2] != 0 {
 		t.Fatalf("expected right segment to return to active video, got %v", right)
 	}
 }
 
+func TestShifterFineBlankPulseAffectsOnlyNarrowHorizontalSpan(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := NewSTShifter(testShifterConfig(16000), ram)
+
+	if err := shifter.Write(cpu.Word, paletteBase, 0x0000); err != nil {
+		t.Fatalf("write border palette: %v", err)
+	}
+	if err := shifter.Write(cpu.Word, paletteBase+2, 0x0700); err != nil {
+		t.Fatalf("write pixel palette: %v", err)
+	}
+	if err := ram.LoadAt(0, solidIndex1LowResFrame()); err != nil {
+		t.Fatalf("seed video frame: %v", err)
+	}
+
+	lineCycles := shifter.frameCycles() / 200
+	if lineCycles == 0 {
+		lineCycles = 1
+	}
+	segCycles := lineCycles / shifterRasterSegments
+	if segCycles == 0 {
+		segCycles = 1
+	}
+
+	shifter.BeginFrame()
+	shifter.AdvanceFrame(segCycles)
+	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, shifterSyncBlankDisplayBit); err != nil {
+		t.Fatalf("blank display segment: %v", err)
+	}
+	shifter.AdvanceFrame(segCycles)
+	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, 0x00); err != nil {
+		t.Fatalf("re-enable display segment: %v", err)
+	}
+	shifter.AdvanceFrame(shifter.frameCycles())
+	if !shifter.EndFrame() {
+		t.Fatalf("expected completed frame")
+	}
+
+	fb := shifter.FrameBuffer()
+	narrowBlank := fb[(0*320+7)*4 : (0*320+7)*4+4]
+	if narrowBlank[0] != 0 || narrowBlank[1] != 0 || narrowBlank[2] != 0 {
+		t.Fatalf("expected narrow blank pulse near the left edge, got %v", narrowBlank)
+	}
+	outsidePulse := fb[(0*320+20)*4 : (0*320+20)*4+4]
+	if outsidePulse[0] != 255 || outsidePulse[1] != 0 || outsidePulse[2] != 0 {
+		t.Fatalf("expected blank pulse to stay narrow, got %v at x=20", outsidePulse)
+	}
+}
+
 func TestShifterMidFrameBlankCanBlankLowerScreenHalf(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetTiming(8_000_000, 50)
+	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
 
 	if err := shifter.Write(cpu.Word, paletteBase, 0x0000); err != nil {
 		t.Fatalf("write border palette: %v", err)
@@ -381,11 +605,11 @@ func TestShifterMidFrameBlankCanBlankLowerScreenHalf(t *testing.T) {
 	}
 
 	shifter.BeginFrame()
-	shifter.AdvanceFrame(shifter.frameCycles / 2)
+	shifter.AdvanceFrame(shifter.frameCycles() / 2)
 	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, shifterSyncBlankDisplayBit); err != nil {
 		t.Fatalf("disable display for lower half: %v", err)
 	}
-	shifter.AdvanceFrame(shifter.frameCycles)
+	shifter.AdvanceFrame(shifter.frameCycles() / 2)
 	if !shifter.EndFrame() {
 		t.Fatalf("expected completed frame")
 	}
@@ -403,8 +627,7 @@ func TestShifterMidFrameBlankCanBlankLowerScreenHalf(t *testing.T) {
 
 func TestShifterDebugStatsCaptureFrameMetrics(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetTiming(8_000_000, 50)
+	shifter := NewSTShifter(testShifterConfig(16000), ram)
 	shifter.SetDebug(true)
 	ram.SetContentionSource(shifter)
 
@@ -422,7 +645,7 @@ func TestShifterDebugStatsCaptureFrameMetrics(t *testing.T) {
 	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
 		t.Fatalf("expected contention wait states while frame is active")
 	}
-	shifter.AdvanceFrame(shifter.frameCycles)
+	shifter.AdvanceFrame(shifter.frameCycles())
 	if !shifter.EndFrame() {
 		t.Fatalf("expected completed frame")
 	}
@@ -447,8 +670,7 @@ func TestShifterDebugStatsCaptureFrameMetrics(t *testing.T) {
 
 func TestShifterColorModeFrameBorderVisibleWhenEnabled(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetColorBorderVisible(true)
+	shifter := NewSTShifter(&config.Config{ColorMonitor: true}, ram)
 
 	if err := shifter.Write(cpu.Word, paletteBase, 0x0000); err != nil {
 		t.Fatalf("write border palette: %v", err)
@@ -496,8 +718,7 @@ func TestShifterColorModeFrameBorderVisibleWhenEnabled(t *testing.T) {
 
 func TestShifterMediumModeUsesWiderHorizontalBorder(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetColorBorderVisible(true)
+	shifter := NewSTShifter(&config.Config{ColorMonitor: true}, ram)
 
 	if err := shifter.Write(cpu.Byte, shifterRegResolution, 0x01); err != nil {
 		t.Fatalf("set medium resolution: %v", err)
@@ -530,9 +751,7 @@ func TestShifterMediumModeUsesWiderHorizontalBorder(t *testing.T) {
 
 func TestShifterMediumModeHeightScalingAffectsDisplayViewportOnly(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetColorBorderVisible(true)
-	shifter.SetMidResYScale(2)
+	shifter := NewSTShifter(&config.Config{ColorMonitor: true, MidResYScale: 2}, ram)
 
 	if err := shifter.Write(cpu.Byte, shifterRegResolution, 0x01); err != nil {
 		t.Fatalf("set medium resolution: %v", err)
@@ -565,9 +784,7 @@ func TestShifterMediumModeHeightScalingAffectsDisplayViewportOnly(t *testing.T) 
 
 func TestShifterMediumModeHeightScalingWorksWithoutColorBorder(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewShifter(ram)
-	shifter.SetColorBorderVisible(false)
-	shifter.SetMidResYScale(2)
+	shifter := NewSTShifter(&config.Config{ColorMonitor: false, MidResYScale: 2}, ram)
 
 	if err := shifter.Write(cpu.Byte, shifterRegResolution, 0x01); err != nil {
 		t.Fatalf("set medium resolution: %v", err)
@@ -600,9 +817,9 @@ func solidIndex1LowResFrame() []byte {
 		stride = 160
 	)
 	frame := make([]byte, lines*stride)
-	for y := 0; y < lines; y++ {
+	for y := range lines {
 		line := frame[y*stride : (y+1)*stride]
-		for group := 0; group < 20; group++ {
+		for group := range 20 {
 			offset := group * 8
 			line[offset] = 0xFF
 			line[offset+1] = 0xFF
@@ -617,9 +834,9 @@ func solidIndex1MediumResFrame() []byte {
 		stride = 160
 	)
 	frame := make([]byte, lines*stride)
-	for y := 0; y < lines; y++ {
+	for y := range lines {
 		line := frame[y*stride : (y+1)*stride]
-		for group := 0; group < 40; group++ {
+		for group := range 40 {
 			offset := group * 4
 			line[offset] = 0xFF
 			line[offset+1] = 0xFF

@@ -89,6 +89,24 @@ Color monitor mode:
 go run ./cmd/gost --color-monitor
 ```
 
+Atari STF preset:
+
+```bash
+go run ./cmd/gost --preset stf
+```
+
+Atari ST preset:
+
+```bash
+go run ./cmd/gost --preset st
+```
+
+Atari Mega ST preset:
+
+```bash
+go run ./cmd/gost --preset mega-st
+```
+
 Headless mode:
 
 ```bash
@@ -139,6 +157,28 @@ Override the bundled OS:
 go run ./cmd/gost --rom /path/to/tos.rom
 ```
 
+Example JSON config:
+
+```json
+{
+  "preset": "mega-st",
+  "floppy-a": "/path/to/disk.msa",
+  "hd-size-mb": 0,
+  "cpu-mhz": 8,
+  "color-monitor": false,
+  "trace-start": "0xE00000",
+  "trace-end": "0xE01000"
+}
+```
+
+Run with the config file and optionally override individual settings on the CLI:
+
+```bash
+go run ./cmd/gost --config /path/to/gost.json --headless --frames 400
+```
+
+JSON config keys use the same names as the CLI flags, just without the leading `--`.
+
 ## WebAssembly
 
 Yes: this project already compiles to `GOOS=js GOARCH=wasm`, and the bundled EmuTOS image makes a browser build practical without adding ROM download steps.
@@ -167,17 +207,22 @@ Current browser-build limitations:
 
 ### CLI Flags
 
+- `--config <path>`: optional JSON config file loaded before CLI overrides
+- `--preset <name>`: machine preset, currently `default`, `stf`, `st`, or `mega-st`
 - `--rom <path>`: path to the TOS ROM image
 - `--floppy-a <path>`: optional floppy disk image for drive A (`.st` or `.msa`)
+- `--ram-size <bytes>`: emulated RAM size in bytes
+- `--clock-hz <n>`: base machine clock frequency in Hz
 - `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
 - `--hd-image <path>`: optional persistent ACSI hard disk image file; loads if present, otherwise creates from `--hd-size-mb`
 - `--cpu-mhz <n>`: CPU frequency in MHz (default `8`); increases/decreases CPU speed without changing other hardware timing
-- `--scale <n>`: window scale factor, default `2`
+- `--frame-hz <n>`: display and VBL refresh rate in Hz
+- `--scale <n>`: window scale factor, default `1`
 - `--fullscreen`: start fullscreen
 - `--headless`: run without opening a window
 - `--color-monitor`: emulate an Atari color monitor instead of monochrome
 - `--midres-y-scale <n>`: scale medium-resolution display height on host output (`1` = off)
-- `--frames <n>`: number of frames to run in headless mode, default `300`
+- `--frames <n>`: number of frames to run in headless mode, default `500`
 - `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, `boot-verbose`, `shifter`, or `shifter-verbose`
 - `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces, default `0xE00000`
 - `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces, default `0xE01000`

@@ -17,7 +17,7 @@ func TestDebugIKBDTrafficAfterDesktop(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", i, err)
 		}
@@ -46,7 +46,7 @@ func TestDebugIKBDTrafficAfterDesktop(t *testing.T) {
 	before := append([]byte(nil), machine.FrameBuffer()...)
 	machine.PushMouse(12, 8, 0)
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-mouse frame %d: %v", i, err)
 		}
@@ -68,7 +68,7 @@ func TestDebugIKBDMouseHandlerState(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", i, err)
 		}
@@ -97,7 +97,7 @@ func TestDebugIKBDMouseHandlerState(t *testing.T) {
 	})
 
 	machine.PushMouse(12, 8, 0)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-mouse frame %d: %v", i, err)
 		}
@@ -110,7 +110,7 @@ func TestDebugIKBDMouseCallbackState(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", i, err)
 		}
@@ -146,7 +146,7 @@ func TestDebugIKBDMouseCallbackState(t *testing.T) {
 	})
 
 	machine.PushMouse(12, 8, 0)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-mouse frame %d: %v", i, err)
 		}
@@ -168,7 +168,7 @@ func TestDebugIKBDMouseDrawRoutine(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", i, err)
 		}
@@ -203,7 +203,7 @@ func TestDebugIKBDMouseDrawRoutine(t *testing.T) {
 
 	before := append([]byte(nil), machine.FrameBuffer()...)
 	machine.PushMouse(12, 8, 0)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-mouse frame %d: %v", i, err)
 		}
@@ -229,7 +229,7 @@ func TestDebugIKBDMouseDrawPipeline(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", i, err)
 		}
@@ -264,7 +264,7 @@ func TestDebugIKBDMouseDrawPipeline(t *testing.T) {
 
 	before := append([]byte(nil), machine.FrameBuffer()...)
 	machine.PushMouse(12, 8, 0)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-mouse frame %d: %v", i, err)
 		}
@@ -285,7 +285,7 @@ func TestDebugIKBDMouseDrawQueueConsumer(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", i, err)
 		}
@@ -312,7 +312,7 @@ func TestDebugIKBDMouseDrawQueueConsumer(t *testing.T) {
 	})
 
 	machine.PushMouse(12, 8, 0)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-mouse frame %d: %v", i, err)
 		}
@@ -331,7 +331,7 @@ func TestDebugDesktopVBLCallbackList(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", i, err)
 		}
@@ -352,7 +352,7 @@ func TestDebugMouseVBLExecution(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", i, err)
 		}
@@ -409,7 +409,7 @@ func TestDebugMouseVBLExecution(t *testing.T) {
 	})
 
 	machine.PushMouse(12, 8, 0)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("post-mouse frame %d: %v", i, err)
 		}
@@ -448,7 +448,7 @@ func TestDebugVBLStateEventuallyRecovers(t *testing.T) {
 		return value
 	}
 
-	for frame := 0; frame < 2000; frame++ {
+	for frame := range 2000 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("frame %d: %v", frame, err)
 		}
@@ -485,7 +485,7 @@ func TestDebugLateVBLStateWrites(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	for frame := 0; frame < 300; frame++ {
+	for frame := range 300 {
 		if _, err := machine.StepFrame(); err != nil {
 			t.Fatalf("boot frame %d: %v", frame, err)
 		}

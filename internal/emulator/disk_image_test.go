@@ -50,7 +50,7 @@ func TestLoadDiskImageDecodesMSA(t *testing.T) {
 	if len(got.Data) != 512 {
 		t.Fatalf("decoded MSA length = %d, want 512", len(got.Data))
 	}
-	for i := 0; i < len(got.Data); i++ {
+	for i := range len(got.Data) {
 		if got.Data[i] != 0x11 {
 			t.Fatalf("decoded byte %d = %02x, want 11", i, got.Data[i])
 		}

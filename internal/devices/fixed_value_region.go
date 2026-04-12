@@ -44,4 +44,3 @@ func (r *FixedValueRegion) Write(cpu.Size, uint32, uint32) error {
 }
 
 func (r *FixedValueRegion) Reset() {}
-
