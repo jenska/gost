@@ -21,7 +21,7 @@ GoST has moved beyond early bring-up and now provides a usable Atari ST desktop 
 
 This is still not a complete Atari ST emulator for broad real-software compatibility yet. The current focus is cleanup, stabilization, and expanding compatibility from the working desktop baseline.
 
-Latest 400-frame color desktop boot:
+Latest 1000-frame desktop boot:
 
 ![Current emulation status](assets/media/gost-status.png)
 
@@ -43,7 +43,7 @@ Current focus:
 - Atari ST Blitter register model exercised by live GEM/VDI boot
 - MFP timer and interrupt delivery
 - Floppy DMA/FDC path with `.st` and `.msa` image support
-- Virtual ACSI hard disk (30 MiB default) for hard-disk aware guest software
+- Virtual ACSI hard disk (30 MiB default) that enumerates as C: under bundled EmuTOS
 - Desktop frontend via Ebitengine
 - Headless execution with PNG framebuffer dumping
 - CPU, boot, and verbose tracing for bring-up and debugging
@@ -84,6 +84,28 @@ go run ./cmd/gost
 
 If `downloads/atari-st/PDATS321.msa` exists locally, `make run` and `make headless` automatically mount it as drive A.
 
+Local ROM workflow:
+
+The repository ignores `TOS/` so you can keep personal ROM images there for local testing without adding them to Git.
+
+Run with a specific local ROM:
+
+```bash
+make run-rom ROM=TOS/TOS104GE.IMG ARGS="--preset mega-st"
+```
+
+Run headless with a specific local ROM:
+
+```bash
+make headless-rom ROM=TOS/TOS102GE.IMG FRAMES=600 ARGS="--preset mega-st --trace boot"
+```
+
+Convenience target for a local Mega ST TOS 1.02 image at `TOS/TOS102GE.IMG`:
+
+```bash
+make run-mega-tos102
+```
+
 Color monitor mode:
 
 ```bash
@@ -115,13 +137,13 @@ make headless
 ```
 
 ```bash
-go run ./cmd/gost --headless --frames 300
+go run ./cmd/gost --headless --frames 1000
 ```
 
 Headless color desktop boot:
 
 ```bash
-go run ./cmd/gost --headless --color-monitor --frames 400 --dump-frame /tmp/gost-color-desktop.png
+go run ./cmd/gost --headless --color-monitor --frames 1000 --dump-frame /tmp/gost-color-desktop.png
 ```
 
 Headless boot inspection with a PNG dump:
@@ -158,6 +180,12 @@ Override the bundled OS:
 go run ./cmd/gost --rom /path/to/tos.rom
 ```
 
+Equivalent Makefile target using a local ROM path:
+
+```bash
+make run-rom ROM=/path/to/tos.rom
+```
+
 Example JSON config:
 
 ```json
@@ -175,7 +203,7 @@ Example JSON config:
 Run with the config file and optionally override individual settings on the CLI:
 
 ```bash
-go run ./cmd/gost --config /path/to/gost.json --headless --frames 400
+go run ./cmd/gost --config /path/to/gost.json --headless --frames 1000
 ```
 
 Load order is: preset defaults, then JSON config file, then CLI flags.
@@ -225,7 +253,7 @@ Current browser-build limitations:
 - `--headless`: run without opening a window
 - `--color-monitor`: emulate an Atari color monitor instead of monochrome
 - `--midres-y-scale <n>`: scale medium-resolution display height on host output (`1` = off)
-- `--frames <n>`: number of frames to run in headless mode, default `500`
+- `--frames <n>`: number of frames to run in headless mode, default `1000`
 - `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, `boot-verbose`, `shifter`, or `shifter-verbose`
 - `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces, default `0xE00000`
 - `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces, default `0xE01000`

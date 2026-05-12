@@ -21,6 +21,9 @@ func TestConfigForPresetDefault(t *testing.T) {
 	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
 		t.Fatalf("unexpected hard disk size: got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
 	}
+	if cfg.Frames != DefaultHeadlessFrames {
+		t.Fatalf("unexpected headless frame default: got %d want %d", cfg.Frames, DefaultHeadlessFrames)
+	}
 	if cfg.Model != MachineModelST {
 		t.Fatalf("unexpected model: got %q want %q", cfg.Model, MachineModelST)
 	}

@@ -15,7 +15,7 @@ const (
 	DefaultClockHz        = 8_000_000
 	DefaultFrameHz        = 50
 	DefaultHardDiskSizeMB = 30
-	DefaultHeadlessFrames = 500
+	DefaultHeadlessFrames = 1000
 
 	STDefaultRAMSize     = 512 * 1024
 	STFDefaultRAMSize    = 1024 * 1024

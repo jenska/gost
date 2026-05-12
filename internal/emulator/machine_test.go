@@ -2,6 +2,7 @@ package emulator
 
 import (
 	"encoding/binary"
+	"os"
 	"testing"
 
 	"github.com/jenska/gost/internal/assets"
@@ -61,6 +62,63 @@ func TestMachineTwoMegRAMBootsBundledROMToActiveScreenBase(t *testing.T) {
 	}
 
 	t.Fatalf("expected bundled ROM boot to program non-zero screen base within 200 frames")
+}
+
+func TestMachineMegaSTPresetBootsFromLocalROMPath(t *testing.T) {
+	romPath := t.TempDir() + "/EmuTOS.rom"
+	if err := os.WriteFile(romPath, assets.DefaultROM(), 0o644); err != nil {
+		t.Fatalf("write local ROM: %v", err)
+	}
+
+	cfg, err := config.Load([]string{
+		"--preset=mega-st",
+		"--rom", romPath,
+	})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Preset != config.PresetMegaST {
+		t.Fatalf("unexpected preset: got %q want %q", cfg.Preset, config.PresetMegaST)
+	}
+	if cfg.ROMPath != romPath {
+		t.Fatalf("unexpected ROM path: got %q want %q", cfg.ROMPath, romPath)
+	}
+	if cfg.RAMSize != 2*1024*1024 {
+		t.Fatalf("unexpected Mega ST RAM size: got %d want %d", cfg.RAMSize, 2*1024*1024)
+	}
+	if cfg.HardDiskSizeMB != 0 {
+		t.Fatalf("expected Mega ST preset to disable hard disk, got %d", cfg.HardDiskSizeMB)
+	}
+
+	romImage, err := config.LoadROM(cfg.ROMPath)
+	if err != nil {
+		t.Fatalf("load ROM image: %v", err)
+	}
+	machine, err := NewMachine(cfg, romImage)
+	if err != nil {
+		t.Fatalf("create machine: %v", err)
+	}
+
+	for frame := range 200 {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d: %v", frame, err)
+		}
+		if machine.shifter.ScreenBase() != 0 {
+			phystop, err := machine.ram.Read(cpu.Long, 0x042E)
+			if err != nil {
+				t.Fatalf("read phystop: %v", err)
+			}
+			if phystop != 0x00200000 {
+				t.Fatalf("unexpected phystop after Mega ST boot: got %08x want 00200000", phystop)
+			}
+			if machine.HardDiskSizeBytes() != 0 {
+				t.Fatalf("expected Mega ST preset to boot without virtual hard disk, got %d bytes", machine.HardDiskSizeBytes())
+			}
+			return
+		}
+	}
+
+	t.Fatalf("expected Mega ST preset boot from local ROM to program non-zero screen base within 200 frames")
 }
 
 func TestSTBusAlignmentAndMapping(t *testing.T) {

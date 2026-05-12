@@ -22,7 +22,6 @@ func BenchmarkShifterRender(b *testing.B) {
 		{name: "low_res_active"},
 		{name: "medium_res_active", resolution: 1},
 		{name: "high_res_active", resolution: 2},
-		{name: "low_res_blank_sync", syncMode: shifterSyncBlankDisplayBit},
 		{name: "low_res_color_border", colorBorder: true},
 		{name: "medium_res_color_border_scaled", resolution: 1, colorBorder: true, midResYScale: 2},
 		{name: "low_res_debug_stats", debug: true},
@@ -45,23 +44,6 @@ func BenchmarkShifterRender(b *testing.B) {
 }
 
 func BenchmarkShifterFrameLifecycle(b *testing.B) {
-	b.Run("low_res_midframe_blank_toggle", func(b *testing.B) {
-		shifter, _, bytesPerFrame := newBenchmarkShifter(b, shifterBenchmarkCase{})
-		if err := shifter.Write(cpu.Byte, shifterRegSyncMode, 0x00); err != nil {
-			b.Fatalf("reset sync mode: %v", err)
-		}
-
-		warmLowResMidFrameBlankToggle(b, shifter)
-
-		b.ReportAllocs()
-		b.SetBytes(bytesPerFrame)
-		b.ResetTimer()
-
-		for range b.N {
-			runLowResMidFrameBlankToggle(b, shifter)
-		}
-	})
-
 	b.Run("medium_res_midframe_palette_split", func(b *testing.B) {
 		shifter, _, bytesPerFrame := newBenchmarkShifter(b, shifterBenchmarkCase{
 			resolution:   1,
@@ -159,40 +141,6 @@ func newBenchmarkShifter(b *testing.B, tc shifterBenchmarkCase) (*Shifter, *RAM,
 	}
 	displayW, displayH := shifter.DisplayDimensions()
 	return shifter, ram, int64(displayW * displayH * 4)
-}
-
-func warmLowResMidFrameBlankToggle(b *testing.B, shifter *Shifter) {
-	b.Helper()
-	runLowResMidFrameBlankToggle(b, shifter)
-}
-
-func runLowResMidFrameBlankToggle(b *testing.B, shifter *Shifter) {
-	b.Helper()
-	shifter.BeginFrame()
-
-	lineCycles := shifter.frameCycles() / 200
-	if lineCycles == 0 {
-		lineCycles = 1
-	}
-	segCycles := lineCycles / shifterRasterSegments
-	if segCycles == 0 {
-		segCycles = 1
-	}
-
-	shifter.AdvanceFrame(segCycles * 2)
-	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, shifterSyncBlankDisplayBit); err != nil {
-		b.Fatalf("enable blank sync: %v", err)
-	}
-	shifter.AdvanceFrame(segCycles * 2)
-	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, 0x00); err != nil {
-		b.Fatalf("disable blank sync: %v", err)
-	}
-	if shifter.frameCyclePos < shifter.frameCycles() {
-		shifter.AdvanceFrame(shifter.frameCycles() - shifter.frameCyclePos)
-	}
-	if !shifter.EndFrame() {
-		b.Fatalf("expected frame completion")
-	}
 }
 
 func warmMediumResMidFramePaletteSplit(b *testing.B, shifter *Shifter) {
