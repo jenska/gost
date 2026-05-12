@@ -346,6 +346,190 @@ func TestMFPGPIPBit7ReflectsMonitorType(t *testing.T) {
 	}
 }
 
+func TestMFPGPIPDDRSelectsOutputLatchOverExternalInputs(t *testing.T) {
+	cfg := config.Config{ClockHz: 8_000_000, ColorMonitor: false}
+	mfp := NewMFP(&cfg)
+
+	if err := mfp.Write(1, mfpBase+mfpGPIP, 0x80); err != nil {
+		t.Fatalf("write GPIP latch: %v", err)
+	}
+	input, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read input GPIP: %v", err)
+	}
+	if byte(input)&0x80 != 0 {
+		t.Fatalf("expected DDR input bit 7 to ignore output latch and follow mono monitor low, GPIP=%02x", byte(input))
+	}
+
+	if err := mfp.Write(1, mfpBase+mfpDDR, 0x80); err != nil {
+		t.Fatalf("write DDR: %v", err)
+	}
+	output, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read output GPIP: %v", err)
+	}
+	if byte(output)&0x80 == 0 {
+		t.Fatalf("expected DDR output bit 7 to read GPIP latch high, GPIP=%02x", byte(output))
+	}
+
+	if err := mfp.Write(1, mfpBase+mfpGPIP, 0x00); err != nil {
+		t.Fatalf("clear GPIP latch: %v", err)
+	}
+	output, err = mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read cleared output GPIP: %v", err)
+	}
+	if byte(output)&0x80 != 0 {
+		t.Fatalf("expected DDR output bit 7 to read GPIP latch low, GPIP=%02x", byte(output))
+	}
+}
+
+func TestMFPGPIPDDRInputBitsIgnoreOutputLatchForACIAAndRTC(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000, ColorMonitor: false})
+	rtc := NewICDRTC()
+	mfp.AttachICDRTC(rtc)
+
+	if err := mfp.Write(1, mfpBase+mfpGPIP, 0x30); err != nil {
+		t.Fatalf("write GPIP latch: %v", err)
+	}
+	mfp.SetACIAInterrupt(true)
+	rtc.HandleCommand(icdRTCCmdBegin)
+
+	input, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read input GPIP: %v", err)
+	}
+	if byte(input)&0x30 != 0 {
+		t.Fatalf("expected input ACIA/RTC bits to follow active-low external lines, GPIP=%02x", byte(input))
+	}
+
+	if err := mfp.Write(1, mfpBase+mfpDDR, 0x30); err != nil {
+		t.Fatalf("write DDR: %v", err)
+	}
+	output, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read output GPIP: %v", err)
+	}
+	if byte(output)&0x30 != 0x30 {
+		t.Fatalf("expected output ACIA/RTC bits to read high from GPIP latch, GPIP=%02x", byte(output))
+	}
+}
+
+func TestMFPGPIPAERDefaultDetectsFallingACIAEdge(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000, ColorMonitor: false})
+
+	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
+		t.Fatalf("write vector base: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERB, 0x40); err != nil {
+		t.Fatalf("enable ACIA GPIP interrupt: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRB, 0x40); err != nil {
+		t.Fatalf("mask ACIA GPIP interrupt: %v", err)
+	}
+
+	mfp.SetACIAInterrupt(true)
+	irqs := mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected falling ACIA edge interrupt, got %d", len(irqs))
+	}
+	if irqs[0].Vector == nil || *irqs[0].Vector != 0x46 {
+		t.Fatalf("unexpected falling ACIA edge vector: %+v", irqs[0].Vector)
+	}
+
+	mfp.SetACIAInterrupt(false)
+	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+		t.Fatalf("expected rising ACIA edge to be ignored by default AER, got %d", len(irqs))
+	}
+}
+
+func TestMFPGPIPAERDetectsRisingACIAEdgeWhenConfigured(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000, ColorMonitor: false})
+
+	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
+		t.Fatalf("write vector base: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpAER, 0x10); err != nil {
+		t.Fatalf("write AER: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERB, 0x40); err != nil {
+		t.Fatalf("enable ACIA GPIP interrupt: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRB, 0x40); err != nil {
+		t.Fatalf("mask ACIA GPIP interrupt: %v", err)
+	}
+
+	mfp.SetACIAInterrupt(true)
+	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+		t.Fatalf("expected falling ACIA edge to be ignored by rising AER, got %d", len(irqs))
+	}
+
+	mfp.SetACIAInterrupt(false)
+	irqs := mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected rising ACIA edge interrupt, got %d", len(irqs))
+	}
+	if irqs[0].Vector == nil || *irqs[0].Vector != 0x46 {
+		t.Fatalf("unexpected rising ACIA edge vector: %+v", irqs[0].Vector)
+	}
+}
+
+func TestMFPGPIPAERIgnoresEdgesOnDDRConfiguredOutputs(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000, ColorMonitor: false})
+
+	if err := mfp.Write(1, mfpBase+mfpDDR, 0x10); err != nil {
+		t.Fatalf("write DDR: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERB, 0x40); err != nil {
+		t.Fatalf("enable ACIA GPIP interrupt: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRB, 0x40); err != nil {
+		t.Fatalf("mask ACIA GPIP interrupt: %v", err)
+	}
+
+	mfp.SetACIAInterrupt(true)
+	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+		t.Fatalf("expected DDR output ACIA edge to be ignored, got %d", len(irqs))
+	}
+
+	if err := mfp.Write(1, mfpBase+mfpDDR, 0x00); err != nil {
+		t.Fatalf("clear DDR: %v", err)
+	}
+	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+		t.Fatalf("expected no latent ACIA edge after returning bit to input, got %d", len(irqs))
+	}
+}
+
+func TestMFPGPIPAERDetectsFallingRTCEdgeOnGPIP5(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000, ColorMonitor: false})
+	rtc := NewICDRTC()
+	mfp.AttachICDRTC(rtc)
+
+	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
+		t.Fatalf("write vector base: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERB, 0x80); err != nil {
+		t.Fatalf("enable RTC GPIP interrupt: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRB, 0x80); err != nil {
+		t.Fatalf("mask RTC GPIP interrupt: %v", err)
+	}
+
+	rtc.HandleCommand(icdRTCCmdBegin)
+	irqs := mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected falling RTC edge interrupt, got %d", len(irqs))
+	}
+	if irqs[0].Vector == nil || *irqs[0].Vector != 0x47 {
+		t.Fatalf("unexpected falling RTC edge vector: %+v", irqs[0].Vector)
+	}
+
+	rtc.HandleCommand(icdRTCCmdEnd)
+	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+		t.Fatalf("expected rising RTC edge to be ignored by default AER, got %d", len(irqs))
+	}
+}
+
 func TestMFPGPIPBit5DefaultsHighWithoutICDRTC(t *testing.T) {
 	mfp := NewMFP(&config.Config{ClockHz: 8_000_000, ColorMonitor: false})
 

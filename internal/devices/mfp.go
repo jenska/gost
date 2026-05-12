@@ -55,6 +55,7 @@ type MFP struct {
 	softwareEOI    bool
 	inFlight       [16]bool
 	aciaIRQActive  bool
+	gpipInput      byte
 	rtc            *ICDRTC
 	timers         [4]mfpTimer
 	serialBuffer   byte
@@ -91,6 +92,7 @@ func (m *MFP) Reset() {
 	m.serialBuffer = 0
 	m.clockRemainder = 0
 	m.aciaIRQActive = false
+	m.gpipInput = m.gpipInputState()
 }
 
 func (m *MFP) Read(size cpu.Size, address uint32) (uint32, error) {
@@ -146,6 +148,8 @@ func (m *MFP) Advance(cycles uint64) {
 }
 
 func (m *MFP) DrainInterrupts() []Interrupt {
+	m.updateGPIPEdges()
+
 	channel, ok := m.nextPendingChannel()
 	if !ok {
 		return nil
@@ -211,7 +215,13 @@ func (m *MFP) readByte(offset uint32) byte {
 
 func (m *MFP) writeByte(offset uint32, value byte) {
 	switch offset {
-	case mfpGPIP, mfpAER, mfpDDR, mfpSCR, mfpUCR, mfpRSR, mfpTSR:
+	case mfpGPIP, mfpSCR, mfpUCR, mfpRSR, mfpTSR:
+		m.registers[offset] = value
+	case mfpDDR:
+		m.updateGPIPEdges()
+		m.registers[offset] = value
+	case mfpAER:
+		m.updateGPIPEdges()
 		m.registers[offset] = value
 	case mfpIERA, mfpIERB, mfpIMRA, mfpIMRB:
 		m.registers[offset] = value
@@ -328,9 +338,7 @@ func (m *MFP) SetACIAInterrupt(asserted bool) {
 		return
 	}
 	m.aciaIRQActive = asserted
-	if asserted {
-		m.raiseChannel(6)
-	}
+	m.updateGPIPEdges()
 }
 
 func (m *MFP) AttachICDRTC(rtc *ICDRTC) {
@@ -338,7 +346,16 @@ func (m *MFP) AttachICDRTC(rtc *ICDRTC) {
 }
 
 func (m *MFP) gpipState() byte {
-	value := m.registers[mfpGPIP]
+	m.updateGPIPEdges()
+
+	latch := m.registers[mfpGPIP]
+	ddr := m.registers[mfpDDR]
+	inputs := m.gpipInput
+	return (latch & ddr) | (inputs &^ ddr)
+}
+
+func (m *MFP) gpipInputState() byte {
+	value := byte(0xFF)
 	if m.cfg.ColorMonitor {
 		value |= 0x80
 	} else {
@@ -355,6 +372,41 @@ func (m *MFP) gpipState() byte {
 		value |= 0x20
 	}
 	return value
+}
+
+func (m *MFP) updateGPIPEdges() {
+	next := m.gpipInputState()
+	changed := m.gpipInput ^ next
+	if changed == 0 {
+		return
+	}
+
+	inputMask := ^m.registers[mfpDDR]
+	rising := changed & next
+	falling := changed &^ next
+	active := (rising & m.registers[mfpAER]) | (falling &^ m.registers[mfpAER])
+	active &= inputMask
+	for bit := 0; bit < 8; bit++ {
+		if active&(1<<uint(bit)) != 0 {
+			m.raiseChannel(gpipInterruptChannel(bit))
+		}
+	}
+	m.gpipInput = next
+}
+
+func gpipInterruptChannel(bit int) int {
+	switch bit {
+	case 4:
+		return 6
+	case 5:
+		return 7
+	case 6:
+		return 14
+	case 7:
+		return 15
+	default:
+		return bit
+	}
 }
 
 func (m *MFP) nextPendingChannel() (int, bool) {

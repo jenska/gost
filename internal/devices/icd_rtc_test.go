@@ -47,6 +47,28 @@ func TestICDRTCReadRegistersThroughFDC(t *testing.T) {
 	}
 }
 
+func TestICDRTCReadRegistersAdvanceWithHostClock(t *testing.T) {
+	now := time.Date(2026, time.May, 12, 14, 35, 48, 0, time.Local)
+	rtc := NewICDRTC()
+	rtc.now = func() time.Time { return now }
+	rtc.Reset()
+
+	fdc := NewFDC(NewRAM(0, 1024*1024), nil)
+	fdc.AttachICDRTC(rtc)
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaCSACSI); err != nil {
+		t.Fatalf("select ACSI: %v", err)
+	}
+
+	now = now.Add(3 * time.Second)
+	if got := readICDRTCRegisterViaFDC(t, fdc, icdRTCRegSecondsLow); got != 1 {
+		t.Fatalf("seconds low after clock advance = %x, want 1", got)
+	}
+	if got := readICDRTCRegisterViaFDC(t, fdc, icdRTCRegSecondsHigh); got != 5 {
+		t.Fatalf("seconds high after clock advance = %x, want 5", got)
+	}
+}
+
 func TestICDRTCWriteRegistersThroughFDC(t *testing.T) {
 	now := time.Date(2026, time.May, 12, 14, 35, 48, 0, time.Local)
 	rtc := NewICDRTC()

@@ -170,3 +170,18 @@ func TestLoadCanEnableRTCFlag(t *testing.T) {
 		t.Fatalf("expected --rtc to enable ICD RTC support")
 	}
 }
+
+func TestLoadCanEnableRTCFromConfigFile(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gost.json")
+	if err := os.WriteFile(configPath, []byte(`{"rtc":true}`), 0o644); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	cfg, err := Load([]string{"--config", configPath})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.RTC {
+		t.Fatalf("expected JSON rtc option to enable ICD RTC support")
+	}
+}

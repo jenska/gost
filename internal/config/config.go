@@ -497,7 +497,7 @@ func parseFlags(cfg *Config, args []string) error {
 	fs.String(KeyConfig, "", "optional JSON config file loaded before CLI overrides")
 	fs.StringVar(&preset, KeyPreset, preset, "machine preset: default|stf|st|mega-st")
 	fs.StringVar(&cfg.ROMPath, KeyROM, cfg.ROMPath, "path to Atari ST TOS ROM")
-	fs.StringVar(&cfg.FloppyA, KeyFloppyA, cfg.FloppyA, "path to drive A disk image (.st or .msa)")
+	fs.StringVar(&cfg.FloppyA, KeyFloppyA, cfg.FloppyA, "path to drive A disk image (.st, .msa, .dim, or compatible .adi)")
 	fs.Var(uint32Flag{target: &cfg.HardDiskSizeMB}, KeyHardDiskSizeMB, "virtual ACSI hard disk size in MiB (0 disables)")
 	fs.StringVar(&cfg.HardDiskImagePath, KeyHardDiskImage, cfg.HardDiskImagePath, "path to persistent virtual hard disk image file")
 	fs.Float64Var(&cfg.Scale, KeyScale, cfg.Scale, "display scale factor")

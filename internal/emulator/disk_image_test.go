@@ -92,3 +92,53 @@ func TestLoadDiskImagePreservesDoubleSidedMSAGeometry(t *testing.T) {
 		t.Fatalf("unexpected double-sided data markers: %02x %02x", got.Data[0], got.Data[512])
 	}
 }
+
+func TestLoadDiskImageDecodesDIMHeaderedSectorImage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "disk.dim")
+	payload := make([]byte, 2*512)
+	payload[0] = 0xCA
+	payload[512] = 0xFE
+	header := make([]byte, dimHeaderSize)
+	header[0] = 0x42
+	header[1] = 0x42
+	header[6] = 1    // two sides
+	header[8] = 1    // one sector per track
+	header[0x0C] = 0 // track 0 only
+	image := append(header, payload...)
+	if err := os.WriteFile(path, image, 0o644); err != nil {
+		t.Fatalf("write DIM disk image: %v", err)
+	}
+
+	got, err := LoadDiskImage(path)
+	if err != nil {
+		t.Fatalf("load DIM disk image: %v", err)
+	}
+	if len(got.Data) != len(payload) {
+		t.Fatalf("decoded DIM length = %d, want %d", len(got.Data), len(payload))
+	}
+	if got.Data[0] != 0xCA || got.Data[512] != 0xFE {
+		t.Fatalf("unexpected DIM payload markers: %02x %02x", got.Data[0], got.Data[512])
+	}
+	if got.Geometry.SectorsPerTrack != 1 || got.Geometry.Sides != 2 || got.Geometry.Tracks != 1 {
+		t.Fatalf("unexpected DIM geometry: %+v", got.Geometry)
+	}
+}
+
+func TestLoadDiskImageRejectsCompressedDIM(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compressed.adi")
+	header := make([]byte, dimHeaderSize)
+	header[0] = 0x42
+	header[1] = 0x42
+	header[3] = 1
+	header[6] = 0
+	header[8] = 1
+	if err := os.WriteFile(path, header, 0o644); err != nil {
+		t.Fatalf("write compressed DIM disk image: %v", err)
+	}
+
+	if _, err := LoadDiskImage(path); err == nil {
+		t.Fatalf("expected compressed DIM-style image to be rejected")
+	}
+}

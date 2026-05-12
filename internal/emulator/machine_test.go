@@ -390,6 +390,59 @@ func TestMachineSetHardDiskImageReplacesVirtualDisk(t *testing.T) {
 	}
 }
 
+func TestMachineRTCFlagRoutesICDRTCThroughFDCAndGPIP(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.HardDiskSizeMB = 0
+	cfg.RTC = true
+	machine, err := NewMachine(cfg, loopROM(nil))
+	if err != nil {
+		t.Fatalf("create machine with RTC: %v", err)
+	}
+
+	const (
+		fdcDataAddr    = 0xFF8604
+		fdcControlAddr = 0xFF8606
+		mfpGPIPAddr    = 0xFFFA01
+		dmaCSACSIValue = 0x0008
+		rtcBegin       = 0x00C0
+		rtcEnd         = 0x0040
+		rtcDetectBit   = 0x20
+	)
+
+	idle, err := machine.bus.Read(cpu.Byte, mfpGPIPAddr)
+	if err != nil {
+		t.Fatalf("read idle GPIP: %v", err)
+	}
+	if byte(idle)&rtcDetectBit == 0 {
+		t.Fatalf("expected idle RTC detect line to read high, GPIP=%02x", byte(idle))
+	}
+
+	if err := machine.bus.Write(cpu.Word, fdcControlAddr, dmaCSACSIValue); err != nil {
+		t.Fatalf("select ACSI through machine bus: %v", err)
+	}
+	if err := machine.bus.Write(cpu.Word, fdcDataAddr, rtcBegin); err != nil {
+		t.Fatalf("begin RTC session through machine bus: %v", err)
+	}
+	active, err := machine.bus.Read(cpu.Byte, mfpGPIPAddr)
+	if err != nil {
+		t.Fatalf("read active GPIP: %v", err)
+	}
+	if byte(active)&rtcDetectBit != 0 {
+		t.Fatalf("expected active RTC detect line to read low, GPIP=%02x", byte(active))
+	}
+
+	if err := machine.bus.Write(cpu.Word, fdcDataAddr, rtcEnd); err != nil {
+		t.Fatalf("end RTC session through machine bus: %v", err)
+	}
+	cleared, err := machine.bus.Read(cpu.Byte, mfpGPIPAddr)
+	if err != nil {
+		t.Fatalf("read cleared GPIP: %v", err)
+	}
+	if byte(cleared)&rtcDetectBit == 0 {
+		t.Fatalf("expected ended RTC detect line to read high, GPIP=%02x", byte(cleared))
+	}
+}
+
 func TestMachineCPUOverclockScalesCPUOnly(t *testing.T) {
 	rom := loopROM([]byte{0x4E, 0x71, 0x60, 0xFE})
 

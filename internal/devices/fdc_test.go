@@ -532,6 +532,109 @@ func TestFDCWriteProtectBlocksWriteCommands(t *testing.T) {
 	}
 }
 
+func TestFDCRecordNotFoundMediaErrorBlocksRead(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	fdc := NewFDC(ram, nil)
+
+	image := make([]byte, fdcSectorSize)
+	copy(image[:4], []byte{0xDE, 0xAD, 0xBE, 0xEF})
+	if err := fdc.InsertDiskWithGeometry(image, 1, 1, 1); err != nil {
+		t.Fatalf("insert disk with geometry: %v", err)
+	}
+	fdc.SetDiskSectorError(0, 0, 1, FDCMediaErrorRecordNotFound)
+
+	setupFloppyDMA(t, fdc, 0x0800, 1, 1, false)
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRead); err != nil {
+		t.Fatalf("execute read command: %v", err)
+	}
+
+	status, err := fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if byte(status)&fdcStatusRNF == 0 {
+		t.Fatalf("expected RNF status after media error, got %02x", byte(status))
+	}
+	dmaStatus, err := fdc.Read(cpu.Word, fdcBase+fdcOffsetControl)
+	if err != nil {
+		t.Fatalf("read dma status: %v", err)
+	}
+	if dmaStatus&dmaStatusOK != 0 {
+		t.Fatalf("expected DMA OK to clear after media error, got %04x", dmaStatus)
+	}
+	value, err := ram.Read(cpu.Long, 0x0800)
+	if err != nil {
+		t.Fatalf("read dma destination: %v", err)
+	}
+	if value != 0 {
+		t.Fatalf("expected failed read to leave DMA destination untouched, got %08x", value)
+	}
+}
+
+func TestFDCCRCMediaErrorBlocksWriteAndPreservesSector(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	fdc := NewFDC(ram, nil)
+
+	image := make([]byte, fdcSectorSize)
+	copy(image[:4], []byte{0x11, 0x22, 0x33, 0x44})
+	if err := fdc.InsertDiskWithGeometry(image, 1, 1, 1); err != nil {
+		t.Fatalf("insert disk with geometry: %v", err)
+	}
+	fdc.SetDiskSectorError(0, 0, 1, FDCMediaErrorCRC)
+	if err := ram.LoadAt(0x0900, []byte{0xCA, 0xFE, 0xBA, 0xBE}); err != nil {
+		t.Fatalf("seed dma source: %v", err)
+	}
+
+	setupFloppyDMA(t, fdc, 0x0900, 1, 1, true)
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdWrite); err != nil {
+		t.Fatalf("execute write command: %v", err)
+	}
+
+	status, err := fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if byte(status)&fdcStatusCRC == 0 {
+		t.Fatalf("expected CRC status after media error, got %02x", byte(status))
+	}
+	if got := fdc.diskA[:4]; got[0] != 0x11 || got[1] != 0x22 || got[2] != 0x33 || got[3] != 0x44 {
+		t.Fatalf("expected failed write to preserve sector, got % x", got)
+	}
+}
+
+func TestFDCLostDataMediaErrorBlocksMultiSectorRead(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	fdc := NewFDC(ram, nil)
+
+	image := make([]byte, 2*fdcSectorSize)
+	image[0] = 0xAA
+	image[fdcSectorSize] = 0xBB
+	if err := fdc.InsertDiskWithGeometry(image, 2, 1, 1); err != nil {
+		t.Fatalf("insert disk with geometry: %v", err)
+	}
+	fdc.SetDiskSectorError(0, 0, 2, FDCMediaErrorLostData)
+
+	setupFloppyDMA(t, fdc, 0x0A00, 2, 1, false)
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRead|fdcCmdFlagMultiSector); err != nil {
+		t.Fatalf("execute multi-sector read command: %v", err)
+	}
+
+	status, err := fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if byte(status)&fdcStatusLostData == 0 {
+		t.Fatalf("expected lost-data status after media error, got %02x", byte(status))
+	}
+	value, err := ram.Read(cpu.Byte, 0x0A00)
+	if err != nil {
+		t.Fatalf("read dma destination: %v", err)
+	}
+	if byte(value) != 0 {
+		t.Fatalf("expected failed multi-read to avoid partial DMA transfer, got %02x", byte(value))
+	}
+}
+
 func TestFDCAcsiReadAndWriteSectors(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	fdc := NewFDC(ram, nil)
@@ -809,6 +912,38 @@ func TestFDCHardDiskImageReturnsCopy(t *testing.T) {
 
 	if fdc.hardDisk0[0] != 0x12 {
 		t.Fatalf("hard disk image accessor should return a copy")
+	}
+}
+
+func setupFloppyDMA(t *testing.T, fdc *FDC, address uint32, sectorCount uint16, sector byte, write bool) {
+	t.Helper()
+	writeBit := uint32(0)
+	if write {
+		writeBit = dmaWriteBit
+	}
+	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrHigh, address>>16); err != nil {
+		t.Fatalf("write dma addr high: %v", err)
+	}
+	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrMed, address>>8); err != nil {
+		t.Fatalf("write dma addr med: %v", err)
+	}
+	if err := fdc.Write(cpu.Byte, fdcBase+fdcOffsetAddrLow, address); err != nil {
+		t.Fatalf("write dma addr low: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaSCReg|dmaDRQFloppy|writeBit); err != nil {
+		t.Fatalf("select sector-count register: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, uint32(sectorCount)); err != nil {
+		t.Fatalf("write sector count: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaDRQFloppy|dmaA1|writeBit); err != nil {
+		t.Fatalf("select sector register: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, uint32(sector)); err != nil {
+		t.Fatalf("write sector register: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaDRQFloppy|writeBit); err != nil {
+		t.Fatalf("select command register: %v", err)
 	}
 }
 

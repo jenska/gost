@@ -27,12 +27,12 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 ⚠️ **Partially Working:**
 - STE Shifter (screen base addressing improvements added but incomplete)
 - Serial I/O (register-level plumbing, no real UART/modem device)
-- GPIP input simulation (monitor detect, ACIA IRQ, RTC detect; no edge logic yet)
+- GPIP input simulation (monitor detect, ACIA IRQ, RTC detect, DDR, and AER edge detection)
 - Raw-track/copy-protection disk behavior
 
 ❌ **Missing/Incomplete:**
 - True hardware-cycle accurate bus contention
-- Multiple disk formats (ADI/HDI, D64, IMD, raw ST images with bad sectors)
+- Multiple disk formats (D64, IMD, raw ST images with bad sectors)
 - Printer port (Parallel / Centronics)
 - MIDI port
 - Modem/RS-232 device path via MFP UART
@@ -162,12 +162,9 @@ type MFP struct {
   - Impact: Real serial devices won't work; TOS 1.0+ may timeout
   - Complexity: HIGH (requires cycle-accurate UART simulation)
 
-- ❌ **GPIP Interrupt Detection (AER/DDR)**
-  - Current: GPIP register readable; monitor detect, ACIA IRQ, and optional RTC detect are modeled; DDR/AER are still mostly passive
-  - Missing: Edge detection logic for AER transitions
-  - Missing: Proper input/output direction control via DDR
-  - Impact: Edge-triggered hardware probes and GPIO-style use remain incomplete
-  - Complexity: MEDIUM
+- ✅ **GPIP Interrupt Detection (AER/DDR)**
+  - Current: GPIP register readable; monitor detect, ACIA IRQ, and optional RTC detect are modeled with DDR input/output selection and AER-controlled edge interrupts
+  - Remaining: Broader real-software validation around less common GPIP uses
 
 - ❌ **Timer Output Connections**
   - Current: Timers generate interrupts only
@@ -189,7 +186,7 @@ type MFP struct {
 - ✅ Timer counting and interrupts
 - ✅ Basic register reads/writes
 - ❌ Serial I/O sequences
-- ❌ GPIP edge detection
+- ✅ GPIP edge detection
 - ❌ Timer output signals
 
 **Files Affected:**
@@ -215,15 +212,15 @@ type FDC struct {
   - Impact: Copy protection schemes and low-level disk tools still fail
   - Complexity: HIGH
 
-- ❌ **Disk Format Support**
-  - Current: ✅ ST (raw sector) and ✅ MSA (compressed)
-  - Missing: ADI (Atari Disk Image), HDI, D64, IMD, raw with bad sectors
+- ⚠️ **Disk Format Support**
+  - Current: ✅ ST (raw sector), ✅ MSA (compressed), ✅ DIM/compatible headered ADI sector images, and ✅ HDI hard-disk containers
+  - Missing: D64, IMD, raw with bad sectors
   - Impact: Many real disks can't be used
   - Complexity: MEDIUM-HIGH
 
-- ❌ **Error Simulation**
-  - Current: A small set of failure paths exists, but the model is still optimistic overall
-  - Missing: CRC errors, lost data, disk defects, and richer media-specific failures
+- ⚠️ **Error Simulation**
+  - Current: Sector-level media error injection can report RNF, CRC, and lost-data conditions across sector/address/track operations
+  - Missing: Metadata-backed disk defects, richer media-specific failures, and timing-derived lost-data behavior
   - Impact: Error handling code in real software remains under-tested
   - Complexity: HIGH
 
@@ -405,8 +402,8 @@ type PSG struct {
 |--------|------|-------|-------|
 | **.ST (Raw)** | ✅ | ✅ | Standard sector image |
 | **.MSA (Compressed)** | ✅ | ❌ | Decompressed in memory |
-| **.ADI** | ❌ | ❌ | Atari Disk Image |
-| **.HDI** | ❌ | ❌ | Hard Disk Image |
+| **.DIM / compatible .ADI** | ✅ | ❌ | 32-byte headered sector image; compressed payloads rejected |
+| **.HDI** | ✅ | ✅ | Anex86-compatible hard-disk container for `--hd-image` |
 | **.D64** | ❌ | ❌ | Commodore 64 (rarely used on ST) |
 | **.IMD** | ❌ | ❌ | ImageDisk format |
 | **Raw + Bad Sectors** | ❌ | ❌ | Special sector markers |
@@ -460,7 +457,7 @@ internal/emulator/
 | Area | Gap | Impact |
 |------|-----|--------|
 | **Serial Communication** | No UART tests | Can't verify real serial protocols |
-| **Multi-Format Disks** | Only ST/MSA tested | ADI/HDI/etc. unsupported |
+| **Multi-Format Disks** | ST/MSA/DIM-compatible ADI/HDI tested | D64/IMD/raw bad-sector formats unsupported |
 | **Track-Level FDC** | No raw-track fidelity tests | Copy protection and low-level tools remain unverifiable |
 | **Real TOS Images** | Limited testing | TOS 1.0x boot not verified |
 | **Graphics Effects** | No demo tests | Scrolling, mid-frame effects untested |
@@ -477,17 +474,15 @@ internal/emulator/
 **Goal:** Solidify desktop environment and fix critical bugs
 
 #### 1.1 FDC Enhancements
-- **Implement ADI/HDI disk format support**
+- ✅ **ADI/HDI disk format support landed**
   - Files: [internal/emulator/disk_image.go](internal/emulator/disk_image.go)
-  - Effort: 1 week
-  - Impact: Many more real disks become usable
-  - Tests needed: Format detection, decompression, geometry inference
+  - Delivered: DIM/compatible ADI-style headered sector images and HDI hard-disk container load/save support
+  - Tests: Format detection, geometry inference, HDI creation/loading, and header-preserving save
 
-- **Add disk error simulation**
+- ✅ **Disk error simulation landed**
   - Files: [internal/devices/fdc.go](internal/devices/fdc.go)
-  - Effort: 3-4 days
-  - Impact: Real disk utilities can be tested
-  - Tests: Error conditions, retry logic
+  - Delivered: Sector-level RNF/CRC/lost-data injection with DMA failure state and transfer suppression
+  - Tests: Read, write, and multi-sector failure paths
 
 - **Add raw-track / copy-protection-oriented disk representation**
   - Files: [internal/devices/fdc.go](internal/devices/fdc.go#L200-L400)
@@ -510,17 +505,15 @@ internal/emulator/
   - Tests: Base address tracking, render validation
 
 #### 1.3 GPIP Edge Detection (AER/DDR)
-- **Implement data direction register (DDR) enforcement**
+- ✅ **Data direction register (DDR) enforcement landed**
   - Files: [internal/devices/mfp.go](internal/devices/mfp.go#L200-L250)
-  - Effort: 2-3 days
-  - Impact: Hardware detection works properly
-  - Tests: Input/output separation, write rejection
+  - Delivered: GPIP reads now select output latch bits for DDR outputs and emulated external pin state for DDR inputs
+  - Tests: Input/output separation across monitor detect, ACIA IRQ, and ICD RTC detect lines
 
-- **Implement active edge register (AER) triggering**
+- ✅ **Active edge register (AER) triggering landed**
   - Files: [internal/devices/mfp.go](internal/devices/mfp.go)
-  - Effort: 3-4 days
-  - Impact: Interrupt-driven I/O possible
-  - Tests: Edge detection, interrupt firing
+  - Delivered: AER-controlled rising/falling interrupt detection for GPIP input bits with correct MFP channel mapping
+  - Tests: Falling and rising ACIA edges, DDR output suppression, and ICD RTC GPIP5 edge routing
 
 #### 1.4 Documentation & Testing
 - Create test suite for real TOS images (TOS 1.0, 1.02, 1.04)
@@ -532,7 +525,7 @@ internal/emulator/
   - Impact: Users know what works/doesn't
 
 **Completion Criteria:**
-- ✅ 90%+ disk image support (ST, MSA, ADI, HDI)
+- ✅ Disk image support expanded (ST, MSA, DIM/compatible ADI, HDI)
 - ✅ FDC error paths functional
 - ✅ Raw-track/copy-protection improvements validated
 - ✅ Shifter contention affecting CPU timing correctly
@@ -551,13 +544,11 @@ internal/emulator/
 - ✅ **ICD RTC emulation landed**
   - Delivered: ACSI nibble protocol, GPIP bit 5 detection, read/write register behavior, config-gated enablement via `--rtc`
   - Files: [internal/devices/icd_rtc.go](internal/devices/icd_rtc.go), [internal/devices/fdc.go](internal/devices/fdc.go), [internal/devices/mfp.go](internal/devices/mfp.go)
-  - Tests: [internal/devices/icd_rtc_test.go](internal/devices/icd_rtc_test.go), [internal/devices/mfp_test.go](internal/devices/mfp_test.go), [internal/config/config_test.go](internal/config/config_test.go)
+  - Tests: [internal/devices/icd_rtc_test.go](internal/devices/icd_rtc_test.go), [internal/devices/mfp_test.go](internal/devices/mfp_test.go), [internal/config/config_test.go](internal/config/config_test.go), [internal/emulator/machine_test.go](internal/emulator/machine_test.go)
 
-- **Remaining RTC work**
-  - Impact: Broader date/time utility compatibility
-  - Complexity: MEDIUM
-  - Effort: 2-4 days
-  - Focus: Real-software validation with `--rtc`, preset/default policy, and documentation of supported RTC workflows
+- ✅ **RTC closure work completed**
+  - Delivered: Machine-level wiring coverage, JSON/CLI config coverage, host-clock advancement coverage, and README documentation for `--rtc`
+  - Follow-up: Keep broader date/time utility validation in the software compatibility matrix as real test media becomes available
 
 #### 2.2 Parallel/Printer Port
 - **Add printer port device model**
@@ -734,14 +725,14 @@ EmuTOS Desktop (✅ Done)
 │   └── ACIA Ch1 MIDI device path (Phase 2)
 ├── FDC
 │   ├── Raw-track fidelity (Phase 1)
-│   ├── ADI/HDI formats (Phase 1)
+│   ├── ADI/HDI formats (✅ Done)
 │   └── Broader utility compatibility (Phase 2)
 └── PSG audio
     └── STE DMA Sound (Phase 2)
 
 Real TOS Compatibility (Phase 2)
 ├── Serial/modem I/O via MFP UART (Phase 2)
-├── RTC utility validation and preset policy (Phase 2)
+├── Date/time utility compatibility tracking (Phase 2)
 ├── Printer port (Phase 2)
 ├── MIDI device path on ACIA ch.1 (Phase 2)
 └── Hardware detection (GPIP, Phase 1)
@@ -759,15 +750,15 @@ Advanced Software (Phase 3)
 
 ### Phase 1 Completion
 - [ ] Raw-track/copy-protection workflows substantially improved
-- [ ] 5+ disk formats supported
-- [ ] GPIP DDR/AER fully functional
+- [x] ST/MSA/DIM-compatible ADI/HDI disk formats supported
+- [x] GPIP DDR/AER edge detection functional
 - [ ] Shifter contention affecting CPU timing
 - [ ] 5 different TOS versions boot successfully
 - [ ] Test coverage at 85%+
 
 ### Phase 2 Completion
 - [x] Optional ICD RTC emulated and functional
-- [ ] RTC validated with broader utility workflows
+- [x] Optional ICD RTC documented and covered by machine/config/device tests
 - [ ] Serial I/O with real devices possible
 - [ ] 30+ games/utilities tested
 - [ ] STE hardware operational
@@ -825,8 +816,8 @@ Advanced Software (Phase 3)
     [ ] Timer A, B, C, D
     [ ] Interrupt routing
     [ ] GPIP register
-    [ ] GPIP edge detection (AER)
-    [ ] Data direction (DDR)
+    [x] GPIP edge detection (AER)
+    [x] Data direction (DDR)
     [ ] Serial I/O (UART)
 [ ] ACIA
     [ ] Keyboard channel (Ch 0)
@@ -844,10 +835,10 @@ Advanced Software (Phase 3)
     [ ] Type III commands
     [ ] Type IV commands
     [ ] DMA integration
-    [ ] Error reporting
+    [x] Error reporting
     [ ] Write protection
     [ ] Multi-sector operations
-    [ ] Disk formats (ST, MSA, ADI, HDI, etc.)
+    [x] Disk formats (ST, MSA, DIM-compatible ADI, HDI)
 [ ] PSG/YM2149
     [ ] Tone generation
     [ ] Envelope control

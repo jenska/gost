@@ -84,6 +84,14 @@ const (
 	dosMBRSignature                   = 0x55AA
 )
 
+type FDCMediaError byte
+
+const (
+	FDCMediaErrorRecordNotFound FDCMediaError = fdcStatusRNF
+	FDCMediaErrorCRC            FDCMediaError = fdcStatusCRC
+	FDCMediaErrorLostData       FDCMediaError = fdcStatusLostData
+)
+
 // FDC models the ST's DMA + WD1772 register window using sector-based disk
 // images. It supports the full WD1772 command groups (type I/II/III/IV) within
 // that sector-image abstraction.
@@ -112,6 +120,7 @@ type FDC struct {
 	sectorsPerTrack     int
 	sides               int
 	tracks              int
+	diskAErrors         map[fdcSectorKey]byte
 
 	selectedDrive int
 	selectedSide  int
@@ -204,6 +213,7 @@ func (f *FDC) InsertDiskWithGeometry(image []byte, sectorsPerTrack, sides, track
 	f.sectorsPerTrack = sectorsPerTrack
 	f.sides = sides
 	f.tracks = tracks
+	clear(f.diskAErrors)
 	f.status = f.baseStatus()
 	return nil
 }
@@ -211,6 +221,23 @@ func (f *FDC) InsertDiskWithGeometry(image []byte, sectorsPerTrack, sides, track
 func (f *FDC) SetDiskWriteProtected(writeProtected bool) {
 	f.diskAWriteProtected = writeProtected
 	f.status = f.baseStatus()
+}
+
+func (f *FDC) SetDiskSectorError(track, side, sector int, mediaError FDCMediaError) {
+	status := byte(mediaError) & (fdcStatusRNF | fdcStatusCRC | fdcStatusLostData)
+	key := fdcSectorKey{track: track, side: side, sector: sector}
+	if status == 0 {
+		delete(f.diskAErrors, key)
+		return
+	}
+	if f.diskAErrors == nil {
+		f.diskAErrors = make(map[fdcSectorKey]byte)
+	}
+	f.diskAErrors[key] = status
+}
+
+func (f *FDC) ClearDiskSectorErrors() {
+	clear(f.diskAErrors)
 }
 
 func (f *FDC) SetHardDiskImage(image []byte) error {
@@ -795,6 +822,9 @@ func (f *FDC) execReadSectors(cmd byte) error {
 
 	buffer := make([]byte, 0, count*fdcSectorSize)
 	for i := range count {
+		if status := f.diskSectorError(int(f.track), f.selectedSide, baseSector+i); status != 0 {
+			return f.failTypeIIStatus(status)
+		}
 		offset, ok := f.diskOffset(int(f.track), baseSector+i)
 		if !ok {
 			return f.failTypeIIStatus(fdcStatusRNF)
@@ -838,6 +868,9 @@ func (f *FDC) execWriteSectors(cmd byte) error {
 		}
 	}
 	for i := range count {
+		if status := f.diskSectorError(int(f.track), f.selectedSide, baseSector+i); status != 0 {
+			return f.failTypeIIStatus(status)
+		}
 		offset, ok := f.diskOffset(int(f.track), baseSector+i)
 		if !ok {
 			return f.failTypeIIStatus(fdcStatusRNF)
@@ -864,6 +897,9 @@ func (f *FDC) execReadAddress() error {
 	sector := int(f.sector)
 	if sector <= 0 || sector > f.sectorsPerTrack {
 		return f.failTypeIIStatus(fdcStatusRNF)
+	}
+	if status := f.diskSectorError(int(f.track), f.selectedSide, sector); status != 0 {
+		return f.failTypeIIStatus(status)
 	}
 
 	// ID field: track, side, sector, N (512 => N=2), CRC bytes.
@@ -895,6 +931,9 @@ func (f *FDC) execReadTrack() error {
 
 	trackData := make([]byte, 0, f.sectorsPerTrack*fdcSectorSize)
 	for sector := 1; sector <= f.sectorsPerTrack; sector++ {
+		if status := f.diskSectorError(int(f.track), f.selectedSide, sector); status != 0 {
+			return f.failTypeIIStatus(status)
+		}
 		offset, ok := f.diskOffset(int(f.track), sector)
 		if !ok {
 			return f.failTypeIIStatus(fdcStatusRNF)
@@ -929,6 +968,9 @@ func (f *FDC) execWriteTrack() error {
 		}
 	}
 	for sector := 1; sector <= f.sectorsPerTrack; sector++ {
+		if status := f.diskSectorError(int(f.track), f.selectedSide, sector); status != 0 {
+			return f.failTypeIIStatus(status)
+		}
 		offset, ok := f.diskOffset(int(f.track), sector)
 		if !ok {
 			return f.failTypeIIStatus(fdcStatusRNF)
@@ -1047,6 +1089,19 @@ func (f *FDC) diskOffset(track, sector int) (int, bool) {
 		return 0, false
 	}
 	return offset, true
+}
+
+type fdcSectorKey struct {
+	track  int
+	side   int
+	sector int
+}
+
+func (f *FDC) diskSectorError(track, side, sector int) byte {
+	if len(f.diskAErrors) == 0 {
+		return 0
+	}
+	return f.diskAErrors[fdcSectorKey{track: track, side: side, sector: sector}]
 }
 
 func (f *FDC) trackInRange(track int) bool {

@@ -7,6 +7,7 @@ import (
 )
 
 const msaMagic = 0x0E0F
+const dimHeaderSize = 32
 
 type DiskGeometry struct {
 	SectorsPerTrack int
@@ -33,6 +34,9 @@ func LoadDiskImage(path string) (*DiskImage, error) {
 		return nil, err
 	}
 	if !looksLikeMSA(data) {
+		if looksLikeDIM(data) {
+			return decodeDIM(data)
+		}
 		return NewDiskImage(data), nil
 	}
 	return decodeMSA(data)
@@ -40,6 +44,48 @@ func LoadDiskImage(path string) (*DiskImage, error) {
 
 func looksLikeMSA(data []byte) bool {
 	return len(data) >= 10 && binary.BigEndian.Uint16(data[:2]) == msaMagic
+}
+
+func looksLikeDIM(data []byte) bool {
+	return len(data) >= dimHeaderSize &&
+		data[0] == 0x42 &&
+		data[1] == 0x42 &&
+		data[3] <= 1 &&
+		data[6] <= 1 &&
+		data[8] > 0 &&
+		data[0x0A] == 0
+}
+
+func decodeDIM(data []byte) (*DiskImage, error) {
+	if len(data) < dimHeaderSize {
+		return nil, fmt.Errorf("DIM image too short")
+	}
+	if data[3] != 0 {
+		return nil, fmt.Errorf("compressed DIM images are not supported")
+	}
+
+	sectorsPerTrack := int(data[8])
+	sides := int(data[6]) + 1
+	startTrack := int(data[0x0A])
+	endTrack := int(data[0x0C])
+	if sectorsPerTrack <= 0 || sides <= 0 || endTrack < startTrack {
+		return nil, fmt.Errorf("invalid DIM header")
+	}
+
+	payload := data[dimHeaderSize:]
+	expected := (endTrack - startTrack + 1) * sides * sectorsPerTrack * 512
+	if len(payload) != expected {
+		return nil, fmt.Errorf("DIM payload has %d bytes, want %d", len(payload), expected)
+	}
+
+	return &DiskImage{
+		Data: append([]byte(nil), payload...),
+		Geometry: DiskGeometry{
+			SectorsPerTrack: sectorsPerTrack,
+			Sides:           sides,
+			Tracks:          endTrack - startTrack + 1,
+		},
+	}, nil
 }
 
 func decodeMSA(data []byte) (*DiskImage, error) {

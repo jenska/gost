@@ -42,8 +42,9 @@ Current focus:
 - YM2149-backed PSG sound with live audio playback in the desktop frontend
 - Atari ST Blitter register model exercised by live GEM/VDI boot
 - MFP timer and interrupt delivery
-- Floppy DMA/FDC path with `.st` and `.msa` image support
+- Floppy DMA/FDC path with `.st`, `.msa`, `.dim`, and compatible headered `.adi` image support
 - Virtual ACSI hard disk (30 MiB default) that enumerates as C: under bundled EmuTOS
+- Optional ICD-compatible ACSI real-time clock
 - Desktop frontend via Ebitengine
 - Headless execution with PNG framebuffer dumping
 - CPU, boot, and verbose tracing for bring-up and debugging
@@ -174,6 +175,12 @@ make run ARGS="--floppy-a /path/to/disk.msa"
 go run ./cmd/gost --floppy-a /path/to/disk.msa
 ```
 
+Enable the optional ICD-compatible ACSI real-time clock:
+
+```bash
+go run ./cmd/gost --rtc
+```
+
 Override the bundled OS:
 
 ```bash
@@ -193,6 +200,7 @@ Example JSON config:
   "preset": "mega-st",
   "floppy-a": "/path/to/disk.msa",
   "hd-size-mb": 0,
+  "rtc": true,
   "cpu-mhz": 8,
   "color-monitor": false,
   "trace-start": "0xE00000",
@@ -241,11 +249,12 @@ Current browser-build limitations:
 - `--config <path>`: optional JSON config file loaded before CLI overrides
 - `--preset <name>`: machine preset, currently `default`, `stf`, `st`, or `mega-st`
 - `--rom <path>`: path to the TOS ROM image
-- `--floppy-a <path>`: optional floppy disk image for drive A (`.st` or `.msa`)
+- `--floppy-a <path>`: optional floppy disk image for drive A (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
 - `--ram-size <bytes>`: emulated RAM size in bytes
 - `--clock-hz <n>`: base machine clock frequency in Hz
 - `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
-- `--hd-image <path>`: optional persistent ACSI hard disk image file; loads if present, otherwise creates from `--hd-size-mb`
+- `--hd-image <path>`: optional persistent ACSI hard disk image file; raw sector images and `.hdi` containers are supported
+- `--rtc`: enable the optional ICD-compatible ACSI real-time clock
 - `--cpu-mhz <n>`: CPU frequency in MHz (default `8`); increases/decreases CPU speed without changing other hardware timing
 - `--frame-hz <n>`: display and VBL refresh rate in Hz; frame timing is derived from `clock-hz / frame-hz`
 - `--scale <n>`: window scale factor, default `1`
@@ -328,7 +337,8 @@ This preserves deterministic emulation while creating room for asynchronous fram
 - Interrupts are routed into the CPU through the machine layer.
 - The floppy controller now covers WD1772 command groups (type I/II/III/IV) over sector images, including seek/step commands, sector and track DMA reads/writes, and read-address support.
 - A virtual ACSI hard disk is attached by default with 30 MiB capacity.
-- Use `--hd-image` to persist hard-disk contents across emulator restarts.
+- Use `--hd-image` to persist hard-disk contents across emulator restarts; `.hdi` files are stored with an Anex86-compatible header.
+- Use `--rtc` to attach the ICD-compatible ACSI real-time clock backed by the host system clock.
 
 ## Known Gaps
 
