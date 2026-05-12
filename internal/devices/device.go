@@ -6,25 +6,37 @@ import (
 	cpu "github.com/jenska/m68kemu"
 )
 
-// Interrupt models a pending CPU interrupt coming from a device.
+// Interrupt models a pending CPU interrupt from a device to the CPU.
 type Interrupt struct {
-	Level  uint8
+	// Level is the interrupt priority level (1-7).
+	Level uint8
+	// Vector is a pointer to the exception vector address if applicable, nil for autovector.
 	Vector *uint8
 }
 
-// Clocked devices advance with emulated CPU cycles.
+// Clocked represents a device that advances its internal state with CPU cycles.
+// Devices implementing this interface will have their Advance method called
+// during each emulation frame to progress their operation.
 type Clocked interface {
+	// Advance progresses the device state by the specified number of CPU cycles.
 	Advance(cycles uint64)
 }
 
-// EventPredictor reports the next clock boundary at which a device's visible
-// state may change.
+// EventPredictor reports timing information for device state changes.
+// This allows the machine to optimize its execution by predicting when
+// devices will require service, rather than checking every cycle.
 type EventPredictor interface {
+	// NextEventCycles returns the number of CPU cycles until the next event
+	// and a boolean indicating whether a prediction is available (true) or
+	// no immediate events are predicted (false).
 	NextEventCycles() (uint64, bool)
 }
 
-// InterruptSource exposes pending interrupts to the machine.
+// InterruptSource exposes pending interrupts from a device to the CPU via
+// the interrupt controller.
 type InterruptSource interface {
+	// DrainInterrupts returns all pending interrupts and clears the device's
+	// interrupt queue. Interrupts are returned in priority order.
 	DrainInterrupts() []Interrupt
 }
 

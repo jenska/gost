@@ -11,10 +11,34 @@ import (
 	cpu "github.com/jenska/m68kemu"
 )
 
+// AudioSource provides audio samples from the emulated machine.
 type AudioSource interface {
+	// DrainMonoF32 fills the provided buffer with mono audio samples at the
+	// machine's configured sample rate, returning the number of samples written.
 	DrainMonoF32([]float32) int
+	// OutputSampleRate returns the sample rate in Hz for audio output.
 	OutputSampleRate() int
 }
+
+// TraceMode defines the available trace modes for debugging.
+type TraceMode string
+
+const (
+	// TraceModeNone disables tracing.
+	TraceModeNone TraceMode = ""
+	// TraceModeSimple outputs basic CPU trace: pc, sr, cycles.
+	TraceModeSimple TraceMode = "cpu"
+	// TraceModeSimpleVerbose outputs detailed CPU trace with registers.
+	TraceModeSimpleVerbose TraceMode = "cpu-verbose"
+	// TraceModeBootSimple traces bus accesses during early boot.
+	TraceModeBootSimple TraceMode = "boot"
+	// TraceModeBootVerbose traces bus accesses and CPU state during boot.
+	TraceModeBootVerbose TraceMode = "boot-verbose"
+	// TraceModeShifterSimple traces shifter frame operations.
+	TraceModeShifterSimple TraceMode = "shifter"
+	// TraceModeShifterVerbose traces shifter frame operations with detailed stats.
+	TraceModeShifterVerbose TraceMode = "shifter-verbose"
+)
 
 const (
 	defaultROMHighAlias = 0xFC0000
@@ -24,31 +48,43 @@ const (
 	guestMouseYAddr     = 0x001E6E
 )
 
-var bootTraceAddresses = []uint32{
-	0x000008,
-	0x000010,
-	0x00002C,
-	0x000420,
-	0x000424,
-	0x000426,
-	0x00042E,
-	0x00043A,
-	0x00051A,
-	0x0005A4,
-	0x0005A8,
-	0x200008,
-	0x200010,
-	0xFF8001,
-	0xFF8006,
-	0xFF8201,
-	0xFF8203,
-	0xFF8240,
-	0xFF8260,
-	0xFF820D,
-	0xFF8901,
-	0xFFFA01,
-	0xFA0000,
-	0xFA0004,
+// bootTraceAddressSet contains 24-bit addresses to trace during boot.
+// These are critical memory locations where bus activity is monitored.
+var bootTraceAddressSet = initBootTraceAddressSet()
+
+// initBootTraceAddressSet creates a map of boot trace addresses for O(1) lookup.
+func initBootTraceAddressSet() map[uint32]bool {
+	addrs := []uint32{
+		0x000008, // Exception vectors
+		0x000010,
+		0x00002C,
+		0x000420, // System variables
+		0x000424,
+		0x000426,
+		0x00042E,
+		0x00043A,
+		0x00051A,
+		0x0005A4,
+		0x0005A8,
+		0x200008, // Boot ROM locations
+		0x200010,
+		0xFF8001, // Hardware registers
+		0xFF8006,
+		0xFF8201,
+		0xFF8203,
+		0xFF8240,
+		0xFF8260,
+		0xFF820D,
+		0xFF8901,
+		0xFFFA01,
+		0xFA0000, // Probe region
+		0xFA0004,
+	}
+	set := make(map[uint32]bool, len(addrs))
+	for _, addr := range addrs {
+		set[addr&0xFFFFFF] = true
+	}
+	return set
 }
 
 type Machine struct {
@@ -169,6 +205,8 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 	return machine, nil
 }
 
+// EnableTrace activates a trace mode and sets the output writer.
+// Mode must be one of the TraceMode constants.
 func (m *Machine) EnableTrace(mode string, writer io.Writer) {
 	m.cfg.Trace = mode
 	if writer == nil {
@@ -180,32 +218,34 @@ func (m *Machine) EnableTrace(mode string, writer io.Writer) {
 	m.cpu.SetExceptionTracer(nil)
 	m.shifter.SetDebug(false)
 
-	switch mode {
-	case "cpu":
+	tm := TraceMode(mode)
+	switch tm {
+	case TraceModeSimple:
 		m.cpu.SetTracer(func(info cpu.TraceInfo) {
 			fmt.Fprintf(m.traceWriter, "pc=%06x sr=%04x cycles=%d\n", info.PC, info.SR, m.cpu.Cycles())
 		})
-	case "cpu-verbose":
+	case TraceModeSimpleVerbose:
 		logger := cpu.NewVerboseLogger(m.cpu, m.bus, m.traceWriter, cpu.VerboseLoggerOptions{
 			IncludeCycles: true,
 		})
 		m.cpu.SetTracer(logger.Trace)
-	case "boot":
+	case TraceModeBootSimple:
 		m.enableBootTrace(false)
-	case "boot-verbose":
+	case TraceModeBootVerbose:
 		m.enableBootTrace(true)
-	case "shifter", "shifter-verbose":
+	case TraceModeShifterSimple, TraceModeShifterVerbose:
 		m.shifter.SetDebug(true)
 	default:
 		m.cpu.SetTracer(nil)
 	}
 }
 
+// enableBootTrace sets up tracing for the early boot sequence, monitoring
+// bus accesses to critical memory addresses.
 func (m *Machine) enableBootTrace(verbose bool) {
-	// TODO cleanup this mess of trace modes and boot trace addresses
 	m.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
 		address := info.Address & 0xFFFFFF
-		if info.InstructionFetch || !isBootTraceAddress(address) {
+		if info.InstructionFetch || !bootTraceAddressSet[address] {
 			return
 		}
 		regs := m.cpu.Registers()
@@ -275,14 +315,9 @@ func (m *Machine) tracePCInRange(pc uint32) bool {
 	return pc >= start && pc <= end
 }
 
+// isBootTraceAddress checks if an address should be monitored during boot tracing.
 func isBootTraceAddress(address uint32) bool {
-	address &= 0xFFFFFF
-	for _, candidate := range bootTraceAddresses {
-		if candidate == address {
-			return true
-		}
-	}
-	return false
+	return bootTraceAddressSet[address&0xFFFFFF]
 }
 
 func traceAccessKind(write bool) string {
@@ -358,18 +393,18 @@ func (m *Machine) StepFrame() (bool, error) {
 
 	m.frameCounter++
 	rendered := m.shifter.EndFrame()
-	if m.cfg.Trace == "shifter" || m.cfg.Trace == "shifter-verbose" {
+	if m.cfg.Trace == string(TraceModeShifterSimple) || m.cfg.Trace == string(TraceModeShifterVerbose) {
 		m.traceShifterFrame(rendered)
 	}
 	return rendered, nil
 }
 
+// traceShifterFrame logs detailed statistics about shifter frame rendering.
 func (m *Machine) traceShifterFrame(rendered bool) {
 	stats := m.shifter.DebugStats()
 	displayW, displayH := m.shifter.DisplayDimensions()
 	viewportX, viewportY, viewportW, viewportH := m.shifter.DisplayViewport()
-	// TODO cleanup this mess of trace modes and stats
-	if m.cfg.Trace == "shifter-verbose" {
+	if m.cfg.Trace == string(TraceModeShifterVerbose) {
 		fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t size=%dx%d display=%dx%d viewport=%d,%d,%d,%d base=%06x vaddr=%06x frame_pos=%d/%d render_ns=%d pixels=%d blank=%d words=%d faults=%d waits=%d totals{render_ns=%d pixels=%d blank=%d words=%d faults=%d waits=%d}\n",
 			m.frameCounter,
 			rendered,

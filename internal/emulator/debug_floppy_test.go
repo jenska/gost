@@ -1,5 +1,4 @@
 //go:build debugtests
-// +build debugtests
 
 package emulator
 

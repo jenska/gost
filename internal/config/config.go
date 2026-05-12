@@ -90,27 +90,48 @@ var presetDefinitions = []PresetDefinition{
 	},
 }
 
+// Config holds all configuration parameters for the Atari ST emulation.
 type Config struct {
-	Preset            Preset
-	ROMPath           string
-	FloppyA           string
-	HardDiskSizeMB    uint32
+	// Preset is the initial configuration preset to load (default, stf, st, mega-st).
+	Preset Preset
+	// ROMPath is the path to a custom TOS ROM file; if empty, uses bundled EmuTOS.
+	ROMPath string
+	// FloppyA is the path to a disk image to insert into floppy drive A.
+	FloppyA string
+	// HardDiskSizeMB is the virtual hard disk size in megabytes (0 disables hard disk).
+	HardDiskSizeMB uint32
+	// HardDiskImagePath is the file path for persistent virtual hard disk storage.
 	HardDiskImagePath string
-	Scale             float64
-	Fullscreen        bool
-	Headless          bool
-	Frames            int
-	DumpFramePath     string
-	Trace             string
-	TraceStart        uint32
-	TraceEnd          uint32
-	RAMSize           uint32
-	ClockHz           uint64
-	CPUClockHz        uint64
-	FrameHz           uint64
-	ColorMonitor      bool
-	MidResYScale      int
-	Model             MachineModel
+	// Scale is the UI scaling factor for the display window.
+	Scale float64
+	// Fullscreen enables fullscreen display mode.
+	Fullscreen bool
+	// Headless enables headless execution mode (no UI window).
+	Headless bool
+	// Frames specifies how many frames to run in headless mode before exit.
+	Frames int
+	// DumpFramePath is the output path for frame dumps (PNG format).
+	DumpFramePath string
+	// Trace specifies the trace mode: "cpu", "cpu-verbose", "boot", "boot-verbose", "shifter", "shifter-verbose".
+	Trace string
+	// TraceStart is the CPU address where detailed tracing begins.
+	TraceStart uint32
+	// TraceEnd is the CPU address where detailed tracing ends.
+	TraceEnd uint32
+	// RAMSize is the emulated machine RAM size in bytes.
+	RAMSize uint32
+	// ClockHz is the emulated system clock frequency in Hz.
+	ClockHz uint64
+	// CPUClockHz is the emulated CPU clock frequency in Hz.
+	CPUClockHz uint64
+	// FrameHz is the emulated display refresh rate in Hz (typically 50 or 60).
+	FrameHz uint64
+	// ColorMonitor enables color monitor mode; false uses monochrome mode.
+	ColorMonitor bool
+	// MidResYScale applies Y-axis pixel doubling for medium resolution mode.
+	MidResYScale int
+	// Model specifies the machine type: st or ste.
+	Model MachineModel
 }
 
 type configPatch map[string]json.RawMessage
