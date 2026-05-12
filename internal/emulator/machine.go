@@ -147,6 +147,11 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 	mfp := devices.NewMFP(cfg)
 	acia := devices.NewACIA(mfp.SetACIAInterrupt)
 	fdc := devices.NewFDC(ram, nil)
+	if cfg.RTC {
+		rtc := devices.NewICDRTC()
+		mfp.AttachICDRTC(rtc)
+		fdc.AttachICDRTC(rtc)
+	}
 	if cfg.HardDiskSizeMB > 0 {
 		sizeBytes := cfg.HardDiskSizeMB * 1024 * 1024
 		if err := fdc.CreateVirtualHardDisk(sizeBytes); err != nil {

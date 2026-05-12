@@ -156,4 +156,17 @@ func TestConfigForPresetMegaST(t *testing.T) {
 	if cfg.Model != MachineModelST {
 		t.Fatalf("unexpected model: got %q want %q", cfg.Model, MachineModelST)
 	}
+	if cfg.RTC {
+		t.Fatalf("expected Mega ST preset to keep optional RTC disabled by default")
+	}
+}
+
+func TestLoadCanEnableRTCFlag(t *testing.T) {
+	cfg, err := Load([]string{"--rtc"})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.RTC {
+		t.Fatalf("expected --rtc to enable ICD RTC support")
+	}
 }

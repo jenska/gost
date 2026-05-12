@@ -128,6 +128,7 @@ type FDC struct {
 	acsiCmdLen              int
 	acsiExpectedLen         int
 	acsiLastNotNewCDB       bool
+	rtc                     *ICDRTC
 }
 
 func NewFDC(ram *RAM, irq func(bool)) *FDC {
@@ -165,6 +166,9 @@ func (f *FDC) Reset() {
 	f.acsiCmdLen = 0
 	f.acsiExpectedLen = 0
 	f.acsiLastNotNewCDB = false
+	if f.rtc != nil {
+		f.rtc.Reset()
+	}
 	f.status = f.baseStatus()
 	if f.irq != nil {
 		f.irq(false)
@@ -232,6 +236,10 @@ func (f *FDC) CreateVirtualHardDisk(sizeBytes uint32) error {
 
 func (f *FDC) SetHardDiskWriteProtected(writeProtected bool) {
 	f.hardDisk0WriteProtected = writeProtected
+}
+
+func (f *FDC) AttachICDRTC(rtc *ICDRTC) {
+	f.rtc = rtc
 }
 
 func (f *FDC) HardDiskSizeBytes() int {
@@ -559,6 +567,9 @@ func (f *FDC) currentDataWord() uint16 {
 }
 
 func (f *FDC) currentACSIDataWord() uint16 {
+	if f.rtc != nil && f.rtc.Active() {
+		return f.rtc.ReadDataWord()
+	}
 	if f.irq != nil {
 		f.irq(false)
 	}
@@ -592,6 +603,13 @@ func (f *FDC) writeDataWord(value uint16) error {
 }
 
 func (f *FDC) writeACSIDataWord(value uint16) error {
+	if f.rtc != nil && f.rtc.HandleCommand(byte(value)) {
+		f.acsiCmdLen = 0
+		f.acsiExpectedLen = 0
+		f.acsiLastNotNewCDB = false
+		return nil
+	}
+
 	notNewCDB := f.control&dmaA0 != 0 // DMA_NOT_NEWCDB in ACSI mode
 	if !notNewCDB && f.acsiLastNotNewCDB && f.acsiCmdLen > 0 {
 		// The host asserted "new CDB" while we still had buffered bytes.

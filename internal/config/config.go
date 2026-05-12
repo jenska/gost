@@ -67,6 +67,7 @@ const (
 	KeyCPUClockHz     = "cpu-clock-hz"
 	KeyFrameHz        = "frame-hz"
 	KeyColorMonitor   = "color-monitor"
+	KeyRTC            = "rtc"
 	KeyMidResYScale   = "midres-y-scale"
 	KeyModel          = "model"
 )
@@ -128,6 +129,8 @@ type Config struct {
 	FrameHz uint64
 	// ColorMonitor enables color monitor mode; false uses monochrome mode.
 	ColorMonitor bool
+	// RTC enables the ICD-compatible ACSI real-time clock.
+	RTC bool
 	// MidResYScale applies Y-axis pixel doubling for medium resolution mode.
 	MidResYScale int
 	// Model specifies the machine type: st or ste.
@@ -234,6 +237,7 @@ func ConfigForPreset(preset Preset) (*Config, error) {
 	cfg.FrameHz = DefaultFrameHz
 	cfg.HardDiskSizeMB = DefaultHardDiskSizeMB
 	cfg.ColorMonitor = false
+	cfg.RTC = false
 	cfg.MidResYScale = 2
 	cfg.Model = MachineModelST
 
@@ -439,6 +443,10 @@ func (p configPatch) Apply(cfg *Config) error {
 			if err := decodeJSON(raw, &cfg.ColorMonitor); err != nil {
 				return fmt.Errorf("decode %q: %w", key, err)
 			}
+		case KeyRTC:
+			if err := decodeJSON(raw, &cfg.RTC); err != nil {
+				return fmt.Errorf("decode %q: %w", key, err)
+			}
 		case KeyMidResYScale:
 			if err := decodeJSON(raw, &cfg.MidResYScale); err != nil {
 				return fmt.Errorf("decode %q: %w", key, err)
@@ -505,6 +513,7 @@ func parseFlags(cfg *Config, args []string) error {
 	fs.Var(mhzFlag{target: &cfg.CPUClockHz}, KeyCPUMHz, "CPU frequency in MHz (hardware timing remains unchanged)")
 	fs.Uint64Var(&cfg.FrameHz, KeyFrameHz, cfg.FrameHz, "frames per second for display and VBL timing")
 	fs.BoolVar(&cfg.ColorMonitor, KeyColorMonitor, cfg.ColorMonitor, "emulate an Atari color monitor instead of monochrome")
+	fs.BoolVar(&cfg.RTC, KeyRTC, cfg.RTC, "enable the ICD-compatible ACSI real-time clock")
 	fs.IntVar(&cfg.MidResYScale, KeyMidResYScale, cfg.MidResYScale, "vertical host scaling for medium resolution (>=1)")
 	fs.StringVar(&model, KeyModel, model, "machine model: st|ste")
 

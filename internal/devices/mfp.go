@@ -55,6 +55,7 @@ type MFP struct {
 	softwareEOI    bool
 	inFlight       [16]bool
 	aciaIRQActive  bool
+	rtc            *ICDRTC
 	timers         [4]mfpTimer
 	serialBuffer   byte
 	clockRemainder uint64
@@ -332,6 +333,10 @@ func (m *MFP) SetACIAInterrupt(asserted bool) {
 	}
 }
 
+func (m *MFP) AttachICDRTC(rtc *ICDRTC) {
+	m.rtc = rtc
+}
+
 func (m *MFP) gpipState() byte {
 	value := m.registers[mfpGPIP]
 	if m.cfg.ColorMonitor {
@@ -343,6 +348,11 @@ func (m *MFP) gpipState() byte {
 		value &^= 0x10
 	} else {
 		value |= 0x10
+	}
+	if m.rtc != nil && m.rtc.Active() {
+		value &^= 0x20
+	} else {
+		value |= 0x20
 	}
 	return value
 }

@@ -15,27 +15,27 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 - Basic Shifter (ST & STE models)
 - MFP timers and interrupt delivery
 - IKBD/ACIA keyboard & mouse
+- Optional ICD-compatible RTC over ACSI/GPIP
 - Blitter (immediate execution model)
 - PSG/YM2149 audio (YM2149 library)
-- Floppy DMA/FDC (sector-based, ST/MSA images)
-- Virtual ACSI hard disk (FAT16)
+- Floppy DMA/FDC (sector-image abstraction with WD1772 type I/II/III/IV coverage)
+- Virtual ACSI hard disk (FAT16, core command coverage)
 - VBL interrupts
 - ROM overlay boot
 - EmuTOS 1.4 boot to desktop
 
 ⚠️ **Partially Working:**
 - STE Shifter (screen base addressing improvements added but incomplete)
-- Serial I/O (handshaking stubs, no real UART)
-- GPIP input simulation (monitor detect, limited)
-- FDC command set (basic subset only)
+- Serial I/O (register-level plumbing, no real UART/modem device)
+- GPIP input simulation (monitor detect, ACIA IRQ, RTC detect; no edge logic yet)
+- Raw-track/copy-protection disk behavior
 
 ❌ **Missing/Incomplete:**
 - True hardware-cycle accurate bus contention
 - Multiple disk formats (ADI/HDI, D64, IMD, raw ST images with bad sectors)
-- Real-time clock (RTC) emulation
 - Printer port (Parallel / Centronics)
 - MIDI port
-- Modem port (second ACIA channel)
+- Modem/RS-232 device path via MFP UART
 - STE DMA sound
 - STE/Mega ST extended hardware
 - Cartridge ROM support
@@ -53,13 +53,14 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 | M68000 CPU | ✅ Complete | m68kemu (external) | Via github.com/jenska/m68kemu |
 | RAM | ✅ Complete | internal/devices/ram.go | 512K-2MB support |
 | ROM | ✅ Complete | internal/devices/rom.go | 256K/512K images |
-| Shifter (ST) | ⚠️ Partial | internal/devices/shifter_st.go | Low/Medium/High res, palette |
-| Shifter (STE) | ⚠️ Partial | internal/devices/shifter_ste.go | Missing line offset, fine scroll details |
+| Shifter (ST) | ⚠️ Partial | internal/devices/shifter_st.go | Low/Medium/High res, palette, partial contention/blanking model |
+| Shifter (STE) | ⚠️ Partial | internal/devices/shifter_ste.go | Line offset, fine scroll, and STE palette coverage exist; timing and dynamic edge cases remain |
 | Blitter | ✅ Functional | internal/devices/blitter.go | Immediate execution, no cycle timing |
 | MFP 68901 | ⚠️ Partial | internal/devices/mfp.go | Timers, basic GPIP, no serial I/O details |
-| ACIA | ✅ Basic | internal/devices/acia.go | IKBD channel only (channel 1 not used) |
+| ACIA | ✅ Basic | internal/devices/acia.go | Keyboard/IKBD path active; second register channel modeled but no external MIDI device |
 | IKBD | ✅ Basic | internal/devices/ikbd.go | Keyboard, mouse, clock queries |
-| FDC WD1772 | ⚠️ Partial | internal/devices/fdc.go | Basic commands, sector-based only |
+| ICD RTC | ✅ Optional | internal/devices/icd_rtc.go | ACSI nibble protocol, GPIP bit 5 detection, system-time backed |
+| FDC WD1772 | ⚠️ Partial | internal/devices/fdc.go | WD1772 type I/II/III/IV over sector-image abstraction; raw-track fidelity and format breadth still limited |
 | PSG/YM2149 | ✅ Functional | internal/devices/psg.go | Via ym2149 library, audio output |
 | VBL Source | ✅ Complete | internal/devices/vbl.go | 50 Hz autovector |
 | GLUE | ⚠️ Stub | internal/devices/glue.go | Minimal register model |
@@ -69,10 +70,9 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 
 | Device | Category | Impact | Complexity |
 |--------|----------|--------|-----------|
-| **Real-Time Clock (RTC)** | System | Medium | HIGH - Requires time tracking, GPIP integration |
 | **Parallel/Printer Port** | I/O | Low-Medium | MEDIUM - Device model + interrupt integration |
 | **MIDI Port** | I/O | Low | MEDIUM - Basic serial protocol, no timing |
-| **Modem Port (ACIA Ch. 1)** | I/O | Low | MEDIUM - Second ACIA channel implementation |
+| **Modem Port (MFP UART)** | I/O | Low | HIGH - Full UART timing and line behavior |
 | **STE DMA Sound** | Audio | High (STE) | HIGH - Complex timing, DMA integration |
 | **Mega ST Extended Memory** | Memory | Medium (Mega) | MEDIUM - Bank switching, dual MFP |
 | **Cartridge ROM** | Memory | Low | LOW - Simple address mapping |
@@ -101,19 +101,19 @@ type Shifter struct {
 
 **Missing/Incomplete:**
 - ❌ Bus contention modeling (shifter steals cycles from CPU)
-  - Current: Simplified model
-  - Required: Accurate DMA slot timing per scanline
+  - Current: Coarse wait-state and fetch-window model exists
+  - Required: More accurate DMA slot timing per scanline
   - Impact: Graphics glitches in software with tight timing
   
-- ❌ Line-to-line screen base changes
-  - Current: Uses base address from start of frame
-  - Required: Per-scanline base address updates (STE supports this)
+- ❌ Line-to-line / dynamically-updated screen base changes
+  - Current: Per-frame base handling is covered and STE low-address support exists
+  - Required: Per-scanline and more dynamic base-address updates
   - Impact: Mid-screen scrolling effects fail
   
 - ⚠️ Fine scroll (ST) / Horizontal scroll (STE)
-  - Current: STE fine scroll partially implemented
-  - Missing: Precise pixel-level shifting in rendering
-  - Impact: Smooth scrolling demos show artifacts
+  - Current: STE fine scroll, line offset, and extended palette paths are implemented and tested
+  - Missing: Tighter timing fidelity and more dynamic raster edge cases
+  - Impact: Smooth scrolling demos can still show artifacts
   
 - ❌ Sync/blank timing precision
   - Current: Coarse 8-way horizontal split
@@ -132,8 +132,10 @@ type Shifter struct {
 - ✅ Basic framebuffer generation
 - ✅ Palette manipulation
 - ✅ Screen base changes per frame
+- ✅ Mid-frame palette/blanking behaviors
+- ✅ RAM-contention wait-state coverage
 - ❌ Mid-frame base changes
-- ❌ Bus contention timing effects
+- ❌ Cycle-precise contention/timing validation
 
 **Files Affected:**
 - [internal/devices/shifter.go](internal/devices/shifter.go#L1-L50)
@@ -161,10 +163,10 @@ type MFP struct {
   - Complexity: HIGH (requires cycle-accurate UART simulation)
 
 - ❌ **GPIP Interrupt Detection (AER/DDR)**
-  - Current: GPIP register readable, DDR/AER stored but not used
+  - Current: GPIP register readable; monitor detect, ACIA IRQ, and optional RTC detect are modeled; DDR/AER are still mostly passive
   - Missing: Edge detection logic for AER transitions
   - Missing: Proper input/output direction control via DDR
-  - Impact: Hardware detection (RTC, cartridge) may fail
+  - Impact: Edge-triggered hardware probes and GPIO-style use remain incomplete
   - Complexity: MEDIUM
 
 - ❌ **Timer Output Connections**
@@ -198,7 +200,7 @@ type MFP struct {
 
 **Current Implementation:**
 ```go
-// fdc.go - Sector-based, command subset
+// fdc.go - Sector-image abstraction with WD1772 + ACSI support
 type FDC struct {
     diskA        []byte      // Sector-based disk image
     status, track, sector, data byte
@@ -207,11 +209,10 @@ type FDC struct {
 ```
 
 **Missing/Incomplete:**
-- ❌ **Track-Level Commands**
-  - Current: Type I commands (Restore, Seek, Step) work at track level
-  - Missing: Type IV (Read Track, Write Track, Force Interrupt)
-  - Missing: Raw track data handling (non-sector-based)
-  - Impact: Copy protection schemes, low-level disk tools fail
+- ❌ **Raw Track Fidelity / Copy-Protection Formats**
+  - Current: WD1772 type I/II/III/IV commands are implemented over a sector-image abstraction
+  - Missing: Flux/raw-track encoding, weak bits, bad-sector patterns, and non-sector metadata fidelity
+  - Impact: Copy protection schemes and low-level disk tools still fail
   - Complexity: HIGH
 
 - ❌ **Disk Format Support**
@@ -221,15 +222,15 @@ type FDC struct {
   - Complexity: MEDIUM-HIGH
 
 - ❌ **Error Simulation**
-  - Current: Always succeeds or returns "not found"
-  - Missing: CRC errors, lost data, disk defects, write protection violations
-  - Impact: Error handling code in real software untested
+  - Current: A small set of failure paths exists, but the model is still optimistic overall
+  - Missing: CRC errors, lost data, disk defects, and richer media-specific failures
+  - Impact: Error handling code in real software remains under-tested
   - Complexity: HIGH
 
-- ❌ **Multi-Sector Operations**
-  - Current: Sector count respected, but transfers are instant
-  - Missing: Multi-track reads, proper DMA interleaving
-  - Impact: Large file I/O might be unreliable
+- ⚠️ **Transfer Timing & Multi-Sector Behavior**
+  - Current: Sector count is respected and multi-sector transfers work within the abstraction
+  - Missing: Realistic DMA pacing, interleaving, and timing-sensitive multi-track behavior
+  - Impact: Large file I/O and timing-sensitive tools may still be unreliable
   - Complexity: MEDIUM
 
 - ⚠️ **Motor Control**
@@ -237,25 +238,25 @@ type FDC struct {
   - Missing: Motor spin-up delay
   - Impact: Minor for typical software
 
-- ❌ **Write Protection**
-  - Current: Flag returned but enforcement inconsistent
-  - Missing: Proper per-disk write protection enforcement
+- ⚠️ **Write Protection**
+  - Current: Disk and hard-disk write-protect paths are enforced for the modeled media
+  - Missing: Broader media-specific edge cases and richer error reporting around protected formats
 
-- ❌ **ACSI Hard Disk Commands**
-  - Current: Minimal SCSI command subset
-  - Missing: Full SCSI command set (READ, WRITE, etc.)
-  - Missing: Sense data, unit attention
-  - Impact: Some TOS versions and disk utilities fail
+- ⚠️ **ACSI Hard Disk Compatibility**
+  - Current: TEST UNIT READY, REQUEST SENSE, INQUIRY, MODE SENSE(6), READ/WRITE(6), START/STOP UNIT, READ CAPACITY(10), and READ/WRITE(10) are implemented
+  - Missing: Broader SCSI/utility compatibility details such as richer sense/page behavior, unit-attention-style flows, and vendor-specific expectations
+  - Impact: Some TOS versions and disk utilities still fail
   - Complexity: MEDIUM-HIGH
 
 **Test Coverage:**
 - ✅ Basic read/write sectors
 - ✅ Seek operations
 - ✅ MSA image loading
-- ❌ Track-level operations
+- ✅ Track-level command coverage within the sector-image model
+- ✅ Core ACSI/SCSI command handling
 - ❌ Multi-format support
-- ❌ Error conditions
-- ❌ SCSI command handling
+- ❌ Error-condition breadth
+- ❌ Raw-track/copy-protection fidelity
 
 **Files Affected:**
 - [internal/devices/fdc.go](internal/devices/fdc.go#L1-L100)
@@ -281,10 +282,10 @@ type ACIA struct {
 ```
 
 **Missing/Incomplete:**
-- ❌ **ACIA Channel 1 (Modem Port)**
-  - Current: Not wired up to any device
-  - Missing: Implementation as I/O device
-  - Impact: Serial device support, modem software won't work
+- ❌ **ACIA Channel 1 (MIDI Device Path)**
+  - Current: The second ACIA-side register window exists but no MIDI-facing device is attached
+  - Missing: External MIDI device model and traffic simulation
+  - Impact: MIDI software can see registers but not exchange real data
   - Complexity: MEDIUM
 
 - ❌ **IKBD Timing**
@@ -297,10 +298,10 @@ type ACIA struct {
   - Missing: Full response sequences
   - Impact: Some utilities may probe and fail
 
-- ❌ **Clock Setting/Reading**
-  - Current: Returns stub time
-  - Missing: Integration with system RTC (not implemented)
-  - Impact: Date/time functions return wrong values
+- ⚠️ **Clock Sources**
+  - Current: IKBD clock queries work, and an optional ICD-compatible RTC can be enabled with `--rtc`
+  - Missing: Broader software validation, preset/default policy, and tighter coordination between optional RTC paths
+  - Impact: Date/time aware utilities may still expose integration gaps
 
 **Test Coverage:**
 - ✅ Keyboard input
@@ -380,21 +381,21 @@ type PSG struct {
 | **EmuTOS 1.4** | OS | ✅ Boots to desktop | Bundled, tested extensively |
 | **GEM Desktop** | UI | ✅ Interactive | Keyboard, mouse, menu functions work |
 | **GEM VDI** | Graphics | ✅ Partial | Blitter exercised during boot |
-| **TOS 1.0x** | OS | ✅ Boots | Via separate ROM images |
-| **TOS 1.02** | OS | ✅ Boots | Via separate ROM images |
-| **TOS 1.04** | OS | ✅ Boots | Via separate ROM images |
+| **TOS 1.0x** | OS | ⚠️ Manual/local boot testing | External-ROM workflow exists, but direct automated coverage is still limited |
+| **TOS 1.02** | OS | ⚠️ Manual/local boot testing | External-ROM workflow exists, but direct automated coverage is still limited |
+| **TOS 1.04** | OS | ⚠️ Manual/local boot testing | External-ROM workflow exists, but direct automated coverage is still limited |
 | **EmuTOS 1.4 (Color)** | OS | ✅ Boots | Color desktop mode |
 
 ### 3.2 Known Failing / Untested Software
 
 | Category | Examples | Issue |
 |----------|----------|-------|
-| **Copy-Protected Games** | Mainly 1980s-90s releases | Track-level FDC commands needed |
-| **Low-Level Disk Tools** | HDCopy, Kyroflop, FastCopy | Raw track I/O, special FDC modes |
+| **Copy-Protected Games** | Mainly 1980s-90s releases | Raw-track fidelity, bad-sector patterns, and timing behavior still missing |
+| **Low-Level Disk Tools** | HDCopy, Kyroflop, FastCopy | Raw track I/O fidelity and special FDC timing remain incomplete |
 | **3D Graphics** | Falcon 030 features | Not implemented (different CPU) |
 | **Network Software** | Spectre GCN, NetBSD | No networking hardware |
 | **Real-Time Apps** | MIDI sequencers, audio apps | Timing inaccuracy, no MIDI port |
-| **Hard Disk Utilities** | ICD RTC, partition tools | Missing RTC, limited SCSI support |
+| **Hard Disk Utilities** | ICD RTC, partition tools | Optional RTC now exists, but broader utility validation and some SCSI coverage are still limited |
 | **Cartridge Software** | Various | No cartridge ROM support |
 | **Second Floppy Drive** | Multi-drive sequences | Single drive (A) only, no B |
 
@@ -425,6 +426,7 @@ internal/devices/
   ✅ fixed_value_region_test.go- Fixed value regions
   ✅ glue_test.go             - GLUE register model
   ✅ ikbd_test.go             - Keyboard, mouse, commands
+  ✅ icd_rtc_test.go          - ICD RTC protocol, reads/writes
   ✅ mfp_test.go              - Timers, interrupts, GPIP
   ❌ NO: Serial I/O specific tests
   ❌ NO: GPIP edge detection tests
@@ -432,10 +434,10 @@ internal/devices/
   ✅ shifter_benchmark_test.go - Framebuffer generation
   ✅ shifter_test.go          - Low/Medium/High res rendering
   ✅ ste_sound_test.go        - STE sound stub behavior
-  ❌ NO: Shifter contention tests
+  ✅ shifter_test.go includes RAM-contention and mid-frame blanking coverage
   ❌ NO: Mid-frame base change tests
   ✅ fdc_test.go              - Basic disk operations
-  ❌ NO: Track-level FDC tests
+  ✅ fdc_test.go covers track-level commands within the sector-image model
   ❌ NO: Multi-format disk tests
   ✅ mmu_test.go              - Memory addressing
 
@@ -459,10 +461,10 @@ internal/emulator/
 |------|-----|--------|
 | **Serial Communication** | No UART tests | Can't verify real serial protocols |
 | **Multi-Format Disks** | Only ST/MSA tested | ADI/HDI/etc. unsupported |
-| **Track-Level FDC** | No tests | Copy protection unverifiable |
+| **Track-Level FDC** | No raw-track fidelity tests | Copy protection and low-level tools remain unverifiable |
 | **Real TOS Images** | Limited testing | TOS 1.0x boot not verified |
 | **Graphics Effects** | No demo tests | Scrolling, mid-frame effects untested |
-| **Hard Disk Utils** | Basic ACSI only | SCSI commands incomplete |
+| **Hard Disk Utils** | Core ACSI works, utility coverage incomplete | Sense/page quirks and vendor expectations still missing |
 | **Timing Precision** | No cycle-count tests | Contention not verified |
 | **Edge Cases** | Limited error paths | Exception handling partial |
 
@@ -487,18 +489,18 @@ internal/emulator/
   - Impact: Real disk utilities can be tested
   - Tests: Error conditions, retry logic
 
-- **Implement Type IV FDC commands (Read/Write Track)**
+- **Add raw-track / copy-protection-oriented disk representation**
   - Files: [internal/devices/fdc.go](internal/devices/fdc.go#L200-L400)
-  - Effort: 1 week
-  - Impact: Copy protection, low-level tools work
+  - Effort: 1-2 weeks
+  - Impact: Copy protection and low-level tools become more realistic
   - Complexity: HIGH
-  - Tests: Track data validation, sector placement
+  - Tests: Raw-track reads, bad-sector markers, non-sector metadata validation
 
 #### 1.2 Shifter Bus Contention
-- **Model DMA cycle stealing**
+- **Refine current DMA cycle stealing model**
   - Files: [internal/devices/shifter.go](internal/devices/shifter.go)
   - Effort: 1 week
-  - Impact: Proper CPU/shifter timing, graphics stability
+  - Impact: Better CPU/shifter timing, graphics stability
   - Tests: Cycle count validation per scanline
   
 - **Implement mid-frame screen base changes**
@@ -532,7 +534,7 @@ internal/emulator/
 **Completion Criteria:**
 - ✅ 90%+ disk image support (ST, MSA, ADI, HDI)
 - ✅ FDC error paths functional
-- ✅ Track-level commands working
+- ✅ Raw-track/copy-protection improvements validated
 - ✅ Shifter contention affecting CPU timing correctly
 - ✅ GPIP DDR/AER fully functional
 - ✅ Test suite passes with 5+ real TOS images
@@ -546,13 +548,16 @@ internal/emulator/
 **Goal:** Support broader real-world Atari ST software
 
 #### 2.1 Real-Time Clock (RTC)
-- **Implement ICD RTC emulation**
-  - Impact: Date/time functions work
-  - Complexity: MEDIUM-HIGH
-  - Effort: 2-3 weeks
-  - Files: New `internal/devices/rtc.go`
-  - Integration points: GPIP input lines, port memory mapping
-  - Tests: Date/time queries, hardware detection
+- ✅ **ICD RTC emulation landed**
+  - Delivered: ACSI nibble protocol, GPIP bit 5 detection, read/write register behavior, config-gated enablement via `--rtc`
+  - Files: [internal/devices/icd_rtc.go](internal/devices/icd_rtc.go), [internal/devices/fdc.go](internal/devices/fdc.go), [internal/devices/mfp.go](internal/devices/mfp.go)
+  - Tests: [internal/devices/icd_rtc_test.go](internal/devices/icd_rtc_test.go), [internal/devices/mfp_test.go](internal/devices/mfp_test.go), [internal/config/config_test.go](internal/config/config_test.go)
+
+- **Remaining RTC work**
+  - Impact: Broader date/time utility compatibility
+  - Complexity: MEDIUM
+  - Effort: 2-4 days
+  - Focus: Real-software validation with `--rtc`, preset/default policy, and documentation of supported RTC workflows
 
 #### 2.2 Parallel/Printer Port
 - **Add printer port device model**
@@ -563,17 +568,17 @@ internal/emulator/
   - Registers: Parallel port control (0xFFBF00-0xFFBF10)
   - Tests: Data transmission, handshake signals
 
-#### 2.3 ACIA Channel 1 (Modem Port)
-- **Wire up second ACIA channel**
-  - Impact: Serial device software works
+#### 2.3 ACIA Channel 1 (MIDI Device Path)
+- **Attach a real MIDI-side device model to the second ACIA register channel**
+  - Impact: MIDI-oriented software can exercise the existing register window
   - Complexity: MEDIUM
   - Effort: 1 week
-  - Files: [internal/devices/acia.go](internal/devices/acia.go), new serial device stub
-  - Tests: Serial communication simulation
+  - Files: [internal/devices/acia.go](internal/devices/acia.go), new MIDI device stub/path
+  - Tests: MIDI-side receive/transmit simulation
 
 #### 2.4 MFP Serial I/O (UART)
 - **Implement complete UART model**
-  - Impact: Real serial devices possible
+  - Impact: Real serial/modem devices possible
   - Complexity: HIGH
   - Effort: 3-4 weeks
   - Files: [internal/devices/mfp.go](internal/devices/mfp.go#L600-L700)
@@ -585,7 +590,7 @@ internal/emulator/
   - Tests: Baud rate accuracy, data integrity
 
 #### 2.5 STE Hardware Support
-- **Improve STE Shifter (line offset, fine scroll)**
+- **Improve STE Shifter timing and dynamic raster behavior**
   - Impact: STE boot and demos work
   - Complexity: MEDIUM
   - Effort: 1-2 weeks
@@ -712,7 +717,7 @@ internal/emulator/
 | **Bus Contention** | Complex timing interactions | Early integration testing with real software |
 | **FDC Compatibility** | Many disk formats | Create format test suite first |
 | **STE DMA Sound** | Complex DMA + audio timing | Prototype with simple waveforms first |
-| **Real RTC** | Requires system integration | Use system clock as base |
+| **RTC Utility Validation** | Date/time software expectations vary | Keep RTC backed by system time and validate against real utilities |
 | **Serial I/O** | Baud rate precision | Create clock domain test utilities |
 
 ---
@@ -726,18 +731,19 @@ EmuTOS Desktop (✅ Done)
 ├── MFP timers
 │   └── GPIP edge detection (Phase 1)
 ├── IKBD/ACIA
-│   └── ACIA Ch1 (Phase 2)
+│   └── ACIA Ch1 MIDI device path (Phase 2)
 ├── FDC
-│   ├── Track-level commands (Phase 1)
+│   ├── Raw-track fidelity (Phase 1)
 │   ├── ADI/HDI formats (Phase 1)
-│   └── SCSI commands (Phase 2)
+│   └── Broader utility compatibility (Phase 2)
 └── PSG audio
     └── STE DMA Sound (Phase 2)
 
 Real TOS Compatibility (Phase 2)
-├── Serial I/O (Phase 2)
-├── RTC support (Phase 2)
+├── Serial/modem I/O via MFP UART (Phase 2)
+├── RTC utility validation and preset policy (Phase 2)
 ├── Printer port (Phase 2)
+├── MIDI device path on ACIA ch.1 (Phase 2)
 └── Hardware detection (GPIP, Phase 1)
 
 Advanced Software (Phase 3)
@@ -752,7 +758,7 @@ Advanced Software (Phase 3)
 ## 9. Success Metrics
 
 ### Phase 1 Completion
-- [ ] Track-level FDC commands working
+- [ ] Raw-track/copy-protection workflows substantially improved
 - [ ] 5+ disk formats supported
 - [ ] GPIP DDR/AER fully functional
 - [ ] Shifter contention affecting CPU timing
@@ -760,7 +766,8 @@ Advanced Software (Phase 3)
 - [ ] Test coverage at 85%+
 
 ### Phase 2 Completion
-- [ ] RTC emulated and functional
+- [x] Optional ICD RTC emulated and functional
+- [ ] RTC validated with broader utility workflows
 - [ ] Serial I/O with real devices possible
 - [ ] 30+ games/utilities tested
 - [ ] STE hardware operational
@@ -809,7 +816,7 @@ Advanced Software (Phase 3)
     [ ] Screen base addressing
     [ ] Bus contention
     [ ] Mid-frame base changes
-    [ ] Fine/Horizontal scroll
+    [ ] Fine/Horizontal scroll timing fidelity
 [ ] Blitter
     [ ] All operation modes
     [ ] Cycle-accurate timing
@@ -823,7 +830,7 @@ Advanced Software (Phase 3)
     [ ] Serial I/O (UART)
 [ ] ACIA
     [ ] Keyboard channel (Ch 0)
-    [ ] Modem channel (Ch 1)
+    [ ] MIDI/secondary channel behavior
     [ ] Control/Status/Data registers
 [ ] IKBD
     [ ] Keyboard input
@@ -847,7 +854,7 @@ Advanced Software (Phase 3)
     [ ] Port A/B
     [ ] Noise generation
 [ ] VBL interrupts (50 Hz)
-[ ] RTC (Real-Time Clock)
+[x] RTC (Real-Time Clock)
 [ ] Parallel/Printer port
 [ ] MIDI port
 [ ] Cartridge ROM
@@ -857,4 +864,4 @@ Advanced Software (Phase 3)
 ---
 
 **Last Updated:** May 12, 2026  
-**Document Version:** 1.0
+**Document Version:** 1.1

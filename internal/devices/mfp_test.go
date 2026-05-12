@@ -357,3 +357,35 @@ func TestMFPGPIPBit5DefaultsHighWithoutICDRTC(t *testing.T) {
 		t.Fatalf("expected GPIP bit 5 to idle high, GPIP=%02x", byte(value))
 	}
 }
+
+func TestMFPGPIPBit5ReflectsICDRTCSession(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000, ColorMonitor: false})
+	rtc := NewICDRTC()
+	mfp.AttachICDRTC(rtc)
+
+	idle, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read idle GPIP: %v", err)
+	}
+	if byte(idle)&0x20 == 0 {
+		t.Fatalf("expected idle RTC line to read high, GPIP=%02x", byte(idle))
+	}
+
+	rtc.HandleCommand(icdRTCCmdBegin)
+	active, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read active GPIP: %v", err)
+	}
+	if byte(active)&0x20 != 0 {
+		t.Fatalf("expected active RTC line to read low, GPIP=%02x", byte(active))
+	}
+
+	rtc.HandleCommand(icdRTCCmdEnd)
+	cleared, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read cleared GPIP: %v", err)
+	}
+	if byte(cleared)&0x20 == 0 {
+		t.Fatalf("expected ended RTC line to read high, GPIP=%02x", byte(cleared))
+	}
+}
