@@ -13,6 +13,7 @@ const (
 
 	fdcSectorSize   = 512
 	fdcSectorsTrack = 9
+	fdcDriveCount   = 2
 
 	dmaA0        = 0x0002
 	dmaA1        = 0x0004
@@ -92,6 +93,15 @@ const (
 	FDCMediaErrorLostData       FDCMediaError = fdcStatusLostData
 )
 
+type fdcDrive struct {
+	image           []byte
+	writeProtected  bool
+	sectorsPerTrack int
+	sides           int
+	tracks          int
+	errors          map[fdcSectorKey]byte
+}
+
 // FDC models the ST's DMA + WD1772 register window using sector-based disk
 // images. It supports the full WD1772 command groups (type I/II/III/IV) within
 // that sector-image abstraction.
@@ -114,14 +124,7 @@ type FDC struct {
 	headTrack         int
 	lastStepDirection int // +1=in, -1=out
 
-	// drive A image and geometry
-	diskA               []byte
-	diskAWriteProtected bool
-	sectorsPerTrack     int
-	sides               int
-	tracks              int
-	diskAErrors         map[fdcSectorKey]byte
-
+	drives        [fdcDriveCount]fdcDrive
 	selectedDrive int
 	selectedSide  int
 
@@ -187,11 +190,22 @@ func (f *FDC) Reset() {
 }
 
 func (f *FDC) InsertDisk(image []byte) error {
+	return f.InsertDiskIntoDrive(0, image)
+}
+
+func (f *FDC) InsertDiskIntoDrive(drive int, image []byte) error {
 	sectorsPerTrack, sides, tracks := inferFloppyGeometry(len(image))
-	return f.InsertDiskWithGeometry(image, sectorsPerTrack, sides, tracks)
+	return f.InsertDiskIntoDriveWithGeometry(drive, image, sectorsPerTrack, sides, tracks)
 }
 
 func (f *FDC) InsertDiskWithGeometry(image []byte, sectorsPerTrack, sides, tracks int) error {
+	return f.InsertDiskIntoDriveWithGeometry(0, image, sectorsPerTrack, sides, tracks)
+}
+
+func (f *FDC) InsertDiskIntoDriveWithGeometry(drive int, image []byte, sectorsPerTrack, sides, tracks int) error {
+	if err := validateFloppyDrive(drive); err != nil {
+		return err
+	}
 	if len(image)%fdcSectorSize != 0 {
 		return fmt.Errorf("disk image size %d is not a multiple of %d", len(image), fdcSectorSize)
 	}
@@ -210,36 +224,60 @@ func (f *FDC) InsertDiskWithGeometry(image []byte, sectorsPerTrack, sides, track
 		return fmt.Errorf("disk image size %d does not match geometry %d/%d/%d",
 			len(image), tracks, sides, sectorsPerTrack)
 	}
-	f.diskA = append([]byte(nil), image...)
-	f.diskAWriteProtected = false
-	f.sectorsPerTrack = sectorsPerTrack
-	f.sides = sides
-	f.tracks = tracks
-	clear(f.diskAErrors)
+	f.drives[drive].image = append([]byte(nil), image...)
+	f.drives[drive].writeProtected = false
+	f.drives[drive].sectorsPerTrack = sectorsPerTrack
+	f.drives[drive].sides = sides
+	f.drives[drive].tracks = tracks
+	clear(f.drives[drive].errors)
 	f.status = f.baseStatus()
 	return nil
 }
 
 func (f *FDC) SetDiskWriteProtected(writeProtected bool) {
-	f.diskAWriteProtected = writeProtected
+	_ = f.SetDiskWriteProtectedForDrive(0, writeProtected)
+}
+
+func (f *FDC) SetDiskWriteProtectedForDrive(drive int, writeProtected bool) error {
+	if err := validateFloppyDrive(drive); err != nil {
+		return err
+	}
+	f.drives[drive].writeProtected = writeProtected
 	f.status = f.baseStatus()
+	return nil
 }
 
 func (f *FDC) SetDiskSectorError(track, side, sector int, mediaError FDCMediaError) {
+	_ = f.SetDiskSectorErrorForDrive(0, track, side, sector, mediaError)
+}
+
+func (f *FDC) SetDiskSectorErrorForDrive(drive, track, side, sector int, mediaError FDCMediaError) error {
+	if err := validateFloppyDrive(drive); err != nil {
+		return err
+	}
 	status := byte(mediaError) & (fdcStatusRNF | fdcStatusCRC | fdcStatusLostData)
 	key := fdcSectorKey{track: track, side: side, sector: sector}
 	if status == 0 {
-		delete(f.diskAErrors, key)
-		return
+		delete(f.drives[drive].errors, key)
+		return nil
 	}
-	if f.diskAErrors == nil {
-		f.diskAErrors = make(map[fdcSectorKey]byte)
+	if f.drives[drive].errors == nil {
+		f.drives[drive].errors = make(map[fdcSectorKey]byte)
 	}
-	f.diskAErrors[key] = status
+	f.drives[drive].errors[key] = status
+	return nil
 }
 
 func (f *FDC) ClearDiskSectorErrors() {
-	clear(f.diskAErrors)
+	_ = f.ClearDiskSectorErrorsForDrive(0)
+}
+
+func (f *FDC) ClearDiskSectorErrorsForDrive(drive int) error {
+	if err := validateFloppyDrive(drive); err != nil {
+		return err
+	}
+	clear(f.drives[drive].errors)
+	return nil
 }
 
 func (f *FDC) SetHardDiskImage(image []byte) error {
@@ -846,13 +884,14 @@ func (f *FDC) execRelativeStep(direction int, cmd byte) error {
 
 func (f *FDC) execReadSectors(cmd byte) error {
 	f.typeI = false
-	if !f.hasSelectedDisk() {
+	disk := f.selectedDisk()
+	if disk == nil || len(disk.image) == 0 {
 		return f.failTypeIIStatus(fdcStatusRNF)
 	}
 
 	count, multi := f.commandSectorCount(cmd)
 	baseSector := int(f.sector)
-	if baseSector <= 0 || baseSector+count-1 > f.sectorsPerTrack {
+	if baseSector <= 0 || baseSector+count-1 > disk.sectorsPerTrack {
 		return f.failTypeIIStatus(fdcStatusRNF)
 	}
 
@@ -865,7 +904,7 @@ func (f *FDC) execReadSectors(cmd byte) error {
 		if !ok {
 			return f.failTypeIIStatus(fdcStatusRNF)
 		}
-		buffer = append(buffer, f.diskA[offset:offset+fdcSectorSize]...)
+		buffer = append(buffer, disk.image[offset:offset+fdcSectorSize]...)
 	}
 	if f.ram != nil {
 		if err := f.ram.LoadAt(f.dmaAddr, buffer); err != nil {
@@ -884,16 +923,17 @@ func (f *FDC) execReadSectors(cmd byte) error {
 
 func (f *FDC) execWriteSectors(cmd byte) error {
 	f.typeI = false
-	if !f.hasSelectedDisk() {
+	disk := f.selectedDisk()
+	if disk == nil || len(disk.image) == 0 {
 		return f.failTypeIIStatus(fdcStatusRNF)
 	}
-	if f.diskAWriteProtected {
+	if disk.writeProtected {
 		return f.failTypeIIStatus(fdcStatusWriteProtect)
 	}
 
 	count, multi := f.commandSectorCount(cmd)
 	baseSector := int(f.sector)
-	if baseSector <= 0 || baseSector+count-1 > f.sectorsPerTrack {
+	if baseSector <= 0 || baseSector+count-1 > disk.sectorsPerTrack {
 		return f.failTypeIIStatus(fdcStatusRNF)
 	}
 
@@ -912,7 +952,7 @@ func (f *FDC) execWriteSectors(cmd byte) error {
 			return f.failTypeIIStatus(fdcStatusRNF)
 		}
 		start := i * fdcSectorSize
-		copy(f.diskA[offset:offset+fdcSectorSize], buffer[start:start+fdcSectorSize])
+		copy(disk.image[offset:offset+fdcSectorSize], buffer[start:start+fdcSectorSize])
 	}
 	f.dmaAddr += uint32(len(buffer))
 	if multi {
@@ -926,12 +966,13 @@ func (f *FDC) execWriteSectors(cmd byte) error {
 
 func (f *FDC) execReadAddress() error {
 	f.typeI = false
-	if !f.hasSelectedDisk() {
+	disk := f.selectedDisk()
+	if disk == nil || len(disk.image) == 0 {
 		return f.failTypeIIStatus(fdcStatusRNF)
 	}
 
 	sector := int(f.sector)
-	if sector <= 0 || sector > f.sectorsPerTrack {
+	if sector <= 0 || sector > disk.sectorsPerTrack {
 		return f.failTypeIIStatus(fdcStatusRNF)
 	}
 	if status := f.diskSectorError(int(f.track), f.selectedSide, sector); status != 0 {
@@ -961,12 +1002,13 @@ func (f *FDC) execReadAddress() error {
 
 func (f *FDC) execReadTrack() error {
 	f.typeI = false
-	if !f.hasSelectedDisk() {
+	disk := f.selectedDisk()
+	if disk == nil || len(disk.image) == 0 {
 		return f.failTypeIIStatus(fdcStatusRNF)
 	}
 
-	trackData := make([]byte, 0, f.sectorsPerTrack*fdcSectorSize)
-	for sector := 1; sector <= f.sectorsPerTrack; sector++ {
+	trackData := make([]byte, 0, disk.sectorsPerTrack*fdcSectorSize)
+	for sector := 1; sector <= disk.sectorsPerTrack; sector++ {
 		if status := f.diskSectorError(int(f.track), f.selectedSide, sector); status != 0 {
 			return f.failTypeIIStatus(status)
 		}
@@ -974,7 +1016,7 @@ func (f *FDC) execReadTrack() error {
 		if !ok {
 			return f.failTypeIIStatus(fdcStatusRNF)
 		}
-		trackData = append(trackData, f.diskA[offset:offset+fdcSectorSize]...)
+		trackData = append(trackData, disk.image[offset:offset+fdcSectorSize]...)
 	}
 	if f.ram != nil {
 		if err := f.ram.LoadAt(f.dmaAddr, trackData); err != nil {
@@ -990,20 +1032,21 @@ func (f *FDC) execReadTrack() error {
 
 func (f *FDC) execWriteTrack() error {
 	f.typeI = false
-	if !f.hasSelectedDisk() {
+	disk := f.selectedDisk()
+	if disk == nil || len(disk.image) == 0 {
 		return f.failTypeIIStatus(fdcStatusRNF)
 	}
-	if f.diskAWriteProtected {
+	if disk.writeProtected {
 		return f.failTypeIIStatus(fdcStatusWriteProtect)
 	}
 
-	trackData := make([]byte, f.sectorsPerTrack*fdcSectorSize)
+	trackData := make([]byte, disk.sectorsPerTrack*fdcSectorSize)
 	if f.ram != nil {
 		if err := f.ram.CopyOut(f.dmaAddr, trackData); err != nil {
 			return f.failTypeIIStatus(fdcStatusLostData)
 		}
 	}
-	for sector := 1; sector <= f.sectorsPerTrack; sector++ {
+	for sector := 1; sector <= disk.sectorsPerTrack; sector++ {
 		if status := f.diskSectorError(int(f.track), f.selectedSide, sector); status != 0 {
 			return f.failTypeIIStatus(status)
 		}
@@ -1012,7 +1055,7 @@ func (f *FDC) execWriteTrack() error {
 			return f.failTypeIIStatus(fdcStatusRNF)
 		}
 		start := (sector - 1) * fdcSectorSize
-		copy(f.diskA[offset:offset+fdcSectorSize], trackData[start:start+fdcSectorSize])
+		copy(disk.image[offset:offset+fdcSectorSize], trackData[start:start+fdcSectorSize])
 	}
 	f.dmaAddr += uint32(len(trackData))
 	f.sectorCount = 0
@@ -1054,10 +1097,11 @@ func (f *FDC) baseStatus() byte {
 	if f.typeI && f.headTrack == 0 {
 		status |= fdcStatusTrack0
 	}
-	if f.hasSelectedDisk() {
+	disk := f.selectedDisk()
+	if disk != nil && len(disk.image) != 0 {
 		status |= fdcStatusMotorOn
 	}
-	if f.diskAWriteProtected {
+	if disk != nil && disk.writeProtected {
 		status |= fdcStatusWriteProtect
 	}
 	return status
@@ -1094,10 +1138,19 @@ func (f *FDC) SetDriveControl(portA byte) {
 			f.selectedSide = 0
 		}
 	}
+	f.status = f.baseStatus()
+}
+
+func (f *FDC) selectedDisk() *fdcDrive {
+	if f.selectedDrive < 0 || f.selectedDrive >= len(f.drives) {
+		return nil
+	}
+	return &f.drives[f.selectedDrive]
 }
 
 func (f *FDC) hasSelectedDisk() bool {
-	return f.selectedDrive == 0 && len(f.diskA) != 0
+	disk := f.selectedDisk()
+	return disk != nil && len(disk.image) != 0
 }
 
 func (f *FDC) hasHardDisk0() bool {
@@ -1105,23 +1158,24 @@ func (f *FDC) hasHardDisk0() bool {
 }
 
 func (f *FDC) diskOffset(track, sector int) (int, bool) {
-	if !f.hasSelectedDisk() || f.sides <= 0 || f.sectorsPerTrack <= 0 {
+	disk := f.selectedDisk()
+	if disk == nil || len(disk.image) == 0 || disk.sides <= 0 || disk.sectorsPerTrack <= 0 {
 		return 0, false
 	}
-	if track < 0 || track >= f.tracks {
+	if track < 0 || track >= disk.tracks {
 		return 0, false
 	}
-	if sector <= 0 || sector > f.sectorsPerTrack {
+	if sector <= 0 || sector > disk.sectorsPerTrack {
 		return 0, false
 	}
-	if f.selectedSide < 0 || f.selectedSide >= f.sides {
+	if f.selectedSide < 0 || f.selectedSide >= disk.sides {
 		return 0, false
 	}
 
-	lba := ((track * f.sides) + f.selectedSide) * f.sectorsPerTrack
+	lba := ((track * disk.sides) + f.selectedSide) * disk.sectorsPerTrack
 	lba += sector - 1
 	offset := lba * fdcSectorSize
-	if offset < 0 || offset+fdcSectorSize > len(f.diskA) {
+	if offset < 0 || offset+fdcSectorSize > len(disk.image) {
 		return 0, false
 	}
 	return offset, true
@@ -1134,23 +1188,25 @@ type fdcSectorKey struct {
 }
 
 func (f *FDC) diskSectorError(track, side, sector int) byte {
-	if len(f.diskAErrors) == 0 {
+	disk := f.selectedDisk()
+	if disk == nil || len(disk.errors) == 0 {
 		return 0
 	}
-	return f.diskAErrors[fdcSectorKey{track: track, side: side, sector: sector}]
+	return disk.errors[fdcSectorKey{track: track, side: side, sector: sector}]
 }
 
 func (f *FDC) trackInRange(track int) bool {
-	if f.tracks <= 0 {
+	disk := f.selectedDisk()
+	if disk == nil || disk.tracks <= 0 {
 		return track >= 0 && track <= 255
 	}
-	return track >= 0 && track < f.tracks
+	return track >= 0 && track < disk.tracks
 }
 
 func (f *FDC) clampTrack(track int) int {
 	maxTrack := 255
-	if f.tracks > 0 {
-		maxTrack = f.tracks - 1
+	if disk := f.selectedDisk(); disk != nil && disk.tracks > 0 {
+		maxTrack = disk.tracks - 1
 	}
 	if track < 0 {
 		return 0
@@ -1159,6 +1215,13 @@ func (f *FDC) clampTrack(track int) int {
 		return maxTrack
 	}
 	return track
+}
+
+func validateFloppyDrive(drive int) error {
+	if drive < 0 || drive >= fdcDriveCount {
+		return fmt.Errorf("unsupported floppy drive %d", drive)
+	}
+	return nil
 }
 
 func inferFloppyGeometry(size int) (sectorsPerTrack, sides, tracks int) {

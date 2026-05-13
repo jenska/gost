@@ -36,7 +36,7 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 - Printer port (Parallel / Centronics)
 - MIDI port
 - Modem/RS-232 device path via MFP UART
-- STE DMA sound
+- STE DMA sound timing, MICROWIRE mixer behavior, and DMA-active/MFP edge signaling
 - STE/Mega ST extended hardware
 - Cartridge ROM support
 - Network/Ethernet
@@ -67,7 +67,7 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 | MIDI Port | ✅ Basic | internal/devices/midi.go | ACIA channel 1 byte buffers with receive IRQ; no baud/timing/host backend |
 | Cartridge ROM | ✅ Basic | internal/devices/cartridge_rom.go | Optional read-only 128 KiB slot at $FA0000-$FBFFFF |
 | GLUE | ✅ Basic | internal/devices/glue.go | System-control probe register, PAL/NTSC HBL timing, VBL/HBL autovectors |
-| STE Sound | ✅ Stub | internal/devices/ste_sound.go | Returns bus error (correct for ST) |
+| STE Sound | ✅ Basic | internal/devices/ste_sound.go | STE-only DMA register window, signed 8-bit PCM playback, mono/stereo decode, repeat mode; MICROWIRE is register storage only |
 
 ### 1.2 Missing Hardware Devices
 
@@ -200,7 +200,7 @@ type MFP struct {
 ```go
 // fdc.go - Sector-image abstraction with WD1772 + ACSI support
 type FDC struct {
-    diskA        []byte      // Sector-based disk image
+    drives       [2]fdcDrive // Sector-based drive A/B images
     status, track, sector, data byte
     // ... ACSI hard disk, DMA state
 }
@@ -396,7 +396,7 @@ type PSG struct {
 | **Real-Time Apps** | MIDI sequencers, audio apps | Timing inaccuracy, no host MIDI backend |
 | **Hard Disk Utilities** | ICD RTC, partition tools | Optional RTC now exists, but broader utility validation and some SCSI coverage are still limited |
 | **Cartridge Software** | Various | Basic ROM mapping exists; cartridge-specific hardware and broad validation remain |
-| **Second Floppy Drive** | Multi-drive sequences | Single drive (A) only, no B |
+| **Second Floppy Drive** | Multi-drive sequences | Drive A/B sector-image support |
 
 ### 3.3 Disk Image Format Support
 
@@ -434,7 +434,7 @@ internal/devices/
   ✅ psg_test.go              - PSG register reads/writes
   ✅ shifter_benchmark_test.go - Framebuffer generation
   ✅ shifter_test.go          - Low/Medium/High res rendering
-  ✅ ste_sound_test.go        - STE sound stub behavior
+  ✅ ste_sound_test.go        - STE DMA sound registers and playback behavior
   ✅ shifter_test.go includes RAM-contention and mid-frame blanking coverage
   ❌ NO: Mid-frame base change tests
   ✅ fdc_test.go              - Basic disk operations
@@ -590,12 +590,12 @@ internal/emulator/
   - Effort: 1-2 weeks
   - Files: [internal/devices/shifter_ste.go](internal/devices/shifter_ste.go)
 
-- **Implement STE DMA Sound**
-  - Impact: STE audio programs work
-  - Complexity: VERY HIGH
-  - Effort: 4-6 weeks
-  - Files: New `internal/devices/ste_dma_sound.go`
-  - Integration: DMA controller, interrupt routing, audio path
+- **Complete STE DMA Sound timing and mixer details**
+  - Impact: Timing-sensitive STE audio programs work
+  - Complexity: HIGH
+  - Effort: 2-4 weeks
+  - Files: [internal/devices/ste_sound.go](internal/devices/ste_sound.go)
+  - Integration: DMA-active signal into MFP edge/timer behavior, MICROWIRE volume/tone effects, tighter sample timing
 
 **Completion Criteria:**
 - ✅ 80%+ real Atari ST games/applications run
@@ -709,7 +709,7 @@ internal/emulator/
 |------|------|-----------|
 | **Bus Contention** | Complex timing interactions | Early integration testing with real software |
 | **FDC Compatibility** | Many disk formats | Create format test suite first |
-| **STE DMA Sound** | Complex DMA + audio timing | Prototype with simple waveforms first |
+| **STE DMA Sound** | DMA-active/MFP edge behavior and MICROWIRE mixer detail remain incomplete | Basic PCM playback is in place; add timing validation with real STE audio software |
 | **RTC Utility Validation** | Date/time software expectations vary | Keep RTC backed by system time and validate against real utilities |
 | **Serial I/O** | Baud rate precision | Create clock domain test utilities |
 

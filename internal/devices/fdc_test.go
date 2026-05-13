@@ -288,6 +288,93 @@ func TestFDCReadsSelectedSideFromDiskGeometry(t *testing.T) {
 	}
 }
 
+func TestFDCReadsSelectedDriveB(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	fdc := NewFDC(ram, nil)
+
+	driveA := make([]byte, fdcSectorSize)
+	copy(driveA[:4], []byte{0xAA, 0xAA, 0xAA, 0xAA})
+	driveB := make([]byte, fdcSectorSize)
+	copy(driveB[:4], []byte{0xBE, 0xEF, 0xCA, 0xFE})
+
+	if err := fdc.InsertDiskIntoDriveWithGeometry(0, driveA, 1, 1, 1); err != nil {
+		t.Fatalf("insert drive A disk: %v", err)
+	}
+	if err := fdc.InsertDiskIntoDriveWithGeometry(1, driveB, 1, 1, 1); err != nil {
+		t.Fatalf("insert drive B disk: %v", err)
+	}
+
+	fdc.SetDriveControl(0x03) // drive B selected, side 0
+	setupFloppyDMA(t, fdc, 0x0700, 1, 1, false)
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRead); err != nil {
+		t.Fatalf("execute drive B read: %v", err)
+	}
+
+	value, err := ram.Read(cpu.Long, 0x0700)
+	if err != nil {
+		t.Fatalf("read drive B payload: %v", err)
+	}
+	if value != 0xBEEFCAFE {
+		t.Fatalf("drive B payload = %08x, want beefcafe", value)
+	}
+}
+
+func TestFDCWriteSectorUsesSelectedDriveB(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	fdc := NewFDC(ram, nil)
+
+	driveA := []byte{0x11, 0x22, 0x33, 0x44}
+	driveB := []byte{0x55, 0x66, 0x77, 0x88}
+	driveA = append(driveA, make([]byte, fdcSectorSize-len(driveA))...)
+	driveB = append(driveB, make([]byte, fdcSectorSize-len(driveB))...)
+
+	if err := fdc.InsertDiskIntoDriveWithGeometry(0, driveA, 1, 1, 1); err != nil {
+		t.Fatalf("insert drive A disk: %v", err)
+	}
+	if err := fdc.InsertDiskIntoDriveWithGeometry(1, driveB, 1, 1, 1); err != nil {
+		t.Fatalf("insert drive B disk: %v", err)
+	}
+	if err := ram.LoadAt(0x0800, []byte{0xCA, 0xFE, 0xBA, 0xBE}); err != nil {
+		t.Fatalf("seed DMA payload: %v", err)
+	}
+
+	fdc.SetDriveControl(0x03) // drive B selected, side 0
+	setupFloppyDMA(t, fdc, 0x0800, 1, 1, true)
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdWrite); err != nil {
+		t.Fatalf("execute drive B write: %v", err)
+	}
+
+	if got := fdc.drives[0].image[:4]; got[0] != 0x11 || got[1] != 0x22 || got[2] != 0x33 || got[3] != 0x44 {
+		t.Fatalf("drive A should be unchanged, got % x", got)
+	}
+	if got := fdc.drives[1].image[:4]; got[0] != 0xCA || got[1] != 0xFE || got[2] != 0xBA || got[3] != 0xBE {
+		t.Fatalf("drive B should contain DMA payload, got % x", got)
+	}
+}
+
+func TestFDCSelectedDriveBWithoutDiskReturnsRecordNotFound(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	fdc := NewFDC(ram, nil)
+
+	if err := fdc.InsertDiskIntoDriveWithGeometry(0, make([]byte, fdcSectorSize), 1, 1, 1); err != nil {
+		t.Fatalf("insert drive A disk: %v", err)
+	}
+
+	fdc.SetDriveControl(0x03) // drive B selected, side 0
+	setupFloppyDMA(t, fdc, 0x0900, 1, 1, false)
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRead); err != nil {
+		t.Fatalf("execute drive B read without disk: %v", err)
+	}
+
+	status, err := fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if byte(status)&fdcStatusRNF == 0 {
+		t.Fatalf("expected RNF for empty drive B, got %02x", byte(status))
+	}
+}
+
 func TestFDCWriteSectorCopiesRAMIntoDisk(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	fdc := NewFDC(ram, nil)
@@ -328,7 +415,7 @@ func TestFDCWriteSectorCopiesRAMIntoDisk(t *testing.T) {
 		t.Fatalf("execute write command: %v", err)
 	}
 
-	if got := fdc.diskA[:4]; got[0] != 0xCA || got[1] != 0xFE || got[2] != 0xBA || got[3] != 0xBE {
+	if got := fdc.drives[0].image[:4]; got[0] != 0xCA || got[1] != 0xFE || got[2] != 0xBA || got[3] != 0xBE {
 		t.Fatalf("unexpected disk bytes after write: % x", got)
 	}
 }
@@ -481,8 +568,8 @@ func TestFDCWriteTrackCopiesEntireTrackFromRAM(t *testing.T) {
 		t.Fatalf("execute write track: %v", err)
 	}
 
-	if fdc.diskA[0] != 0x44 || fdc.diskA[fdcSectorSize] != 0x88 {
-		t.Fatalf("unexpected track bytes after write-track: %02x %02x", fdc.diskA[0], fdc.diskA[fdcSectorSize])
+	if fdc.drives[0].image[0] != 0x44 || fdc.drives[0].image[fdcSectorSize] != 0x88 {
+		t.Fatalf("unexpected track bytes after write-track: %02x %02x", fdc.drives[0].image[0], fdc.drives[0].image[fdcSectorSize])
 	}
 }
 
@@ -597,7 +684,7 @@ func TestFDCCRCMediaErrorBlocksWriteAndPreservesSector(t *testing.T) {
 	if byte(status)&fdcStatusCRC == 0 {
 		t.Fatalf("expected CRC status after media error, got %02x", byte(status))
 	}
-	if got := fdc.diskA[:4]; got[0] != 0x11 || got[1] != 0x22 || got[2] != 0x33 || got[3] != 0x44 {
+	if got := fdc.drives[0].image[:4]; got[0] != 0x11 || got[1] != 0x22 || got[2] != 0x33 || got[3] != 0x44 {
 		t.Fatalf("expected failed write to preserve sector, got % x", got)
 	}
 }

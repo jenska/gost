@@ -54,6 +54,7 @@ type (
 		printer       *devices.PrinterPort
 		rs232         *devices.RS232
 		midi          *devices.MIDI
+		steSound      *devices.STESound
 		clocked       []devices.Clocked
 		irqSources    []devices.InterruptSource
 		frameCycles   uint64
@@ -146,19 +147,22 @@ func (m *Machine) MousePosition() (x, y int, ok bool) {
 }
 
 func (m *Machine) AudioSource() AudioSource {
+	if m.steSound != nil {
+		return newMixedAudioSource(m.psg, m.steSound)
+	}
 	return m.psg
 }
 
-// InsertFloppy inserts a decoded disk image into drive A. Drive B is not
-// modeled yet, so side must be 0.
-func (m *Machine) InsertFloppy(side int, image *DiskImage) error {
-	if side != 0 {
-		return fmt.Errorf("only floppy side 0 is supported")
+// InsertFloppy inserts a decoded disk image into floppy drive 0 (A:) or 1 (B:).
+func (m *Machine) InsertFloppy(drive int, image *DiskImage) error {
+	if drive < 0 || drive > 1 {
+		return fmt.Errorf("unsupported floppy drive %d", drive)
 	}
 	if image == nil {
 		return fmt.Errorf("disk image is required")
 	}
-	return m.fdc.InsertDiskWithGeometry(
+	return m.fdc.InsertDiskIntoDriveWithGeometry(
+		drive,
 		image.Data,
 		image.Geometry.SectorsPerTrack,
 		image.Geometry.Sides,

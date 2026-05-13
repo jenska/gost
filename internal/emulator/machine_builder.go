@@ -50,7 +50,7 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 	printer := devices.NewPrinterPort()
 	rs232 := devices.NewRS232()
 	midi := devices.NewMIDI()
-	steSound := devices.NewSTESound()
+	steSound, steSoundDevice := newModelSTESound(cfg, ram)
 
 	mfp.AttachRS232(rs232)
 	acia.AttachMIDI(midi)
@@ -70,7 +70,7 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		acia,
 		fdc,
 		psg,
-		steSound,
+		steSoundDevice,
 		newMonsterProbeRegion(),
 	}
 	if cartridge != nil {
@@ -108,7 +108,8 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		printer:      printer,
 		rs232:        rs232,
 		midi:         midi,
-		clocked:      []devices.Clocked{glue, mfp, acia, fdc, psg},
+		steSound:     steSound,
+		clocked:      clockedDevices(glue, mfp, acia, fdc, psg, steSound),
 		irqSources:   []devices.InterruptSource{glue, mfp, acia, fdc},
 		frameCycles:  frameCycles,
 		traceWriter:  io.Discard,
@@ -119,6 +120,14 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 	}
 
 	return machine, nil
+}
+
+func clockedDevices(glue *devices.GLUE, mfp *devices.MFP, acia *devices.ACIA, fdc *devices.FDC, psg *devices.PSG, steSound *devices.STESound) []devices.Clocked {
+	clocked := []devices.Clocked{glue, mfp, acia, fdc, psg}
+	if steSound != nil {
+		clocked = append(clocked, steSound)
+	}
+	return clocked
 }
 
 func newCartridgeROM(image []byte) (*devices.CartridgeROM, error) {
@@ -141,6 +150,14 @@ func newModelShifter(cfg *config.Config, ram *devices.RAM) (*devices.Shifter, er
 	default:
 		return nil, fmt.Errorf("unsupported machine model %q", cfg.Model)
 	}
+}
+
+func newModelSTESound(cfg *config.Config, ram *devices.RAM) (*devices.STESound, cpu.Device) {
+	if cfg.Model == config.MachineModelSTE {
+		sound := devices.NewSTESound(ram, cfg.ClockHz)
+		return sound, sound
+	}
+	return nil, devices.NewAbsentSTESound()
 }
 
 func configureStorageAndClock(cfg *config.Config, fdc *devices.FDC, mfp *devices.MFP) error {

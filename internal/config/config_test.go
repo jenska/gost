@@ -210,3 +210,28 @@ func TestLoadCanSetCartridgePathFromConfigFile(t *testing.T) {
 		t.Fatalf("unexpected cartridge path: got %q want diag-cart.bin", cfg.CartridgePath)
 	}
 }
+
+func TestLoadCanSetFloppyBPath(t *testing.T) {
+	cfg, err := Load([]string{"--floppy-b", "disk-b.msa"})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.FloppyB != "disk-b.msa" {
+		t.Fatalf("unexpected drive B disk path: got %q want disk-b.msa", cfg.FloppyB)
+	}
+}
+
+func TestLoadCanSetFloppyBPathFromConfigFile(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gost.json")
+	if err := os.WriteFile(configPath, []byte(`{"floppy-b":"disk-b.msa"}`), 0o644); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	cfg, err := Load([]string{"--config", configPath})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.FloppyB != "disk-b.msa" {
+		t.Fatalf("unexpected drive B disk path: got %q want disk-b.msa", cfg.FloppyB)
+	}
+}

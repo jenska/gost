@@ -309,6 +309,39 @@ func TestMachineSTEModelEnablesShifterLowScreenBaseRegister(t *testing.T) {
 	}
 }
 
+func TestMachineSTEModelEnablesDMASoundRegisters(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Model = config.MachineModelSTE
+	machine, err := NewMachine(cfg, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+	if err != nil {
+		t.Fatalf("create STE machine: %v", err)
+	}
+
+	if err := machine.bus.Write(cpu.Word, 0xFF8902, 0x1234); err != nil {
+		t.Fatalf("write STE DMA sound frame base: %v", err)
+	}
+	if err := machine.bus.Write(cpu.Word, 0xFF8920, 0x0083); err != nil {
+		t.Fatalf("write STE DMA sound mode: %v", err)
+	}
+	value, err := machine.bus.Read(cpu.Byte, 0xFF8921)
+	if err != nil {
+		t.Fatalf("read STE DMA sound mode: %v", err)
+	}
+	if byte(value) != 0x83 {
+		t.Fatalf("STE DMA sound mode = %02x, want 83", byte(value))
+	}
+}
+
+func TestMachineSTModelFaultsOnDMASoundWindow(t *testing.T) {
+	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+
+	if _, err := machine.bus.Read(cpu.Byte, 0xFF8901); err == nil {
+		t.Fatalf("expected ST model DMA sound read to bus-error")
+	} else if _, ok := err.(cpu.BusError); !ok {
+		t.Fatalf("expected BusError, got %T", err)
+	}
+}
+
 func TestMachineInterruptHandling(t *testing.T) {
 	rom := loopROM([]byte{
 		0x46, 0xFC, 0x20, 0x00, // move #$2000,sr
@@ -463,6 +496,18 @@ func TestMachineSetHardDiskImageReplacesVirtualDisk(t *testing.T) {
 	}
 	if image[0] != 0xAB {
 		t.Fatalf("hard disk image content mismatch: got %02x want AB", image[0])
+	}
+}
+
+func TestMachineInsertFloppySupportsDriveB(t *testing.T) {
+	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+	disk := NewDiskImage(make([]byte, 512))
+
+	if err := machine.InsertFloppy(1, disk); err != nil {
+		t.Fatalf("insert drive B disk: %v", err)
+	}
+	if err := machine.InsertFloppy(2, disk); err == nil {
+		t.Fatalf("expected unsupported drive error")
 	}
 }
 

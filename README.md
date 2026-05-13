@@ -17,7 +17,7 @@ GoST has moved beyond early bring-up and now provides a usable Atari ST desktop 
 - The bundled EmuTOS image boots to the GEM desktop in both monochrome and color-monitor modes.
 - The desktop frontend runs in an Ebitengine window with working keyboard, mouse, and audio paths.
 - Headless execution, PNG frame dumping, CPU/boot tracing, and browser builds are available for development and debugging.
-- The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, MIDI/RS232 byte I/O, floppy DMA/FDC, and YM2149-backed PSG audio.
+- The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, MIDI/RS232 byte I/O, floppy DMA/FDC, YM2149-backed PSG audio, and basic STE DMA sound.
 
 This is still not a complete Atari ST emulator for broad real-software compatibility yet. The current focus is cleanup, stabilization, and expanding compatibility from the working desktop baseline.
 
@@ -40,6 +40,7 @@ Current focus:
 - Low, medium, and high resolution Shifter framebuffer rendering
 - Working desktop input path for keyboard and mouse through IKBD/ACIA
 - YM2149-backed PSG sound with live audio playback in the desktop frontend
+- Basic STE DMA sound playback in STE model mode
 - Atari ST Blitter register model exercised by live GEM/VDI boot
 - MFP timer delivery plus GLUE-backed VBL/HBL autovector timing
 - Basic MIDI and RS232 byte I/O paths for ACIA/MFP register-level testing
@@ -170,11 +171,11 @@ go run ./cmd/gost --headless --frames 20 --trace boot-verbose --trace-start 0xE1
 With a floppy image:
 
 ```bash
-make run ARGS="--floppy-a /path/to/disk.msa"
+make run ARGS="--floppy-a /path/to/disk-a.msa --floppy-b /path/to/disk-b.msa"
 ```
 
 ```bash
-go run ./cmd/gost --floppy-a /path/to/disk.msa
+go run ./cmd/gost --floppy-a /path/to/disk-a.msa --floppy-b /path/to/disk-b.msa
 ```
 
 Enable the optional ICD-compatible ACSI real-time clock:
@@ -200,7 +201,8 @@ Example JSON config:
 ```json
 {
   "preset": "mega-st",
-  "floppy-a": "/path/to/disk.msa",
+  "floppy-a": "/path/to/disk-a.msa",
+  "floppy-b": "/path/to/disk-b.msa",
   "hd-size-mb": 30,
   "rtc": true,
   "cpu-mhz": 8,
@@ -243,7 +245,7 @@ The repository also includes a GitHub Pages workflow at [`./.github/workflows/pa
 Current browser-build limitations:
 
 - The browser build always boots the bundled EmuTOS image.
-- CLI paths such as `--rom`, `--floppy-a`, `--hd-size-mb`, `--hd-image`, and `--dump-frame` remain desktop/headless features unless a browser-side file picker is added later.
+- CLI paths such as `--rom`, `--floppy-a`, `--floppy-b`, `--hd-size-mb`, `--hd-image`, and `--dump-frame` remain desktop/headless features unless a browser-side file picker is added later.
 - The generated `.wasm` binary must be served over HTTP; opening `docs/index.html` directly from disk will not work.
 
 ### CLI Flags
@@ -253,6 +255,7 @@ Current browser-build limitations:
 - `--rom <path>`: path to the TOS ROM image
 - `--cartridge <path>`: optional cartridge ROM image mapped read-only at `$FA0000-$FBFFFF` (up to 128 KiB)
 - `--floppy-a <path>`: optional floppy disk image for drive A (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
+- `--floppy-b <path>`: optional floppy disk image for drive B (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
 - `--ram-size <bytes>`: emulated RAM size in bytes
 - `--clock-hz <n>`: base machine clock frequency in Hz
 - `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)

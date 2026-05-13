@@ -71,17 +71,22 @@ func main() {
 		}
 	}
 
-	if cfg.FloppyA != "" {
-		disk, err := emulator.LoadDiskImage(cfg.FloppyA)
+	insertFloppy := func(drive int, path string) {
+		if path == "" {
+			return
+		}
+		disk, err := emulator.LoadDiskImage(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "load disk: %v\n", err)
+			fmt.Fprintf(os.Stderr, "load drive %c disk: %v\n", 'A'+drive, err)
 			os.Exit(1)
 		}
-		if err := machine.InsertFloppy(0, disk); err != nil {
-			fmt.Fprintf(os.Stderr, "insert disk: %v\n", err)
+		if err := machine.InsertFloppy(drive, disk); err != nil {
+			fmt.Fprintf(os.Stderr, "insert drive %c disk: %v\n", 'A'+drive, err)
 			os.Exit(1)
 		}
 	}
+	insertFloppy(0, cfg.FloppyA)
+	insertFloppy(1, cfg.FloppyB)
 
 	persistHardDisk := func() error {
 		if cfg.HardDiskImagePath == "" {
