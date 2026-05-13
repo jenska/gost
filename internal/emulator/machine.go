@@ -146,7 +146,7 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 	blitter := devices.NewBlitter(ram)
 	mfp := devices.NewMFP(cfg)
 	acia := devices.NewACIA(mfp.SetACIAInterrupt)
-	fdc := devices.NewFDC(ram, nil)
+	fdc := devices.NewFDC(ram, mfp.SetFDCInterrupt)
 	if cfg.RTC {
 		rtc := devices.NewICDRTC()
 		mfp.AttachICDRTC(rtc)

@@ -761,6 +761,100 @@ func TestFDCAcsiDatacontrolStyleWritesSupportMultiByteCommand(t *testing.T) {
 	}
 }
 
+func TestFDCAcsiSingleByteTestUnitReadyCompletesOnDeselect(t *testing.T) {
+	fdc := NewFDC(NewRAM(0, 1024*1024), nil)
+	if err := fdc.SetHardDiskImage(make([]byte, fdcSectorSize)); err != nil {
+		t.Fatalf("set hard disk image: %v", err)
+	}
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaCSACSI|dmaDRQFloppy); err != nil {
+		t.Fatalf("select ACSI: %v", err)
+	}
+	if err := fdc.Write(cpu.Long, fdcBase+fdcOffsetData, uint32(dmaCSACSI|dmaDRQFloppy|dmaA1)); err != nil {
+		t.Fatalf("write single-byte TUR: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaDRQFloppy); err != nil {
+		t.Fatalf("deselect ACSI: %v", err)
+	}
+
+	if fdc.acsiStatus != acsiStatusGood {
+		t.Fatalf("single-byte TUR status = %02x, want %02x", fdc.acsiStatus, acsiStatusGood)
+	}
+	if pending := fdc.DrainInterrupts(); len(pending) != 1 {
+		t.Fatalf("single-byte TUR should queue one interrupt, got %d", len(pending))
+	}
+}
+
+func TestFDCAcsiStatusPhaseSurvivesDeselect(t *testing.T) {
+	fdc := NewFDC(NewRAM(0, 1024*1024), nil)
+	if err := fdc.SetHardDiskImage(make([]byte, fdcSectorSize)); err != nil {
+		t.Fatalf("set hard disk image: %v", err)
+	}
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaCSACSI|dmaDRQFloppy); err != nil {
+		t.Fatalf("select ACSI: %v", err)
+	}
+	if err := fdc.Write(cpu.Long, fdcBase+fdcOffsetData, uint32(dmaCSACSI|dmaDRQFloppy|dmaA1)); err != nil {
+		t.Fatalf("write single-byte TUR: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaDRQFloppy); err != nil {
+		t.Fatalf("deselect ACSI: %v", err)
+	}
+
+	status, err := fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
+	if err != nil {
+		t.Fatalf("read ACSI status after deselect: %v", err)
+	}
+	if byte(status) != acsiStatusGood {
+		t.Fatalf("ACSI status after deselect = %02x, want %02x", byte(status), acsiStatusGood)
+	}
+}
+
+func TestFDCAcsiPartialCommandBytesAssertHandshakeLine(t *testing.T) {
+	var line []bool
+	fdc := NewFDC(NewRAM(0, 1024*1024), func(asserted bool) {
+		line = append(line, asserted)
+	})
+	if err := fdc.SetHardDiskImage(make([]byte, fdcSectorSize)); err != nil {
+		t.Fatalf("set hard disk image: %v", err)
+	}
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaCSACSI|dmaDRQFloppy); err != nil {
+		t.Fatalf("select ACSI: %v", err)
+	}
+	if err := fdc.Write(cpu.Long, fdcBase+fdcOffsetData, uint32(dmaCSACSI|dmaDRQFloppy|dmaA1)); err != nil {
+		t.Fatalf("write first command byte: %v", err)
+	}
+
+	if len(line) < 2 || line[len(line)-2] || !line[len(line)-1] {
+		t.Fatalf("expected partial command byte to pulse handshake line low/high, got %v", line)
+	}
+	if pending := fdc.DrainInterrupts(); len(pending) != 0 {
+		t.Fatalf("partial command byte must not queue CPU interrupt, got %d", len(pending))
+	}
+}
+
+func TestFDCAcsiSingleByteTestUnitReadyRejectsOtherTargets(t *testing.T) {
+	fdc := NewFDC(NewRAM(0, 1024*1024), nil)
+	if err := fdc.SetHardDiskImage(make([]byte, fdcSectorSize)); err != nil {
+		t.Fatalf("set hard disk image: %v", err)
+	}
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaCSACSI|dmaDRQFloppy); err != nil {
+		t.Fatalf("select ACSI: %v", err)
+	}
+	if err := fdc.Write(cpu.Long, fdcBase+fdcOffsetData, uint32(0x20)<<16|uint32(dmaCSACSI|dmaDRQFloppy|dmaA1)); err != nil {
+		t.Fatalf("write single-byte TUR for target 1: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaDRQFloppy); err != nil {
+		t.Fatalf("deselect ACSI: %v", err)
+	}
+
+	if fdc.acsiStatus != acsiStatusCheckCondition {
+		t.Fatalf("target 1 single-byte TUR status = %02x, want %02x", fdc.acsiStatus, acsiStatusCheckCondition)
+	}
+}
+
 func TestFDCAcsiICDExtendedReadCapacity10(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	fdc := NewFDC(ram, nil)

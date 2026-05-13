@@ -79,15 +79,15 @@ var presetDefinitions = []PresetDefinition{
 	},
 	{
 		Name:        PresetSTF,
-		Description: "Atari STF baseline with ST timing, 1 MiB RAM, color monitor, and no hard disk",
+		Description: "Atari STF baseline with ST timing, 1 MiB RAM, color monitor, and a 30 MiB virtual hard disk",
 	},
 	{
 		Name:        PresetST,
-		Description: "Atari ST baseline with ST timing, 512 KiB RAM, monochrome monitor, and no hard disk",
+		Description: "Atari ST baseline with ST timing, 512 KiB RAM, monochrome monitor, and a 30 MiB virtual hard disk",
 	},
 	{
 		Name:        PresetMegaST,
-		Description: "Atari Mega ST baseline with ST timing, 2 MiB RAM, monochrome monitor, and no hard disk",
+		Description: "Atari Mega ST baseline with ST timing, 2 MiB RAM, monochrome monitor, and a 30 MiB virtual hard disk",
 	},
 }
 
@@ -247,17 +247,14 @@ func ConfigForPreset(preset Preset) (*Config, error) {
 		cfg.Model = MachineModelST
 		cfg.RAMSize = STFDefaultRAMSize
 		cfg.ColorMonitor = true
-		cfg.HardDiskSizeMB = 0
 	case PresetST:
 		cfg.Model = MachineModelST
 		cfg.RAMSize = STDefaultRAMSize
 		cfg.ColorMonitor = false
-		cfg.HardDiskSizeMB = 0
 	case PresetMegaST:
 		cfg.Model = MachineModelST
 		cfg.RAMSize = MegaSTDefaultRAMSize
 		cfg.ColorMonitor = false
-		cfg.HardDiskSizeMB = 0
 	default:
 	}
 	return cfg, nil

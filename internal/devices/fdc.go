@@ -137,6 +137,7 @@ type FDC struct {
 	acsiCmdLen              int
 	acsiExpectedLen         int
 	acsiLastNotNewCDB       bool
+	acsiStatusPending       bool
 	rtc                     *ICDRTC
 }
 
@@ -175,6 +176,7 @@ func (f *FDC) Reset() {
 	f.acsiCmdLen = 0
 	f.acsiExpectedLen = 0
 	f.acsiLastNotNewCDB = false
+	f.acsiStatusPending = false
 	if f.rtc != nil {
 		f.rtc.Reset()
 	}
@@ -555,7 +557,9 @@ func (f *FDC) writeWord(offset uint32, value uint16) error {
 	case fdcOffsetData:
 		return f.writeDataWord(value)
 	case fdcOffsetControl:
+		previousControl := f.control
 		f.control = value
+		f.handleACSIControlTransition(previousControl, value)
 	default:
 		if err := f.writeByte(offset, byte(value>>8)); err != nil {
 			return err
@@ -565,9 +569,32 @@ func (f *FDC) writeWord(offset uint32, value uint16) error {
 	return nil
 }
 
+func (f *FDC) handleACSIControlTransition(previousControl, nextControl uint16) {
+	if previousControl&dmaCSACSI == 0 || nextControl&dmaCSACSI != 0 {
+		return
+	}
+	defer func() {
+		f.acsiCmdLen = 0
+		f.acsiExpectedLen = 0
+		f.acsiLastNotNewCDB = false
+	}()
+
+	if f.acsiCmdLen != 1 {
+		return
+	}
+	command := f.acsiCmdBuf[0]
+	if command&0x1F != 0x00 {
+		return
+	}
+	_ = f.execACSI([]byte{command})
+}
+
 func (f *FDC) currentDataWord() uint16 {
 	if f.control&dmaSCReg != 0 {
 		return f.sectorCount
+	}
+	if f.acsiStatusPending {
+		return f.currentACSIDataWord()
 	}
 	if f.acsiSelected() {
 		return f.currentACSIDataWord()
@@ -600,6 +627,7 @@ func (f *FDC) currentACSIDataWord() uint16 {
 	if f.irq != nil {
 		f.irq(false)
 	}
+	f.acsiStatusPending = false
 	return uint16(f.acsiStatus)
 }
 
@@ -634,7 +662,12 @@ func (f *FDC) writeACSIDataWord(value uint16) error {
 		f.acsiCmdLen = 0
 		f.acsiExpectedLen = 0
 		f.acsiLastNotNewCDB = false
+		f.acsiStatusPending = false
 		return nil
+	}
+
+	if f.irq != nil {
+		f.irq(false)
 	}
 
 	notNewCDB := f.control&dmaA0 != 0 // DMA_NOT_NEWCDB in ACSI mode
@@ -672,6 +705,9 @@ func (f *FDC) writeACSIDataWord(value uint16) error {
 		f.acsiCmdLen = 0
 		f.acsiExpectedLen = 0
 		return f.execACSI(cmd)
+	}
+	if f.irq != nil {
+		f.irq(true)
 	}
 	return nil
 }
@@ -1481,6 +1517,7 @@ func (f *FDC) execACSIReadWrite10(cdb []byte, write bool) error {
 func (f *FDC) finishACSI(status, sense byte, failed bool) {
 	f.acsiStatus = status
 	f.acsiSense = sense
+	f.acsiStatusPending = true
 	if failed {
 		f.dmaOK = false
 	} else {

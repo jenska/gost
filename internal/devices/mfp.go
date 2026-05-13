@@ -55,6 +55,7 @@ type MFP struct {
 	softwareEOI    bool
 	inFlight       [16]bool
 	aciaIRQActive  bool
+	fdcIRQActive   bool
 	gpipInput      byte
 	rtc            *ICDRTC
 	timers         [4]mfpTimer
@@ -92,6 +93,7 @@ func (m *MFP) Reset() {
 	m.serialBuffer = 0
 	m.clockRemainder = 0
 	m.aciaIRQActive = false
+	m.fdcIRQActive = false
 	m.gpipInput = m.gpipInputState()
 }
 
@@ -341,6 +343,14 @@ func (m *MFP) SetACIAInterrupt(asserted bool) {
 	m.updateGPIPEdges()
 }
 
+func (m *MFP) SetFDCInterrupt(asserted bool) {
+	if asserted == m.fdcIRQActive {
+		return
+	}
+	m.fdcIRQActive = asserted
+	m.updateGPIPEdges()
+}
+
 func (m *MFP) AttachICDRTC(rtc *ICDRTC) {
 	m.rtc = rtc
 }
@@ -366,7 +376,7 @@ func (m *MFP) gpipInputState() byte {
 	} else {
 		value |= 0x10
 	}
-	if m.rtc != nil && m.rtc.Active() {
+	if m.fdcIRQActive || (m.rtc != nil && m.rtc.Active()) {
 		value &^= 0x20
 	} else {
 		value |= 0x20

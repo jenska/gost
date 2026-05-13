@@ -328,7 +328,7 @@ func TestBundledEmuTOSDoesNotPanicWithoutMFPDelivery(t *testing.T) {
 	}
 }
 
-func mustBundledMachine(t *testing.T, cfg Config) *Machine {
+func mustBundledMachine(t *testing.T, cfg *Config) *Machine {
 	t.Helper()
 	machine, err := NewMachine(cfg, assets.DefaultROM())
 	if err != nil {
@@ -337,7 +337,7 @@ func mustBundledMachine(t *testing.T, cfg Config) *Machine {
 	return machine
 }
 
-func mustBootBundledMachine(t *testing.T, cfg Config, frames int) *Machine {
+func mustBootBundledMachine(t *testing.T, cfg *Config, frames int) *Machine {
 	t.Helper()
 	machine := mustBundledMachine(t, cfg)
 	stepFrames(t, machine, frames)

@@ -199,7 +199,7 @@ Example JSON config:
 {
   "preset": "mega-st",
   "floppy-a": "/path/to/disk.msa",
-  "hd-size-mb": 0,
+  "hd-size-mb": 30,
   "rtc": true,
   "cpu-mhz": 8,
   "color-monitor": false,

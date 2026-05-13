@@ -86,8 +86,8 @@ func TestMachineMegaSTPresetBootsFromLocalROMPath(t *testing.T) {
 	if cfg.RAMSize != 2*1024*1024 {
 		t.Fatalf("unexpected Mega ST RAM size: got %d want %d", cfg.RAMSize, 2*1024*1024)
 	}
-	if cfg.HardDiskSizeMB != 0 {
-		t.Fatalf("expected Mega ST preset to disable hard disk, got %d", cfg.HardDiskSizeMB)
+	if cfg.HardDiskSizeMB != config.DefaultHardDiskSizeMB {
+		t.Fatalf("expected Mega ST preset to enable default hard disk, got %d want %d", cfg.HardDiskSizeMB, config.DefaultHardDiskSizeMB)
 	}
 
 	romImage, err := config.LoadROM(cfg.ROMPath)
@@ -111,8 +111,8 @@ func TestMachineMegaSTPresetBootsFromLocalROMPath(t *testing.T) {
 			if phystop != 0x00200000 {
 				t.Fatalf("unexpected phystop after Mega ST boot: got %08x want 00200000", phystop)
 			}
-			if machine.HardDiskSizeBytes() != 0 {
-				t.Fatalf("expected Mega ST preset to boot without virtual hard disk, got %d bytes", machine.HardDiskSizeBytes())
+			if machine.HardDiskSizeBytes() != config.DefaultHardDiskSizeMB*1024*1024 {
+				t.Fatalf("expected Mega ST preset to boot with default virtual hard disk, got %d bytes", machine.HardDiskSizeBytes())
 			}
 			return
 		}
@@ -369,6 +369,28 @@ func TestMachineDefaultConfigCreates30MBVirtualHardDisk(t *testing.T) {
 	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
 	if got, want := machine.HardDiskSizeBytes(), 30*1024*1024; got != want {
 		t.Fatalf("unexpected default virtual hard disk size: got %d want %d", got, want)
+	}
+}
+
+func TestMachineDefaultHardDiskMountsAsDriveCUnderBundledEmuTOS(t *testing.T) {
+	cfg := config.DefaultConfig()
+	machine, err := NewMachine(cfg, assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create machine: %v", err)
+	}
+
+	for frame := range 500 {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d: %v", frame, err)
+		}
+	}
+
+	drvbits, err := machine.ram.Read(cpu.Long, 0x04C2)
+	if err != nil {
+		t.Fatalf("read _drvbits: %v", err)
+	}
+	if drvbits&(1<<2) == 0 {
+		t.Fatalf("expected C: to be present in _drvbits, got %08x", drvbits)
 	}
 }
 

@@ -44,8 +44,8 @@ func TestConfigForPresetSTF(t *testing.T) {
 	if !cfg.ColorMonitor {
 		t.Fatalf("expected STF preset to enable color monitor")
 	}
-	if cfg.HardDiskSizeMB != 0 {
-		t.Fatalf("expected STF preset to disable hard disk, got %d", cfg.HardDiskSizeMB)
+	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
+		t.Fatalf("unexpected STF hard disk size: got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
 	}
 }
 
@@ -76,8 +76,8 @@ func TestLoadAppliesPresetBeforeOverrides(t *testing.T) {
 	if cfg.CPUClockHz != 12_000_000 {
 		t.Fatalf("unexpected CPU clock: got %d want %d", cfg.CPUClockHz, 12_000_000)
 	}
-	if cfg.HardDiskSizeMB != 0 {
-		t.Fatalf("expected preset hard disk default to remain disabled, got %d", cfg.HardDiskSizeMB)
+	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
+		t.Fatalf("expected preset hard disk default to remain enabled, got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
 	}
 }
 
@@ -101,8 +101,8 @@ func TestLoadCanReadPresetFromConfigFile(t *testing.T) {
 	if !cfg.ColorMonitor {
 		t.Fatalf("expected STF preset to default to color mode")
 	}
-	if cfg.HardDiskSizeMB != 0 {
-		t.Fatalf("expected ST preset to disable hard disk, got %d", cfg.HardDiskSizeMB)
+	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
+		t.Fatalf("expected ST preset to enable default hard disk, got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
 	}
 }
 
@@ -130,8 +130,8 @@ func TestFlagsOverrideConfigFileSettings(t *testing.T) {
 	if cfg.ColorMonitor {
 		t.Fatalf("expected flags to override config file color monitor setting")
 	}
-	if cfg.HardDiskSizeMB != 0 {
-		t.Fatalf("expected ST preset hard disk default to remain disabled, got %d", cfg.HardDiskSizeMB)
+	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
+		t.Fatalf("expected ST preset hard disk default to remain enabled, got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
 	}
 }
 
@@ -150,8 +150,8 @@ func TestConfigForPresetMegaST(t *testing.T) {
 	if cfg.ColorMonitor {
 		t.Fatalf("expected Mega ST preset to default to monochrome mode")
 	}
-	if cfg.HardDiskSizeMB != 0 {
-		t.Fatalf("expected Mega ST preset to disable hard disk, got %d", cfg.HardDiskSizeMB)
+	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
+		t.Fatalf("expected Mega ST preset to enable default hard disk, got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
 	}
 	if cfg.Model != MachineModelST {
 		t.Fatalf("unexpected model: got %q want %q", cfg.Model, MachineModelST)
