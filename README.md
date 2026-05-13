@@ -76,7 +76,7 @@ The repository includes a bundled default ROM:
 
 ## Running
 
-Desktop mode:
+Start the emulator with the bundled EmuTOS image:
 
 ```bash
 make run
@@ -88,115 +88,11 @@ go run ./cmd/gost
 
 If `downloads/atari-st/PDATS321.msa` exists locally, `make run` and `make headless` automatically mount it as drive A.
 
-Local ROM workflow:
+The repository ignores `TOS/`, so personal ROM images can be kept there for local testing without adding them to Git. The Makefile also provides convenience targets such as `make headless`, `make run-rom`, `make headless-rom`, `make run-mega-tos102`, `make test`, `make build`, and `make help`.
 
-The repository ignores `TOS/` so you can keep personal ROM images there for local testing without adding them to Git.
+CLI flags can be passed through `ARGS` when using Make targets, or directly after `go run ./cmd/gost`.
 
-Run with a specific local ROM:
-
-```bash
-make run-rom ROM=TOS/TOS104GE.IMG ARGS="--preset mega-st"
-```
-
-Run headless with a specific local ROM:
-
-```bash
-make headless-rom ROM=TOS/TOS102GE.IMG FRAMES=600 ARGS="--preset mega-st --trace boot"
-```
-
-Convenience target for a local Mega ST TOS 1.02 image at `TOS/TOS102GE.IMG`:
-
-```bash
-make run-mega-tos102
-```
-
-Color monitor mode:
-
-```bash
-go run ./cmd/gost --color-monitor
-```
-
-Atari STF preset:
-
-```bash
-go run ./cmd/gost --preset stf
-```
-
-Atari ST preset:
-
-```bash
-go run ./cmd/gost --preset st
-```
-
-Atari Mega ST preset:
-
-```bash
-go run ./cmd/gost --preset mega-st
-```
-
-Headless mode:
-
-```bash
-make headless
-```
-
-```bash
-go run ./cmd/gost --headless --frames 1000
-```
-
-Headless color desktop boot:
-
-```bash
-go run ./cmd/gost --headless --color-monitor --frames 1000 --dump-frame /tmp/gost-color-desktop.png
-```
-
-Headless boot inspection with a PNG dump:
-
-```bash
-go run ./cmd/gost --headless --frames 60 --trace boot --dump-frame /tmp/gost-boot.png
-```
-
-Verbose headless boot inspection:
-
-```bash
-go run ./cmd/gost --headless --frames 20 --trace boot-verbose
-```
-
-Late-boot trace inspection in a custom PC range:
-
-```bash
-go run ./cmd/gost --headless --frames 20 --trace boot-verbose --trace-start 0xE16780 --trace-end 0xE16820
-```
-
-With a floppy image:
-
-```bash
-make run ARGS="--floppy-a /path/to/disk-a.msa --floppy-b /path/to/disk-b.msa"
-```
-
-```bash
-go run ./cmd/gost --floppy-a /path/to/disk-a.msa --floppy-b /path/to/disk-b.msa
-```
-
-Enable the optional ICD-compatible ACSI real-time clock:
-
-```bash
-go run ./cmd/gost --rtc
-```
-
-Override the bundled OS:
-
-```bash
-go run ./cmd/gost --rom /path/to/tos.rom
-```
-
-Equivalent Makefile target using a local ROM path:
-
-```bash
-make run-rom ROM=/path/to/tos.rom
-```
-
-Example JSON config:
+JSON config files are also supported. Config keys use the same names as CLI flags without the leading `--`:
 
 ```json
 {
@@ -212,15 +108,34 @@ Example JSON config:
 }
 ```
 
-Run with the config file and optionally override individual settings on the CLI:
-
-```bash
-go run ./cmd/gost --config /path/to/gost.json --headless --frames 1000
-```
-
 Load order is: preset defaults, then JSON config file, then CLI flags.
 
-JSON config keys use the same names as the CLI flags, just without the leading `--`.
+### CLI Flags
+
+- `--config <path>`: optional JSON config file loaded before CLI overrides
+- `--preset <name>`: machine preset, currently `default`, `stf`, `st`, or `mega-st`
+- `--model <name>`: hardware model, currently `st` or `ste`
+- `--rom <path>`: path to the TOS ROM image; bundled EmuTOS is used when omitted
+- `--cartridge <path>`: optional cartridge ROM image mapped read-only at `$FA0000-$FBFFFF` (up to 128 KiB)
+- `--floppy-a <path>`: optional floppy disk image for drive A (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
+- `--floppy-b <path>`: optional floppy disk image for drive B (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
+- `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
+- `--hd-image <path>`: optional persistent ACSI hard disk image file; raw sector images and `.hdi` containers are supported
+- `--rtc`: enable the optional ICD-compatible ACSI real-time clock
+- `--ram-size <bytes>`: emulated RAM size in bytes
+- `--clock-hz <n>`: base machine clock frequency in Hz
+- `--cpu-mhz <n>`: CPU frequency in MHz; changes CPU speed without changing other hardware timing
+- `--frame-hz <n>`: display and VBL refresh rate in Hz; frame timing is derived from `clock-hz / frame-hz`
+- `--color-monitor`: emulate an Atari color monitor instead of monochrome
+- `--midres-y-scale <n>`: scale medium-resolution display height on host output (`1` = off)
+- `--scale <n>`: window scale factor
+- `--fullscreen`: start fullscreen
+- `--headless`: run without opening a window
+- `--frames <n>`: number of frames to run in headless mode
+- `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, `boot-verbose`, `shifter`, or `shifter-verbose`
+- `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces
+- `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces
+- `--dump-frame <path>`: write the last rendered framebuffer to a PNG file
 
 ## WebAssembly
 
@@ -247,32 +162,6 @@ Current browser-build limitations:
 - The browser build always boots the bundled EmuTOS image.
 - CLI paths such as `--rom`, `--floppy-a`, `--floppy-b`, `--hd-size-mb`, `--hd-image`, and `--dump-frame` remain desktop/headless features unless a browser-side file picker is added later.
 - The generated `.wasm` binary must be served over HTTP; opening `docs/index.html` directly from disk will not work.
-
-### CLI Flags
-
-- `--config <path>`: optional JSON config file loaded before CLI overrides
-- `--preset <name>`: machine preset, currently `default`, `stf`, `st`, or `mega-st`
-- `--rom <path>`: path to the TOS ROM image
-- `--cartridge <path>`: optional cartridge ROM image mapped read-only at `$FA0000-$FBFFFF` (up to 128 KiB)
-- `--floppy-a <path>`: optional floppy disk image for drive A (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
-- `--floppy-b <path>`: optional floppy disk image for drive B (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
-- `--ram-size <bytes>`: emulated RAM size in bytes
-- `--clock-hz <n>`: base machine clock frequency in Hz
-- `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
-- `--hd-image <path>`: optional persistent ACSI hard disk image file; raw sector images and `.hdi` containers are supported
-- `--rtc`: enable the optional ICD-compatible ACSI real-time clock
-- `--cpu-mhz <n>`: CPU frequency in MHz (default `8`); increases/decreases CPU speed without changing other hardware timing
-- `--frame-hz <n>`: display and VBL refresh rate in Hz; frame timing is derived from `clock-hz / frame-hz`
-- `--scale <n>`: window scale factor, default `1`
-- `--fullscreen`: start fullscreen
-- `--headless`: run without opening a window
-- `--color-monitor`: emulate an Atari color monitor instead of monochrome
-- `--midres-y-scale <n>`: scale medium-resolution display height on host output (`1` = off)
-- `--frames <n>`: number of frames to run in headless mode, default `1000`
-- `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, `boot-verbose`, `shifter`, or `shifter-verbose`
-- `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces, default `0xE00000`
-- `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces, default `0xE01000`
-- `--dump-frame <path>`: write the last rendered framebuffer to a PNG file
 
 ## Development
 
