@@ -12,10 +12,11 @@ const (
 	aciaSize        = aciaChannelSize * aciaChannelCt
 )
 
-// ACIA fronts the IKBD as a memory-mapped serial interface.
+// ACIA fronts the IKBD and MIDI byte devices as memory-mapped serial channels.
 type ACIA struct {
-	ikbd        *IKBD
-	keyboardIRQ func(bool)
+	ikbd    *IKBD
+	midi    *MIDI
+	aciaIRQ func(bool)
 	// control/status/data hold the memory-mapped register state per channel.
 	control [aciaChannelCt]byte
 	status  [aciaChannelCt]byte
@@ -26,9 +27,9 @@ type ACIA struct {
 	rxCooldown [aciaChannelCt]bool
 }
 
-// NewACIA wires the IKBD behind keyboard channel 0 and resets both channels.
-func NewACIA(keyboardIRQ func(bool)) *ACIA {
-	a := &ACIA{ikbd: NewIKBD(), keyboardIRQ: keyboardIRQ}
+// NewACIA wires the IKBD behind channel 0 and leaves MIDI channel 1 attachable.
+func NewACIA(aciaIRQ func(bool)) *ACIA {
+	a := &ACIA{ikbd: NewIKBD(), aciaIRQ: aciaIRQ}
 	a.Reset()
 	return a
 }
@@ -53,6 +54,7 @@ func (a *ACIA) Reset() {
 		a.rxLoaded[i] = false
 		a.rxCooldown[i] = false
 	}
+	a.updateIRQ()
 }
 
 // Read serves the status or data register selected by the CPU address and
@@ -60,7 +62,7 @@ func (a *ACIA) Reset() {
 func (a *ACIA) Read(size cpu.Size, address uint32) (uint32, error) {
 	channel := aciaChannelIndex(address)
 	if !a.rxCooldown[channel] {
-		a.pollIKBD()
+		a.pollReceiveChannel(channel)
 	}
 	switch (address - aciaBase) % aciaChannelSize {
 	case 0, 1:
@@ -70,17 +72,15 @@ func (a *ACIA) Read(size cpu.Size, address uint32) (uint32, error) {
 		a.rxLoaded[channel] = false
 		a.rxCooldown[channel] = true
 		a.status[channel] &^= 0x81
-		if channel == 0 {
-			a.updateKeyboardIRQ()
-		}
+		a.updateIRQ()
 		return uint32(value), nil
 	default:
 		return 0, nil
 	}
 }
 
-// Write updates a control register or forwards keyboard-channel data bytes to
-// the IKBD command parser.
+// Write updates a control register or forwards channel data bytes to the
+// attached IKBD/MIDI endpoints.
 func (a *ACIA) Write(size cpu.Size, address uint32, value uint32) error {
 	channel := aciaChannelIndex(address)
 	switch (address - aciaBase) % aciaChannelSize {
@@ -90,28 +90,44 @@ func (a *ACIA) Write(size cpu.Size, address uint32, value uint32) error {
 			a.status[channel] = 0x02
 			a.rxLoaded[channel] = false
 			a.rxCooldown[channel] = false
-			a.updateKeyboardIRQ()
+			a.updateIRQ()
 		}
 	case 2, 3:
 		if channel == 0 {
 			a.ikbd.HandleCommand(byte(value))
+		} else if a.midi != nil {
+			a.midi.WriteOutput(byte(value))
 		}
 	}
-	a.pollIKBD()
-	a.updateKeyboardIRQ()
+	a.pollReceiveChannel(channel)
+	a.updateIRQ()
 	return nil
 }
 
-// Advance releases the one-tick receive cooldown and polls the IKBD for a new byte.
+// Advance releases the one-tick receive cooldown and polls attached endpoints
+// for new bytes.
 func (a *ACIA) Advance(uint64) {
 	for i := range a.rxCooldown {
 		a.rxCooldown[i] = false
 	}
-	a.pollIKBD()
+	for channel := range aciaChannelCt {
+		a.pollReceiveChannel(uint32(channel))
+	}
 }
 
 func (a *ACIA) DrainInterrupts() []Interrupt {
 	return nil
+}
+
+// pollReceiveChannel loads one pending endpoint byte when that channel's
+// receive register is empty.
+func (a *ACIA) pollReceiveChannel(channel uint32) {
+	switch channel {
+	case 0:
+		a.pollIKBD()
+	case 1:
+		a.pollMIDI()
+	}
 }
 
 // pollIKBD loads one pending IKBD byte into channel 0 when the receive register is empty.
@@ -129,26 +145,51 @@ func (a *ACIA) pollIKBD() {
 	if a.control[0]&0x80 != 0 {
 		a.status[0] |= 0x80
 	}
-	a.updateKeyboardIRQ()
+	a.updateIRQ()
 }
 
-// updateKeyboardIRQ keeps the status IRQ bit and external IRQ callback in sync
-// with receive-ready state.
-func (a *ACIA) updateKeyboardIRQ() {
-	if a.rxLoaded[0] && a.control[0]&0x80 != 0 {
-		a.status[0] |= 0x80
-	} else {
-		a.status[0] &^= 0x80
-	}
-	if a.keyboardIRQ == nil {
+func (a *ACIA) pollMIDI() {
+	if a.rxLoaded[1] || a.midi == nil || !a.midi.InputAvailable() {
 		return
 	}
-	a.keyboardIRQ(a.status[0]&0x80 != 0)
+	value, ok := a.midi.PopInput()
+	if !ok {
+		return
+	}
+	a.data[1] = value
+	a.rxLoaded[1] = true
+	a.status[1] |= 0x01
+	if a.control[1]&0x80 != 0 {
+		a.status[1] |= 0x80
+	}
+	a.updateIRQ()
+}
+
+// updateIRQ keeps both channel IRQ bits and the shared external ACIA IRQ line
+// in sync with receive-ready state.
+func (a *ACIA) updateIRQ() {
+	asserted := false
+	for channel := range aciaChannelCt {
+		if a.rxLoaded[channel] && a.control[channel]&0x80 != 0 {
+			a.status[channel] |= 0x80
+			asserted = true
+		} else {
+			a.status[channel] &^= 0x80
+		}
+	}
+	if a.aciaIRQ != nil {
+		a.aciaIRQ(asserted)
+	}
 }
 
 // aciaChannelIndex maps an address inside the ACIA window to channel 0 or 1.
 func aciaChannelIndex(address uint32) uint32 {
 	return (address - aciaBase) / aciaChannelSize
+}
+
+func (a *ACIA) AttachMIDI(midi *MIDI) {
+	a.midi = midi
+	a.pollMIDI()
 }
 
 func (a *ACIA) PushKey(scancode byte, pressed bool) {
@@ -157,4 +198,25 @@ func (a *ACIA) PushKey(scancode byte, pressed bool) {
 
 func (a *ACIA) PushMouse(dx, dy int, buttons byte) {
 	a.ikbd.PushMouse(dx, dy, buttons)
+}
+
+func (a *ACIA) PushMIDIInput(data []byte) {
+	if a.midi == nil {
+		return
+	}
+	a.midi.PushInput(data)
+	a.pollMIDI()
+}
+
+func (a *ACIA) MIDIOutput() []byte {
+	if a.midi == nil {
+		return nil
+	}
+	return a.midi.Output()
+}
+
+func (a *ACIA) ClearMIDIOutput() {
+	if a.midi != nil {
+		a.midi.ClearOutput()
+	}
 }

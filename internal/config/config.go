@@ -50,6 +50,7 @@ const (
 	KeyConfig         = "config"
 	KeyPreset         = "preset"
 	KeyROM            = "rom"
+	KeyCartridge      = "cartridge"
 	KeyFloppyA        = "floppy-a"
 	KeyHardDiskSizeMB = "hd-size-mb"
 	KeyHardDiskImage  = "hd-image"
@@ -97,6 +98,8 @@ type Config struct {
 	Preset Preset
 	// ROMPath is the path to a custom TOS ROM file; if empty, uses bundled EmuTOS.
 	ROMPath string
+	// CartridgePath is the path to an optional cartridge ROM image.
+	CartridgePath string
 	// FloppyA is the path to a disk image to insert into floppy drive A.
 	FloppyA string
 	// HardDiskSizeMB is the virtual hard disk size in megabytes (0 disables hard disk).
@@ -370,6 +373,10 @@ func (p configPatch) Apply(cfg *Config) error {
 			if err := decodeJSON(raw, &cfg.ROMPath); err != nil {
 				return fmt.Errorf("decode %q: %w", key, err)
 			}
+		case KeyCartridge:
+			if err := decodeJSON(raw, &cfg.CartridgePath); err != nil {
+				return fmt.Errorf("decode %q: %w", key, err)
+			}
 		case KeyFloppyA:
 			if err := decodeJSON(raw, &cfg.FloppyA); err != nil {
 				return fmt.Errorf("decode %q: %w", key, err)
@@ -494,6 +501,7 @@ func parseFlags(cfg *Config, args []string) error {
 	fs.String(KeyConfig, "", "optional JSON config file loaded before CLI overrides")
 	fs.StringVar(&preset, KeyPreset, preset, "machine preset: default|stf|st|mega-st")
 	fs.StringVar(&cfg.ROMPath, KeyROM, cfg.ROMPath, "path to Atari ST TOS ROM")
+	fs.StringVar(&cfg.CartridgePath, KeyCartridge, cfg.CartridgePath, "path to optional Atari ST cartridge ROM image")
 	fs.StringVar(&cfg.FloppyA, KeyFloppyA, cfg.FloppyA, "path to drive A disk image (.st, .msa, .dim, or compatible .adi)")
 	fs.Var(uint32Flag{target: &cfg.HardDiskSizeMB}, KeyHardDiskSizeMB, "virtual ACSI hard disk size in MiB (0 disables)")
 	fs.StringVar(&cfg.HardDiskImagePath, KeyHardDiskImage, cfg.HardDiskImagePath, "path to persistent virtual hard disk image file")

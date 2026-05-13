@@ -185,3 +185,28 @@ func TestLoadCanEnableRTCFromConfigFile(t *testing.T) {
 		t.Fatalf("expected JSON rtc option to enable ICD RTC support")
 	}
 }
+
+func TestLoadCanSetCartridgePath(t *testing.T) {
+	cfg, err := Load([]string{"--cartridge", "diag-cart.bin"})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.CartridgePath != "diag-cart.bin" {
+		t.Fatalf("unexpected cartridge path: got %q want diag-cart.bin", cfg.CartridgePath)
+	}
+}
+
+func TestLoadCanSetCartridgePathFromConfigFile(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gost.json")
+	if err := os.WriteFile(configPath, []byte(`{"cartridge":"diag-cart.bin"}`), 0o644); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	cfg, err := Load([]string{"--config", configPath})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.CartridgePath != "diag-cart.bin" {
+		t.Fatalf("unexpected cartridge path: got %q want diag-cart.bin", cfg.CartridgePath)
+	}
+}

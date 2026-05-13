@@ -56,26 +56,27 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 | Shifter (ST) | ⚠️ Partial | internal/devices/shifter_st.go | Low/Medium/High res, palette, partial contention/blanking model |
 | Shifter (STE) | ⚠️ Partial | internal/devices/shifter_ste.go | Line offset, fine scroll, and STE palette coverage exist; timing and dynamic edge cases remain |
 | Blitter | ✅ Functional | internal/devices/blitter.go | Immediate execution, no cycle timing |
-| MFP 68901 | ⚠️ Partial | internal/devices/mfp.go | Timers, basic GPIP, no serial I/O details |
-| ACIA | ✅ Basic | internal/devices/acia.go | Keyboard/IKBD path active; second register channel modeled but no external MIDI device |
+| MFP 68901 | ⚠️ Partial | internal/devices/mfp.go | Timers, GPIP edge interrupts, basic USART byte path |
+| ACIA | ✅ Basic | internal/devices/acia.go | Keyboard/IKBD path active; MIDI byte path on channel 1 |
 | IKBD | ✅ Basic | internal/devices/ikbd.go | Keyboard, mouse, clock queries |
 | ICD RTC | ✅ Optional | internal/devices/icd_rtc.go | ACSI nibble protocol, GPIP bit 5 detection, system-time backed |
 | FDC WD1772 | ⚠️ Partial | internal/devices/fdc.go | WD1772 type I/II/III/IV over sector-image abstraction; raw-track fidelity and format breadth still limited |
 | PSG/YM2149 | ✅ Functional | internal/devices/psg.go | Via ym2149 library, audio output |
 | Printer Port | ✅ Basic | internal/devices/printer_port.go | PSG Port B data capture, Port A bit 5 strobe, MFP GPIP0 BUSY |
-| VBL Source | ✅ Complete | internal/devices/vbl.go | 50 Hz autovector |
-| GLUE | ⚠️ Stub | internal/devices/glue.go | Minimal register model |
+| RS232 / Modem Port | ✅ Basic | internal/devices/rs232.go | MFP UDR/RSR/TSR byte buffers with RX/TX interrupts; no baud/framing/line-control timing |
+| MIDI Port | ✅ Basic | internal/devices/midi.go | ACIA channel 1 byte buffers with receive IRQ; no baud/timing/host backend |
+| Cartridge ROM | ✅ Basic | internal/devices/cartridge_rom.go | Optional read-only 128 KiB slot at $FA0000-$FBFFFF |
+| GLUE | ✅ Basic | internal/devices/glue.go | System-control probe register, PAL/NTSC HBL timing, VBL/HBL autovectors |
 | STE Sound | ✅ Stub | internal/devices/ste_sound.go | Returns bus error (correct for ST) |
 
 ### 1.2 Missing Hardware Devices
 
 | Device | Category | Impact | Complexity |
 |--------|----------|--------|-----------|
-| **MIDI Port** | I/O | Low | MEDIUM - Basic serial protocol, no timing |
-| **Modem Port (MFP UART)** | I/O | Low | HIGH - Full UART timing and line behavior |
+| **MIDI host backend/timing** | I/O | Low | MEDIUM - Real-time MIDI scheduling and host device bridge |
+| **Modem Port (full MFP UART timing)** | I/O | Low | HIGH - Baud/framing/modem-control line behavior |
 | **STE DMA Sound** | Audio | High (STE) | HIGH - Complex timing, DMA integration |
 | **Mega ST Extended Memory** | Memory | Medium (Mega) | MEDIUM - Bank switching, dual MFP |
-| **Cartridge ROM** | Memory | Low | LOW - Simple address mapping |
 | **Network/Ethernet** | I/O | Very Low | VERY HIGH - Requires network stack |
 | **SCSI Controller (ST Compact)** | Storage | Low | MEDIUM - Command set, DMA |
 | **Floppy Controller Edge Cases** | Storage | Medium | HIGH - Various disk formats, error conditions |
@@ -151,15 +152,15 @@ type MFP struct {
     registers    [mfpSize]byte
     timers       [4]mfpTimer
     aciaIRQActive bool
-    // ... serial stub fields
+    // ... RS232 byte-buffer path
 }
 ```
 
 **Missing/Incomplete:**
-- ❌ **Serial I/O (UART)**
-  - Current: Stub registers (UCR, RSR, TSR, UDR) always return "ready"
-  - Missing: Actual UART baud rate generation, data framing, parity
-  - Impact: Real serial devices won't work; TOS 1.0+ may timeout
+- ⚠️ **Serial I/O (UART)**
+  - Current: Basic RS232 byte device wired through UDR, RSR, TSR, and USART RX/TX interrupt channels
+  - Missing: Actual UART baud rate generation, data framing, parity, and modem-control line behavior
+  - Impact: Byte-oriented serial tests can run; timing-sensitive real serial/modem software can still fail
   - Complexity: HIGH (requires cycle-accurate UART simulation)
 
 - ✅ **GPIP Interrupt Detection (AER/DDR)**
@@ -271,19 +272,20 @@ type IKBD struct {
     absX, absY  uint16
 }
 
-// acia.go - Two channels, IKBD on channel 0
+// acia.go - Two channels, IKBD on channel 0, MIDI on channel 1
 type ACIA struct {
     ikbd        *IKBD
+    midi        *MIDI
     control, status, data [2]byte
 }
 ```
 
 **Missing/Incomplete:**
-- ❌ **ACIA Channel 1 (MIDI Device Path)**
-  - Current: The second ACIA-side register window exists but no MIDI-facing device is attached
-  - Missing: External MIDI device model and traffic simulation
-  - Impact: MIDI software can see registers but not exchange real data
-  - Complexity: MEDIUM
+- ✅ **ACIA Channel 1 (MIDI Device Path)**
+  - Current: Basic MIDI byte endpoint is attached to the second ACIA register window with receive-ready status and shared ACIA IRQ behavior
+  - Remaining: Real-time MIDI scheduling, host MIDI backend, and deeper ACIA timing/control-mode fidelity
+  - Impact: Byte-oriented MIDI traffic can be tested; timing-sensitive sequencer behavior can still fail
+  - Complexity: MEDIUM for host bridge, HIGH for cycle/timing fidelity
 
 - ❌ **IKBD Timing**
   - Current: Commands processed immediately
@@ -391,9 +393,9 @@ type PSG struct {
 | **Low-Level Disk Tools** | HDCopy, Kyroflop, FastCopy | Raw track I/O fidelity and special FDC timing remain incomplete |
 | **3D Graphics** | Falcon 030 features | Not implemented (different CPU) |
 | **Network Software** | Spectre GCN, NetBSD | No networking hardware |
-| **Real-Time Apps** | MIDI sequencers, audio apps | Timing inaccuracy, no MIDI port |
+| **Real-Time Apps** | MIDI sequencers, audio apps | Timing inaccuracy, no host MIDI backend |
 | **Hard Disk Utilities** | ICD RTC, partition tools | Optional RTC now exists, but broader utility validation and some SCSI coverage are still limited |
-| **Cartridge Software** | Various | No cartridge ROM support |
+| **Cartridge Software** | Various | Basic ROM mapping exists; cartridge-specific hardware and broad validation remain |
 | **Second Floppy Drive** | Multi-drive sequences | Single drive (A) only, no B |
 
 ### 3.3 Disk Image Format Support
@@ -416,17 +418,19 @@ type PSG struct {
 
 ```
 internal/devices/
-  ✅ acia_test.go             - IKBD channel, basic reads/writes
+  ✅ acia_test.go             - IKBD channel, MIDI channel, basic reads/writes
   ✅ blitter_benchmark_test.go - Performance testing
   ✅ blitter_test.go          - Basic operations
   ✅ bus_error_region_test.go  - Error handling
   ✅ fixed_value_region_test.go- Fixed value regions
-  ✅ glue_test.go             - GLUE register model
+  ✅ glue_test.go             - GLUE register model and blanking interrupt timing
   ✅ ikbd_test.go             - Keyboard, mouse, commands
   ✅ icd_rtc_test.go          - ICD RTC protocol, reads/writes
   ✅ mfp_test.go              - Timers, interrupts, GPIP
-  ❌ NO: Serial I/O specific tests
-  ❌ NO: GPIP edge detection tests
+  ✅ midi_test.go             - MIDI byte FIFO and output capture
+  ✅ rs232_test.go            - RS232 byte FIFO and output capture
+  ✅ MFP/ACIA serial-path tests
+  ✅ GPIP edge detection tests
   ✅ psg_test.go              - PSG register reads/writes
   ✅ shifter_benchmark_test.go - Framebuffer generation
   ✅ shifter_test.go          - Low/Medium/High res rendering
@@ -556,14 +560,17 @@ internal/emulator/
   - Follow-up: Optional host output sink or file-backed capture for real print jobs
 
 #### 2.3 ACIA Channel 1 (MIDI Device Path)
-- **Attach a real MIDI-side device model to the second ACIA register channel**
-  - Impact: MIDI-oriented software can exercise the existing register window
-  - Complexity: MEDIUM
-  - Effort: 1 week
-  - Files: [internal/devices/acia.go](internal/devices/acia.go), new MIDI device stub/path
-  - Tests: MIDI-side receive/transmit simulation
+- ✅ **Basic MIDI-side device model attached**
+  - Delivered: ACIA channel 1 receive/transmit byte buffers, receive-ready status, shared ACIA IRQ behavior, and machine-level MIDI input/output helpers
+  - Files: [internal/devices/midi.go](internal/devices/midi.go), [internal/devices/acia.go](internal/devices/acia.go), [internal/emulator/machine_io.go](internal/emulator/machine_io.go)
+  - Follow-up: Host MIDI backend and real-time scheduling for sequencer-grade behavior
 
 #### 2.4 MFP Serial I/O (UART)
+- ✅ **Basic RS232 byte path completed**
+  - Delivered: Host-injected receive FIFO, guest transmit capture, MFP UDR/RSR/TSR status, USART receive-buffer-full and transmit-buffer-empty interrupts
+  - Files: [internal/devices/rs232.go](internal/devices/rs232.go), [internal/devices/mfp.go](internal/devices/mfp.go), [internal/emulator/machine_io.go](internal/emulator/machine_io.go)
+  - Follow-up: Connect the captured byte stream to a host serial/socket/file integration when needed
+
 - **Implement complete UART model**
   - Impact: Real serial/modem devices possible
   - Complexity: HIGH
@@ -640,11 +647,10 @@ internal/emulator/
   - Effort: 1-2 weeks
 
 #### 3.3 System Features
-- **Cartridge ROM support**
-  - Cartridge detection
-  - Address mapping (0xFA0000-0xFBFFFF)
-  - Effort: 1 week
-  - Impact: Cartridge games/utilities run
+- ✅ **Basic cartridge ROM support**
+  - Delivered: Optional read-only cartridge image mapping at $FA0000-$FBFFFF, absent-cartridge probe behavior, CLI/JSON config path
+  - Files: [internal/devices/cartridge_rom.go](internal/devices/cartridge_rom.go), [internal/emulator/machine_builder.go](internal/emulator/machine_builder.go), [internal/config/config.go](internal/config/config.go)
+  - Follow-up: Validate real cartridge images and model cartridges with writable/special hardware if needed
 
 - **Mega ST extended features**
   - Dual MFP support
@@ -718,7 +724,7 @@ EmuTOS Desktop (✅ Done)
 ├── MFP timers
 │   └── GPIP edge detection (Phase 1)
 ├── IKBD/ACIA
-│   └── ACIA Ch1 MIDI device path (Phase 2)
+│   └── ACIA Ch1 MIDI device path (✅ Done)
 ├── FDC
 │   ├── Raw-track fidelity (Phase 1)
 │   ├── ADI/HDI formats (✅ Done)
@@ -730,7 +736,7 @@ Real TOS Compatibility (Phase 2)
 ├── Serial/modem I/O via MFP UART (Phase 2)
 ├── Date/time utility compatibility tracking (Phase 2)
 ├── Printer port (Phase 2)
-├── MIDI device path on ACIA ch.1 (Phase 2)
+├── MIDI device path on ACIA ch.1 (✅ Done)
 └── Hardware detection (GPIP, Phase 1)
 
 Advanced Software (Phase 3)
@@ -816,9 +822,9 @@ Advanced Software (Phase 3)
     [x] Data direction (DDR)
     [ ] Serial I/O (UART)
 [ ] ACIA
-    [ ] Keyboard channel (Ch 0)
-    [ ] MIDI/secondary channel behavior
-    [ ] Control/Status/Data registers
+    [x] Keyboard channel (Ch 0)
+    [x] MIDI/secondary channel behavior
+    [x] Control/Status/Data registers
 [ ] IKBD
     [ ] Keyboard input
     [ ] Mouse (relative mode)
@@ -840,11 +846,11 @@ Advanced Software (Phase 3)
     [ ] Envelope control
     [ ] Port A/B
     [ ] Noise generation
-[ ] VBL interrupts (50 Hz)
+[x] VBL interrupts (50 Hz)
 [x] RTC (Real-Time Clock)
 [ ] Parallel/Printer port
-[ ] MIDI port
-[ ] Cartridge ROM
+[x] MIDI port
+[x] Cartridge ROM
 [ ] Extended memory (Mega ST)
 ```
 

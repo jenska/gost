@@ -633,3 +633,128 @@ func TestMFPGPIPBit5ReflectsICDRTCSession(t *testing.T) {
 		t.Fatalf("expected ended RTC line to read high, GPIP=%02x", byte(cleared))
 	}
 }
+
+func TestMFPRS232ReceiveByteSetsStatusAndInterrupt(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
+	mfp.AttachRS232(NewRS232())
+
+	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
+		t.Fatalf("write vector base: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERA, 0x10); err != nil {
+		t.Fatalf("enable USART receive interrupt: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRA, 0x10); err != nil {
+		t.Fatalf("mask USART receive interrupt: %v", err)
+	}
+
+	mfp.PushRS232Input([]byte("A"))
+
+	status, err := mfp.Read(1, mfpBase+mfpRSR)
+	if err != nil {
+		t.Fatalf("read RSR: %v", err)
+	}
+	if byte(status)&mfpRSRBufferFull == 0 {
+		t.Fatalf("expected RSR buffer-full bit, got %02x", byte(status))
+	}
+
+	irqs := mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected receive interrupt, got %d", len(irqs))
+	}
+	if irqs[0].Vector == nil || *irqs[0].Vector != 0x4C {
+		t.Fatalf("unexpected receive vector: %+v", irqs[0].Vector)
+	}
+
+	data, err := mfp.Read(1, mfpBase+mfpUDR)
+	if err != nil {
+		t.Fatalf("read UDR: %v", err)
+	}
+	if byte(data) != 'A' {
+		t.Fatalf("unexpected received byte: got %q want A", byte(data))
+	}
+
+	status, err = mfp.Read(1, mfpBase+mfpRSR)
+	if err != nil {
+		t.Fatalf("read RSR after UDR: %v", err)
+	}
+	if byte(status)&mfpRSRBufferFull != 0 {
+		t.Fatalf("expected RSR buffer-full bit to clear, got %02x", byte(status))
+	}
+}
+
+func TestMFPRS232ReceiveQueuesMultipleBytes(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
+	mfp.AttachRS232(NewRS232())
+	if err := mfp.Write(1, mfpBase+mfpIERA, 0x10); err != nil {
+		t.Fatalf("enable USART receive interrupt: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRA, 0x10); err != nil {
+		t.Fatalf("mask USART receive interrupt: %v", err)
+	}
+
+	mfp.PushRS232Input([]byte("AB"))
+
+	first, err := mfp.Read(1, mfpBase+mfpUDR)
+	if err != nil {
+		t.Fatalf("read first UDR: %v", err)
+	}
+	if byte(first) != 'A' {
+		t.Fatalf("first received byte = %q, want A", byte(first))
+	}
+
+	status, err := mfp.Read(1, mfpBase+mfpRSR)
+	if err != nil {
+		t.Fatalf("read RSR after first UDR: %v", err)
+	}
+	if byte(status)&mfpRSRBufferFull == 0 {
+		t.Fatalf("expected second queued byte to set RSR, got %02x", byte(status))
+	}
+
+	second, err := mfp.Read(1, mfpBase+mfpUDR)
+	if err != nil {
+		t.Fatalf("read second UDR: %v", err)
+	}
+	if byte(second) != 'B' {
+		t.Fatalf("second received byte = %q, want B", byte(second))
+	}
+}
+
+func TestMFPRS232TransmitCapturesOutputAndInterrupts(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
+	rs232 := NewRS232()
+	mfp.AttachRS232(rs232)
+
+	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
+		t.Fatalf("write vector base: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERA, 0x04); err != nil {
+		t.Fatalf("enable USART transmit interrupt: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRA, 0x04); err != nil {
+		t.Fatalf("mask USART transmit interrupt: %v", err)
+	}
+
+	if err := mfp.Write(1, mfpBase+mfpUDR, 'Z'); err != nil {
+		t.Fatalf("write UDR: %v", err)
+	}
+	if got, want := string(rs232.Output()), "Z"; got != want {
+		t.Fatalf("RS232 output = %q, want %q", got, want)
+	}
+
+	status, err := mfp.Read(1, mfpBase+mfpTSR)
+	if err != nil {
+		t.Fatalf("read TSR: %v", err)
+	}
+	if byte(status)&mfpTSRBufferEmpty == 0 {
+		t.Fatalf("expected TSR buffer-empty bit, got %02x", byte(status))
+	}
+
+	irqs := mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected transmit interrupt, got %d", len(irqs))
+	}
+	if irqs[0].Vector == nil || *irqs[0].Vector != 0x4A {
+		t.Fatalf("unexpected transmit vector: %+v", irqs[0].Vector)
+	}
+}

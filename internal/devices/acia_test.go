@@ -57,6 +57,76 @@ func TestACIAMIDIChannelStaysIndependent(t *testing.T) {
 	}
 }
 
+func TestACIAMIDITransmitCapturesOutput(t *testing.T) {
+	acia := NewACIA(nil)
+	midi := NewMIDI()
+	acia.AttachMIDI(midi)
+
+	if err := acia.Write(1, aciaBase+6, 0x90); err != nil {
+		t.Fatalf("write MIDI data: %v", err)
+	}
+
+	output := midi.Output()
+	if len(output) != 1 || output[0] != 0x90 {
+		t.Fatalf("MIDI output = %x, want 90", output)
+	}
+}
+
+func TestACIAMIDIReceiveByte(t *testing.T) {
+	acia := NewACIA(nil)
+	acia.AttachMIDI(NewMIDI())
+
+	acia.PushMIDIInput([]byte{0x90})
+
+	status, err := acia.Read(1, aciaBase+4)
+	if err != nil {
+		t.Fatalf("read MIDI status: %v", err)
+	}
+	if status&0x01 == 0 {
+		t.Fatalf("expected MIDI receive-ready status bit, got %02x", status)
+	}
+
+	data, err := acia.Read(1, aciaBase+6)
+	if err != nil {
+		t.Fatalf("read MIDI data: %v", err)
+	}
+	if data != 0x90 {
+		t.Fatalf("unexpected MIDI data byte: got %02x want 90", data)
+	}
+}
+
+func TestACIAMIDIStaggersQueuedBytesAcrossAdvances(t *testing.T) {
+	acia := NewACIA(nil)
+	acia.AttachMIDI(NewMIDI())
+
+	acia.PushMIDIInput([]byte{0x90, 0x40})
+
+	first, err := acia.Read(1, aciaBase+6)
+	if err != nil {
+		t.Fatalf("read first MIDI byte: %v", err)
+	}
+	if first != 0x90 {
+		t.Fatalf("first MIDI byte = %02x, want 90", first)
+	}
+
+	status, err := acia.Read(1, aciaBase+4)
+	if err != nil {
+		t.Fatalf("read MIDI status after first byte: %v", err)
+	}
+	if status&0x01 != 0 {
+		t.Fatalf("expected second MIDI byte to wait for advance, got %02x", status)
+	}
+
+	acia.Advance(0)
+	second, err := acia.Read(1, aciaBase+6)
+	if err != nil {
+		t.Fatalf("read second MIDI byte: %v", err)
+	}
+	if second != 0x40 {
+		t.Fatalf("second MIDI byte = %02x, want 40", second)
+	}
+}
+
 func TestACIAKeyboardDoesNotQueueDirectCPUInterrupt(t *testing.T) {
 	acia := NewACIA(nil)
 
@@ -106,6 +176,42 @@ func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
 
 	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
 		t.Fatalf("expected interrupt to clear after data read, got %d", len(irqs))
+	}
+}
+
+func TestACIAMIDISignalsMFPInterruptOnReceive(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
+	acia := NewACIA(mfp.SetACIAInterrupt)
+	acia.AttachMIDI(NewMIDI())
+
+	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
+		t.Fatalf("write vector base: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIERB, 0x40); err != nil {
+		t.Fatalf("enable ACIA interrupt: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpIMRB, 0x40); err != nil {
+		t.Fatalf("mask ACIA interrupt: %v", err)
+	}
+	if err := acia.Write(1, aciaBase+4, 0x95); err != nil {
+		t.Fatalf("enable MIDI RX interrupts: %v", err)
+	}
+
+	acia.PushMIDIInput([]byte{0x90})
+
+	irqs := mfp.DrainInterrupts()
+	if len(irqs) != 1 {
+		t.Fatalf("expected one MFP interrupt, got %d", len(irqs))
+	}
+	if irqs[0].Vector == nil || *irqs[0].Vector != 0x46 {
+		t.Fatalf("unexpected ACIA MFP vector: %+v", irqs[0].Vector)
+	}
+
+	if _, err := acia.Read(1, aciaBase+6); err != nil {
+		t.Fatalf("read MIDI data: %v", err)
+	}
+	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+		t.Fatalf("expected interrupt to clear after MIDI data read, got %d", len(irqs))
 	}
 }
 

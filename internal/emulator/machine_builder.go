@@ -11,6 +11,10 @@ import (
 )
 
 func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
+	return NewMachineWithCartridge(cfg, romImage, nil)
+}
+
+func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage []byte) (*Machine, error) {
 	if len(romImage) == 0 {
 		return nil, fmt.Errorf("ROM image is required")
 	}
@@ -23,6 +27,10 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 	// perform DMA-style reads/writes directly against ST RAM.
 	ram := devices.NewRAM(0x000000, cfg.RAMSize)
 	rom := devices.NewROM(romImage, defaultROMHighAlias, secondaryROMAlias)
+	cartridge, err := newCartridgeROM(cartridgeImage)
+	if err != nil {
+		return nil, err
+	}
 	overlayROM := devices.NewOverlayROM(rom, ram)
 	memoryConfig := devices.NewMemoryConfig(overlayROM, cfg.RAMSize)
 	ram.SetMemoryConfig(memoryConfig)
@@ -33,22 +41,25 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 		return nil, err
 	}
 
-	glue := devices.NewGLUE()
+	glue := devices.NewGLUE(cfg)
 	blitter := devices.NewBlitter(ram)
 	mfp := devices.NewMFP(cfg)
 	acia := devices.NewACIA(mfp.SetACIAInterrupt)
 	fdc := devices.NewFDC(ram, mfp.SetFDCInterrupt)
 	psg := devices.NewPSG(cfg.ClockHz)
 	printer := devices.NewPrinterPort()
-	vbl := devices.NewVBLSource(cfg)
+	rs232 := devices.NewRS232()
+	midi := devices.NewMIDI()
 	steSound := devices.NewSTESound()
 
+	mfp.AttachRS232(rs232)
+	acia.AttachMIDI(midi)
 	if err := configureStorageAndClock(cfg, fdc, mfp); err != nil {
 		return nil, err
 	}
 	wirePSGPorts(psg, fdc, mfp, printer)
 
-	bus := cpu.NewBus(
+	busDevices := []cpu.Device{
 		overlayROM,
 		ram,
 		memoryConfig,
@@ -61,10 +72,17 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 		psg,
 		steSound,
 		newMonsterProbeRegion(),
-		newFixedProbeRegion(),
+	}
+	if cartridge != nil {
+		busDevices = append(busDevices, cartridge)
+	} else {
+		busDevices = append(busDevices, newAbsentCartridgeProbeRegion())
+	}
+	busDevices = append(busDevices,
 		newOpenBusRegion(romImage),
 		rom,
 	)
+	bus := cpu.NewBus(busDevices...)
 	bus.SetWaitStates(4)
 
 	processor, err := cpu.NewCPU(bus)
@@ -77,16 +95,21 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 		bus:          bus,
 		cpu:          processor,
 		ram:          ram,
+		rom:          rom,
+		cartridge:    cartridge,
 		overlayROM:   overlayROM,
 		memoryConfig: memoryConfig,
 		shifter:      shifter,
+		glue:         glue,
 		mfp:          mfp,
 		acia:         acia,
 		fdc:          fdc,
 		psg:          psg,
 		printer:      printer,
-		clocked:      []devices.Clocked{mfp, acia, fdc, psg, vbl},
-		irqSources:   []devices.InterruptSource{vbl, mfp, acia, fdc},
+		rs232:        rs232,
+		midi:         midi,
+		clocked:      []devices.Clocked{glue, mfp, acia, fdc, psg},
+		irqSources:   []devices.InterruptSource{glue, mfp, acia, fdc},
 		frameCycles:  frameCycles,
 		traceWriter:  io.Discard,
 	}
@@ -96,6 +119,17 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 	}
 
 	return machine, nil
+}
+
+func newCartridgeROM(image []byte) (*devices.CartridgeROM, error) {
+	if len(image) == 0 {
+		return nil, nil
+	}
+	cartridge, err := devices.NewCartridgeROM(image)
+	if err != nil {
+		return nil, fmt.Errorf("create cartridge ROM: %w", err)
+	}
+	return cartridge, nil
 }
 
 func newModelShifter(cfg *config.Config, ram *devices.RAM) (*devices.Shifter, error) {
@@ -145,7 +179,7 @@ func newMonsterProbeRegion() *devices.BusErrorRegion {
 	)
 }
 
-func newFixedProbeRegion() *devices.FixedValueRegion {
+func newAbsentCartridgeProbeRegion() *devices.FixedValueRegion {
 	return devices.NewFixedValueRegion(
 		0xFFFFFFFF,
 		devices.AddressRange{Start: 0xFA0000, End: 0xFA0010},

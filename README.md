@@ -17,7 +17,7 @@ GoST has moved beyond early bring-up and now provides a usable Atari ST desktop 
 - The bundled EmuTOS image boots to the GEM desktop in both monochrome and color-monitor modes.
 - The desktop frontend runs in an Ebitengine window with working keyboard, mouse, and audio paths.
 - Headless execution, PNG frame dumping, CPU/boot tracing, and browser builds are available for development and debugging.
-- The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, floppy DMA/FDC, and YM2149-backed PSG audio.
+- The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, MIDI/RS232 byte I/O, floppy DMA/FDC, and YM2149-backed PSG audio.
 
 This is still not a complete Atari ST emulator for broad real-software compatibility yet. The current focus is cleanup, stabilization, and expanding compatibility from the working desktop baseline.
 
@@ -41,7 +41,9 @@ Current focus:
 - Working desktop input path for keyboard and mouse through IKBD/ACIA
 - YM2149-backed PSG sound with live audio playback in the desktop frontend
 - Atari ST Blitter register model exercised by live GEM/VDI boot
-- MFP timer and interrupt delivery
+- MFP timer delivery plus GLUE-backed VBL/HBL autovector timing
+- Basic MIDI and RS232 byte I/O paths for ACIA/MFP register-level testing
+- Optional read-only cartridge ROM mapping at `$FA0000-$FBFFFF`
 - Floppy DMA/FDC path with `.st`, `.msa`, `.dim`, and compatible headered `.adi` image support
 - Virtual ACSI hard disk (30 MiB default) that enumerates as C: under bundled EmuTOS
 - Optional ICD-compatible ACSI real-time clock
@@ -249,6 +251,7 @@ Current browser-build limitations:
 - `--config <path>`: optional JSON config file loaded before CLI overrides
 - `--preset <name>`: machine preset, currently `default`, `stf`, `st`, or `mega-st`
 - `--rom <path>`: path to the TOS ROM image
+- `--cartridge <path>`: optional cartridge ROM image mapped read-only at `$FA0000-$FBFFFF` (up to 128 KiB)
 - `--floppy-a <path>`: optional floppy disk image for drive A (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
 - `--ram-size <bytes>`: emulated RAM size in bytes
 - `--clock-hz <n>`: base machine clock frequency in Hz
@@ -343,14 +346,14 @@ This preserves deterministic emulation while creating room for asynchronous fram
 ## Known Gaps
 
 - Real TOS boot coverage beyond the bundled EmuTOS image is not complete yet
-- MMU/GLUE behavior is still incomplete
+- MMU behavior and cycle-exact GLUE/shifter timing are still incomplete
 - Shifter timing and register coverage are partial
 - IKBD protocol coverage is incomplete
-- MIDI and copy-protected disk format support are still missing
+- Host MIDI backend/timing and copy-protected disk format support are still missing
 
 ## Next Steps
 
-- Improve MMU/GLUE/Shifter behavior for broader TOS compatibility
+- Improve MMU and cycle-exact shifter/GLUE behavior for broader TOS compatibility
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
 - Improve ACSI hard-disk command coverage and real-software compatibility

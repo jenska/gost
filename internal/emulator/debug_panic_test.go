@@ -489,7 +489,7 @@ func TestDebugPanicWithoutVBL(t *testing.T) {
 
 	filteredClocked := make([]devices.Clocked, 0, len(machine.clocked))
 	for _, device := range machine.clocked {
-		if device == machine.vbl {
+		if device == machine.glue {
 			continue
 		}
 		filteredClocked = append(filteredClocked, device)
@@ -498,7 +498,7 @@ func TestDebugPanicWithoutVBL(t *testing.T) {
 
 	filteredIRQs := make([]devices.InterruptSource, 0, len(machine.irqSources))
 	for _, source := range machine.irqSources {
-		if source == machine.vbl {
+		if source == machine.glue {
 			continue
 		}
 		filteredIRQs = append(filteredIRQs, source)

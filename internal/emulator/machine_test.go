@@ -183,6 +183,60 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 	}
 }
 
+func TestMachineMapsAttachedCartridgeROM(t *testing.T) {
+	cfg := config.DefaultConfig()
+	machine, err := NewMachineWithCartridge(cfg, loopROM(nil), []byte{0x12, 0x34, 0x56, 0x78})
+	if err != nil {
+		t.Fatalf("create machine with cartridge: %v", err)
+	}
+
+	value, err := machine.bus.Read(cpu.Long, 0xFA0000)
+	if err != nil {
+		t.Fatalf("read cartridge: %v", err)
+	}
+	if value != 0x12345678 {
+		t.Fatalf("unexpected cartridge read: got %08x want 12345678", value)
+	}
+
+	if err := machine.bus.Write(cpu.Byte, 0xFA0000, 0x99); err != nil {
+		t.Fatalf("write cartridge: %v", err)
+	}
+	value, err = machine.bus.Read(cpu.Byte, 0xFA0000)
+	if err != nil {
+		t.Fatalf("read cartridge after write: %v", err)
+	}
+	if value != 0x12 {
+		t.Fatalf("cartridge write changed data: got %02x want 12", value)
+	}
+
+	if got, want := machine.CartridgeROM(), []byte{0x12, 0x34, 0x56, 0x78}; string(got) != string(want) {
+		t.Fatalf("unexpected cartridge image copy: got %x want %x", got, want)
+	}
+}
+
+func TestMachineAbsentCartridgeProbeReadsFF(t *testing.T) {
+	machine := mustMachine(t, loopROM(nil))
+
+	value, err := machine.bus.Read(cpu.Long, 0xFA0000)
+	if err != nil {
+		t.Fatalf("read absent cartridge probe: %v", err)
+	}
+	if value != 0xFFFFFFFF {
+		t.Fatalf("unexpected absent cartridge probe: got %08x want ffffffff", value)
+	}
+	if image := machine.CartridgeROM(); len(image) != 0 {
+		t.Fatalf("expected no attached cartridge image, got %x", image)
+	}
+}
+
+func TestMachineRejectsOversizedCartridgeROM(t *testing.T) {
+	cfg := config.DefaultConfig()
+	_, err := NewMachineWithCartridge(cfg, loopROM(nil), make([]byte, 128*1024+1))
+	if err == nil {
+		t.Fatalf("expected oversized cartridge image to fail")
+	}
+}
+
 func TestOverlayWritesPassThroughToRAM(t *testing.T) {
 	ram := devices.NewRAM(0, 1024*1024)
 	rom := devices.NewROM(loopROM(nil), defaultROMHighAlias, secondaryROMAlias)
@@ -664,6 +718,16 @@ func TestVBLInterruptRunsHandler(t *testing.T) {
 	if err := machine.LoadIntoRAM(vectorOffset, vectorBytes); err != nil {
 		t.Fatalf("load vbl vector: %v", err)
 	}
+	hblHandlerAddress := uint32(0x00002100)
+	binary.BigEndian.PutUint32(vectorBytes, hblHandlerAddress)
+	if err := machine.LoadIntoRAM(uint32((24+2)*4), vectorBytes); err != nil {
+		t.Fatalf("load hbl vector: %v", err)
+	}
+	if err := machine.LoadIntoRAM(hblHandlerAddress, []byte{
+		0x4E, 0x73, // rte
+	}); err != nil {
+		t.Fatalf("load hbl handler: %v", err)
+	}
 	if err := machine.LoadIntoRAM(handlerAddress, []byte{
 		0x72, 0x01, // moveq #1,d1
 		0x4E, 0x73, // rte
@@ -680,6 +744,72 @@ func TestVBLInterruptRunsHandler(t *testing.T) {
 
 	if got := machine.Registers().D[1]; got != 1 {
 		t.Fatalf("VBL handler did not run: D1=%08x", uint32(got))
+	}
+}
+
+func TestMachineRS232ThroughMFPRegisters(t *testing.T) {
+	machine := mustMachine(t, loopROM(nil))
+
+	machine.PushRS232Input([]byte("A"))
+	status, err := machine.bus.Read(cpu.Byte, 0xFFFA2B)
+	if err != nil {
+		t.Fatalf("read MFP RSR: %v", err)
+	}
+	if byte(status)&0x80 == 0 {
+		t.Fatalf("expected MFP RSR buffer-full bit, got %02x", byte(status))
+	}
+
+	input, err := machine.bus.Read(cpu.Byte, 0xFFFA2F)
+	if err != nil {
+		t.Fatalf("read MFP UDR: %v", err)
+	}
+	if byte(input) != 'A' {
+		t.Fatalf("unexpected MFP UDR input: got %q want A", byte(input))
+	}
+
+	if err := machine.bus.Write(cpu.Byte, 0xFFFA2F, 'B'); err != nil {
+		t.Fatalf("write MFP UDR: %v", err)
+	}
+	if got, want := string(machine.RS232Output()), "B"; got != want {
+		t.Fatalf("RS232 output = %q, want %q", got, want)
+	}
+
+	machine.ClearRS232Output()
+	if output := machine.RS232Output(); len(output) != 0 {
+		t.Fatalf("expected cleared RS232 output, got %q", string(output))
+	}
+}
+
+func TestMachineMIDIThroughACIAChannel1Registers(t *testing.T) {
+	machine := mustMachine(t, loopROM(nil))
+
+	machine.PushMIDIInput([]byte{0x90})
+	status, err := machine.bus.Read(cpu.Byte, 0xFFFC04)
+	if err != nil {
+		t.Fatalf("read MIDI ACIA status: %v", err)
+	}
+	if byte(status)&0x01 == 0 {
+		t.Fatalf("expected MIDI ACIA receive-ready bit, got %02x", byte(status))
+	}
+
+	input, err := machine.bus.Read(cpu.Byte, 0xFFFC06)
+	if err != nil {
+		t.Fatalf("read MIDI ACIA data: %v", err)
+	}
+	if byte(input) != 0x90 {
+		t.Fatalf("unexpected MIDI ACIA input: got %02x want 90", byte(input))
+	}
+
+	if err := machine.bus.Write(cpu.Byte, 0xFFFC06, 0x40); err != nil {
+		t.Fatalf("write MIDI ACIA data: %v", err)
+	}
+	if output := machine.MIDIOutput(); len(output) != 1 || output[0] != 0x40 {
+		t.Fatalf("MIDI output = %x, want 40", output)
+	}
+
+	machine.ClearMIDIOutput()
+	if output := machine.MIDIOutput(); len(output) != 0 {
+		t.Fatalf("expected cleared MIDI output, got %x", output)
 	}
 }
 

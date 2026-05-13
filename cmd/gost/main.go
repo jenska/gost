@@ -34,10 +34,22 @@ func main() {
 		}
 	}
 
-	machine, err := emulator.NewMachine(cfg, romImage)
+	var cartridgeImage []byte
+	if cfg.CartridgePath != "" {
+		cartridgeImage, err = config.LoadROM(cfg.CartridgePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load cartridge ROM: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	machine, err := emulator.NewMachineWithCartridge(cfg, romImage, cartridgeImage)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create machine: %v\n", err)
 		os.Exit(1)
+	}
+	if cfg.CartridgePath != "" {
+		fmt.Fprintf(os.Stderr, "using cartridge ROM: %s (%d bytes)\n", cfg.CartridgePath, len(cartridgeImage))
 	}
 	if cfg.Trace != "" {
 		machine.EnableTrace(cfg.Trace, os.Stdout)

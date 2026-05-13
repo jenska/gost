@@ -36,6 +36,12 @@ const (
 	mfpRSR   = 0x2B
 	mfpTSR   = 0x2D
 	mfpUDR   = 0x2F
+
+	mfpUSARTReceiveBufferFullChannel   = 12
+	mfpUSARTTransmitBufferEmptyChannel = 10
+
+	mfpRSRBufferFull  = 0x80
+	mfpTSRBufferEmpty = 0x80
 )
 
 type mfpTimer struct {
@@ -59,8 +65,10 @@ type MFP struct {
 	fdcIRQActive   bool
 	gpipInput      byte
 	rtc            *ICDRTC
+	rs232          *RS232
 	timers         [4]mfpTimer
-	serialBuffer   byte
+	serialRx       byte
+	serialRxReady  bool
 	clockRemainder uint64
 }
 
@@ -91,7 +99,9 @@ func (m *MFP) Reset() {
 	m.timers[1] = mfpTimer{channel: 8, dataReg: mfpTBDR}
 	m.timers[2] = mfpTimer{channel: 5, dataReg: mfpTCDR}
 	m.timers[3] = mfpTimer{channel: 4, dataReg: mfpTDDR}
-	m.serialBuffer = 0
+	m.serialRx = 0
+	m.serialRxReady = false
+	m.registers[mfpTSR] = mfpTSRBufferEmpty
 	m.clockRemainder = 0
 	m.aciaIRQActive = false
 	m.printerBusy = false
@@ -210,8 +220,12 @@ func (m *MFP) readByte(offset uint32) byte {
 		return m.timerCurrentValue(2)
 	case mfpTDDR:
 		return m.timerCurrentValue(3)
+	case mfpRSR:
+		return m.receiverStatus()
+	case mfpTSR:
+		return m.transmitterStatus()
 	case mfpUDR:
-		return m.serialBuffer
+		return m.readUSARTData()
 	default:
 		return m.registers[offset]
 	}
@@ -262,8 +276,7 @@ func (m *MFP) writeByte(offset uint32, value byte) {
 		m.registers[offset] = value
 		m.reloadTimer(3)
 	case mfpUDR:
-		m.serialBuffer = value
-		m.registers[offset] = value
+		m.writeUSARTData(value)
 	default:
 		m.registers[offset] = value
 	}
@@ -363,6 +376,65 @@ func (m *MFP) SetFDCInterrupt(asserted bool) {
 
 func (m *MFP) AttachICDRTC(rtc *ICDRTC) {
 	m.rtc = rtc
+}
+
+func (m *MFP) AttachRS232(rs232 *RS232) {
+	m.rs232 = rs232
+	m.loadNextRS232Byte()
+}
+
+func (m *MFP) PushRS232Input(data []byte) {
+	if m.rs232 == nil {
+		return
+	}
+	m.rs232.PushInput(data)
+	m.loadNextRS232Byte()
+}
+
+func (m *MFP) receiverStatus() byte {
+	if m.serialRxReady {
+		return m.registers[mfpRSR] | mfpRSRBufferFull
+	}
+	return m.registers[mfpRSR] &^ mfpRSRBufferFull
+}
+
+func (m *MFP) transmitterStatus() byte {
+	// Transmission is byte-buffered for now, so the transmitter is immediately
+	// ready after every guest write.
+	return m.registers[mfpTSR] | mfpTSRBufferEmpty
+}
+
+func (m *MFP) readUSARTData() byte {
+	if !m.serialRxReady {
+		return m.serialRx
+	}
+
+	value := m.serialRx
+	m.serialRxReady = false
+	m.loadNextRS232Byte()
+	return value
+}
+
+func (m *MFP) writeUSARTData(value byte) {
+	m.registers[mfpUDR] = value
+	m.registers[mfpTSR] |= mfpTSRBufferEmpty
+	if m.rs232 != nil {
+		m.rs232.WriteOutput(value)
+	}
+	m.raiseChannel(mfpUSARTTransmitBufferEmptyChannel)
+}
+
+func (m *MFP) loadNextRS232Byte() {
+	if m.serialRxReady || m.rs232 == nil {
+		return
+	}
+	value, ok := m.rs232.PopInput()
+	if !ok {
+		return
+	}
+	m.serialRx = value
+	m.serialRxReady = true
+	m.raiseChannel(mfpUSARTReceiveBufferFullChannel)
 }
 
 func (m *MFP) gpipState() byte {

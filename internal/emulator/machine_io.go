@@ -41,14 +41,19 @@ type (
 		bus           *cpu.Bus
 		cpu           cpu.CPU
 		ram           *devices.RAM
+		rom           *devices.ROM
+		cartridge     *devices.CartridgeROM
 		overlayROM    *devices.OverlayROM
 		memoryConfig  *devices.MemoryConfig
 		shifter       *devices.Shifter
+		glue          *devices.GLUE
 		mfp           *devices.MFP
 		acia          *devices.ACIA
 		fdc           *devices.FDC
 		psg           *devices.PSG
 		printer       *devices.PrinterPort
+		rs232         *devices.RS232
+		midi          *devices.MIDI
 		clocked       []devices.Clocked
 		irqSources    []devices.InterruptSource
 		frameCycles   uint64
@@ -195,6 +200,47 @@ func (m *Machine) ClearPrinterOutput() {
 func (m *Machine) SetPrinterBusy(busy bool) {
 	m.printer.SetBusy(busy)
 	m.mfp.SetPrinterBusy(busy)
+}
+
+// PushRS232Input injects bytes into the ST modem port receive path. The MFP
+// exposes them through UDR/RSR and raises the USART receive interrupt when
+// guest software has enabled and unmasked that channel.
+func (m *Machine) PushRS232Input(data []byte) {
+	m.mfp.PushRS232Input(data)
+}
+
+// RS232Output returns bytes written by guest software to the ST modem port.
+func (m *Machine) RS232Output() []byte {
+	return m.rs232.Output()
+}
+
+// ClearRS232Output discards captured modem-port transmit bytes.
+func (m *Machine) ClearRS232Output() {
+	m.rs232.ClearOutput()
+}
+
+// PushMIDIInput injects raw MIDI bytes into ACIA channel 1.
+func (m *Machine) PushMIDIInput(data []byte) {
+	m.acia.PushMIDIInput(data)
+}
+
+// MIDIOutput returns bytes written by guest software to ACIA channel 1.
+func (m *Machine) MIDIOutput() []byte {
+	return m.midi.Output()
+}
+
+// ClearMIDIOutput discards captured MIDI transmit bytes.
+func (m *Machine) ClearMIDIOutput() {
+	m.midi.ClearOutput()
+}
+
+// CartridgeROM returns a copy of the attached cartridge image, or nil when no
+// cartridge is present.
+func (m *Machine) CartridgeROM() []byte {
+	if m.cartridge == nil {
+		return nil
+	}
+	return m.cartridge.Bytes()
 }
 
 // LoadIntoRAM copies payload into guest RAM at address. It is intentionally
