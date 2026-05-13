@@ -62,6 +62,7 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 | ICD RTC | ✅ Optional | internal/devices/icd_rtc.go | ACSI nibble protocol, GPIP bit 5 detection, system-time backed |
 | FDC WD1772 | ⚠️ Partial | internal/devices/fdc.go | WD1772 type I/II/III/IV over sector-image abstraction; raw-track fidelity and format breadth still limited |
 | PSG/YM2149 | ✅ Functional | internal/devices/psg.go | Via ym2149 library, audio output |
+| Printer Port | ✅ Basic | internal/devices/printer_port.go | PSG Port B data capture, Port A bit 5 strobe, MFP GPIP0 BUSY |
 | VBL Source | ✅ Complete | internal/devices/vbl.go | 50 Hz autovector |
 | GLUE | ⚠️ Stub | internal/devices/glue.go | Minimal register model |
 | STE Sound | ✅ Stub | internal/devices/ste_sound.go | Returns bus error (correct for ST) |
@@ -70,7 +71,6 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 
 | Device | Category | Impact | Complexity |
 |--------|----------|--------|-----------|
-| **Parallel/Printer Port** | I/O | Low-Medium | MEDIUM - Device model + interrupt integration |
 | **MIDI Port** | I/O | Low | MEDIUM - Basic serial protocol, no timing |
 | **Modem Port (MFP UART)** | I/O | Low | HIGH - Full UART timing and line behavior |
 | **STE DMA Sound** | Audio | High (STE) | HIGH - Complex timing, DMA integration |
@@ -551,13 +551,9 @@ internal/emulator/
   - Follow-up: Keep broader date/time utility validation in the software compatibility matrix as real test media becomes available
 
 #### 2.2 Parallel/Printer Port
-- **Add printer port device model**
-  - Impact: Printer drivers can be tested
-  - Complexity: MEDIUM
-  - Effort: 1-2 weeks
-  - Files: New `internal/devices/parallel.go`
-  - Registers: Parallel port control (0xFFBF00-0xFFBF10)
-  - Tests: Data transmission, handshake signals
+- ✅ **Basic printer port device model completed**
+  - Delivered: PSG Port B data latch capture, PSG Port A bit 5 active-low strobe, MFP GPIP0 BUSY line, and machine-level output readout
+  - Follow-up: Optional host output sink or file-backed capture for real print jobs
 
 #### 2.3 ACIA Channel 1 (MIDI Device Path)
 - **Attach a real MIDI-side device model to the second ACIA register channel**

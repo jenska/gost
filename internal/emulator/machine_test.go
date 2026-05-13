@@ -412,6 +412,41 @@ func TestMachineSetHardDiskImageReplacesVirtualDisk(t *testing.T) {
 	}
 }
 
+func TestMachinePrinterPortCapturesPSGPortBOnStrobe(t *testing.T) {
+	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+
+	writeMachinePSGRegister(t, machine, 7, 0xC0)  // Port A and B output.
+	writeMachinePSGRegister(t, machine, 14, 0x20) // Centronics strobe idle high.
+	writeMachinePSGRegister(t, machine, 15, 'P')
+	writeMachinePSGRegister(t, machine, 14, 0x00) // Active-low strobe captures data.
+	writeMachinePSGRegister(t, machine, 14, 0x20)
+
+	if got, want := string(machine.PrinterOutput()), "P"; got != want {
+		t.Fatalf("printer output = %q, want %q", got, want)
+	}
+}
+
+func TestMachinePrinterBusyDrivesMFPGPIP0(t *testing.T) {
+	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+
+	ready, err := machine.bus.Read(cpu.Byte, 0xFFFA01)
+	if err != nil {
+		t.Fatalf("read ready GPIP: %v", err)
+	}
+	if byte(ready)&0x01 != 0 {
+		t.Fatalf("expected ready printer BUSY line low, GPIP=%02x", byte(ready))
+	}
+
+	machine.SetPrinterBusy(true)
+	busy, err := machine.bus.Read(cpu.Byte, 0xFFFA01)
+	if err != nil {
+		t.Fatalf("read busy GPIP: %v", err)
+	}
+	if byte(busy)&0x01 == 0 {
+		t.Fatalf("expected busy printer BUSY line high, GPIP=%02x", byte(busy))
+	}
+}
+
 func TestMachineRTCFlagRoutesICDRTCThroughFDCAndGPIP(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.HardDiskSizeMB = 0
@@ -655,6 +690,16 @@ func mustMachine(t *testing.T, rom []byte) *Machine {
 		t.Fatalf("create machine: %v", err)
 	}
 	return machine
+}
+
+func writeMachinePSGRegister(t *testing.T, machine *Machine, reg, value byte) {
+	t.Helper()
+	if err := machine.bus.Write(cpu.Byte, 0xFF8800, uint32(reg)); err != nil {
+		t.Fatalf("select PSG register %d: %v", reg, err)
+	}
+	if err := machine.bus.Write(cpu.Byte, 0xFF8802, uint32(value)); err != nil {
+		t.Fatalf("write PSG register %d: %v", reg, err)
+	}
 }
 
 func loopROM(code []byte) []byte {

@@ -324,6 +324,36 @@ func TestMFPGPIPBit4ReflectsACIAInterruptLine(t *testing.T) {
 	}
 }
 
+func TestMFPGPIPBit0ReflectsPrinterBusyLine(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
+
+	ready, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read ready GPIP: %v", err)
+	}
+	if byte(ready)&0x01 != 0 {
+		t.Fatalf("expected ready printer BUSY line to read low, GPIP=%02x", byte(ready))
+	}
+
+	mfp.SetPrinterBusy(true)
+	busy, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read busy GPIP: %v", err)
+	}
+	if byte(busy)&0x01 == 0 {
+		t.Fatalf("expected busy printer BUSY line to read high, GPIP=%02x", byte(busy))
+	}
+
+	mfp.SetPrinterBusy(false)
+	cleared, err := mfp.Read(1, mfpBase+mfpGPIP)
+	if err != nil {
+		t.Fatalf("read cleared GPIP: %v", err)
+	}
+	if byte(cleared)&0x01 != 0 {
+		t.Fatalf("expected cleared printer BUSY line to read low, GPIP=%02x", byte(cleared))
+	}
+}
+
 func TestMFPGPIPBit7ReflectsMonitorType(t *testing.T) {
 	cfg := config.Config{ClockHz: 8_000_000, ColorMonitor: false}
 	mfp := NewMFP(&cfg)

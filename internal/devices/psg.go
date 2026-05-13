@@ -16,7 +16,10 @@ type PSG struct {
 	address       byte
 	clockDomain   *ym2149.ClockDomain
 	chip          *ym2149.Chip
+	portALatch    byte
+	portBLatch    byte
 	portAObserver func(byte)
+	portBObserver func(byte)
 }
 
 func NewPSG(cpuClockHz uint64) *PSG {
@@ -39,9 +42,12 @@ func (p *PSG) WaitStates(cpu.Size, uint32) uint32 {
 
 func (p *PSG) Reset() {
 	p.address = 0
+	p.portALatch = 0
+	p.portBLatch = 0
 	p.clockDomain.Reset()
 	p.chip.Reset()
 	p.notifyPortA()
+	p.notifyPortB()
 }
 
 func (p *PSG) Read(cpu.Size, uint32) (uint32, error) {
@@ -54,9 +60,19 @@ func (p *PSG) Write(size cpu.Size, address uint32, value uint32) error {
 		p.address = byte(value) & 0x0F
 		p.chip.SelectRegister(p.address)
 	case 2, 3:
-		p.chip.WriteData(byte(value))
+		data := byte(value)
+		p.chip.WriteData(data)
+		switch p.address {
+		case 14:
+			p.portALatch = data
+		case 15:
+			p.portBLatch = data
+		}
 		if p.address == 7 || p.address == 14 {
 			p.notifyPortA()
+		}
+		if p.address == 7 || p.address == 15 {
+			p.notifyPortB()
 		}
 	}
 	return nil
@@ -86,9 +102,21 @@ func (p *PSG) SetPortAObserver(observer func(byte)) {
 	p.notifyPortA()
 }
 
+func (p *PSG) SetPortBObserver(observer func(byte)) {
+	p.portBObserver = observer
+	p.notifyPortB()
+}
+
 func (p *PSG) notifyPortA() {
 	if p.portAObserver == nil {
 		return
 	}
-	p.portAObserver(p.chip.Ports().AOutput)
+	p.portAObserver(p.portALatch)
+}
+
+func (p *PSG) notifyPortB() {
+	if p.portBObserver == nil {
+		return
+	}
+	p.portBObserver(p.portBLatch)
 }

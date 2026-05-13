@@ -55,6 +55,7 @@ type MFP struct {
 	softwareEOI    bool
 	inFlight       [16]bool
 	aciaIRQActive  bool
+	printerBusy    bool
 	fdcIRQActive   bool
 	gpipInput      byte
 	rtc            *ICDRTC
@@ -93,6 +94,7 @@ func (m *MFP) Reset() {
 	m.serialBuffer = 0
 	m.clockRemainder = 0
 	m.aciaIRQActive = false
+	m.printerBusy = false
 	m.fdcIRQActive = false
 	m.gpipInput = m.gpipInputState()
 }
@@ -343,6 +345,14 @@ func (m *MFP) SetACIAInterrupt(asserted bool) {
 	m.updateGPIPEdges()
 }
 
+func (m *MFP) SetPrinterBusy(busy bool) {
+	if busy == m.printerBusy {
+		return
+	}
+	m.printerBusy = busy
+	m.updateGPIPEdges()
+}
+
 func (m *MFP) SetFDCInterrupt(asserted bool) {
 	if asserted == m.fdcIRQActive {
 		return
@@ -366,6 +376,11 @@ func (m *MFP) gpipState() byte {
 
 func (m *MFP) gpipInputState() byte {
 	value := byte(0xFF)
+	if m.printerBusy {
+		value |= 0x01
+	} else {
+		value &^= 0x01
+	}
 	if m.cfg.ColorMonitor {
 		value |= 0x80
 	} else {

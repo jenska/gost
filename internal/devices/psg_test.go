@@ -104,6 +104,24 @@ func TestPSGNotifiesPortAObservers(t *testing.T) {
 	}
 }
 
+func TestPSGNotifiesPortBObservers(t *testing.T) {
+	psg := NewPSG(8_000_000)
+	var values []byte
+	psg.SetPortBObserver(func(value byte) {
+		values = append(values, value)
+	})
+
+	writePSGRegister(t, psg, 7, 0x80)
+	writePSGRegister(t, psg, 15, 0xA5)
+
+	if len(values) == 0 {
+		t.Fatalf("expected at least one port B notification")
+	}
+	if values[len(values)-1] != 0xA5 {
+		t.Fatalf("unexpected final port B value: got %02x want a5", values[len(values)-1])
+	}
+}
+
 func writePSGRegister(t *testing.T, psg *PSG, reg, value byte) {
 	t.Helper()
 	if err := psg.Write(0, psgBase, uint32(reg)); err != nil {
