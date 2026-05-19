@@ -6,6 +6,13 @@ import (
 	cpu "github.com/jenska/m68kemu"
 )
 
+const (
+	// Early ST RAM decoding exposes installed DRAM again in this high window.
+	// TOS 1.00 can transiently point the shifter there during startup.
+	stRAMHighMirrorStart = 0x700000
+	stRAMHighMirrorEnd   = 0x800000
+)
+
 // RAM is the main ST memory and doubles as the framebuffer backing store.
 type RAM struct {
 	base       uint32
@@ -50,7 +57,7 @@ func (r *RAM) Contains(address uint32) bool {
 	if r.mmu != nil {
 		limit = r.mmu.LogicalSize()
 	}
-	return address >= r.base && address < r.base+limit
+	return address >= r.base && (address < r.base+limit || r.isMirroredAddress(address))
 }
 
 func (r *RAM) WaitStates(size cpu.Size, address uint32) uint32 {
@@ -234,6 +241,9 @@ func (r *RAM) translate(address uint32) (uint32, bool, error) {
 
 	logical := address - r.base
 	if r.mmu != nil {
+		if logical >= r.mmu.LogicalSize() && r.isMirroredAddress(address) {
+			return logical % uint32(len(r.data)), true, nil
+		}
 		offset, state := r.mmu.ResolveAddress(logical)
 		switch state {
 		case memoryAddressPresent:
@@ -249,7 +259,17 @@ func (r *RAM) translate(address uint32) (uint32, bool, error) {
 	}
 
 	if logical >= uint32(len(r.data)) {
+		if r.isMirroredAddress(address) {
+			return logical % uint32(len(r.data)), true, nil
+		}
 		return 0, false, cpu.BusError(address)
 	}
 	return logical, true, nil
+}
+
+func (r *RAM) isMirroredAddress(address uint32) bool {
+	return r.base == 0 &&
+		len(r.data) != 0 &&
+		address >= stRAMHighMirrorStart &&
+		address < stRAMHighMirrorEnd
 }

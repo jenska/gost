@@ -96,6 +96,75 @@ func TestRAMTwoMegLayoutAllowsAccessAboveOneMeg(t *testing.T) {
 	}
 }
 
+func TestTwoMegBankKeepsLowRAMLinearWhenProbedAsSmallerBank(t *testing.T) {
+	ram := NewRAM(0, 2*1024*1024)
+	overlay := NewOverlayROM(NewROM(make([]byte, 16), 0xFC0000), ram)
+	config := NewMemoryConfig(overlay, ram.Size())
+	ram.SetMemoryConfig(config)
+
+	if err := ram.Write(m68kemu.Long, 0x007516, 0x001F7FF2); err != nil {
+		t.Fatalf("write low RAM before probe config: %v", err)
+	}
+	if err := config.Write(m68kemu.Byte, memoryConfigBase+1, 0x08); err != nil {
+		t.Fatalf("write probed MMU config: %v", err)
+	}
+
+	value, err := ram.Read(m68kemu.Long, 0x007516)
+	if err != nil {
+		t.Fatalf("read low RAM after probe config: %v", err)
+	}
+	if value != 0x001F7FF2 {
+		t.Fatalf("low RAM remapped during 2MB probe config: got %08x want 001f7ff2", value)
+	}
+}
+
+func TestRAMMirrorsIntoHighSTAddressWindow(t *testing.T) {
+	ram := NewRAM(0, 512*1024)
+	overlay := NewOverlayROM(NewROM(make([]byte, 16), 0xFC0000), ram)
+	config := NewMemoryConfig(overlay, ram.Size())
+	ram.SetMemoryConfig(config)
+
+	const (
+		physicalAddress = 0x00073E80
+		mirrorAddress   = 0x00773E80
+	)
+	if err := ram.Write(m68kemu.Word, physicalAddress, 0x1234); err != nil {
+		t.Fatalf("write physical RAM: %v", err)
+	}
+
+	value, err := ram.Read(m68kemu.Word, mirrorAddress)
+	if err != nil {
+		t.Fatalf("read mirrored RAM: %v", err)
+	}
+	if value != 0x1234 {
+		t.Fatalf("unexpected mirrored RAM value: got %04x want 1234", value)
+	}
+
+	if err := ram.Write(m68kemu.Word, mirrorAddress, 0xCAFE); err != nil {
+		t.Fatalf("write mirrored RAM: %v", err)
+	}
+	value, err = ram.Read(m68kemu.Word, physicalAddress)
+	if err != nil {
+		t.Fatalf("read physical RAM after mirror write: %v", err)
+	}
+	if value != 0xCAFE {
+		t.Fatalf("mirror write did not reach physical RAM: got %04x want cafe", value)
+	}
+}
+
+func TestRAMMirrorDoesNotClaimCartridgeROMOrIOWindows(t *testing.T) {
+	ram := NewRAM(0, 512*1024)
+	overlay := NewOverlayROM(NewROM(make([]byte, 16), 0xFC0000), ram)
+	config := NewMemoryConfig(overlay, ram.Size())
+	ram.SetMemoryConfig(config)
+
+	for _, address := range []uint32{0x400000, 0xFA0000, 0xFC0000, 0xFF8000} {
+		if ram.Contains(address) {
+			t.Fatalf("RAM mirror incorrectly claims %06x", address)
+		}
+	}
+}
+
 func TestRAMAbsentBankReadsAsZeroAndIgnoresWrites(t *testing.T) {
 	ram := NewRAM(0, 2*1024*1024)
 	overlay := NewOverlayROM(NewROM(make([]byte, 16), 0xFC0000), ram)

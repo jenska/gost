@@ -67,6 +67,63 @@ func TestMFPTimerCQueuesInterrupt(t *testing.T) {
 	}
 }
 
+func TestMFPTimerBEventCountModeCountsDown(t *testing.T) {
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
+	mfp := NewMFP(cfg)
+
+	if err := mfp.Write(1, mfpBase+mfpTBDR, 0xF0); err != nil {
+		t.Fatalf("write timer b data: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTBCR, 0x08); err != nil {
+		t.Fatalf("write timer b event-count control: %v", err)
+	}
+
+	initial, err := mfp.Read(1, mfpBase+mfpTBDR)
+	if err != nil {
+		t.Fatalf("read initial timer b: %v", err)
+	}
+	if byte(initial) != 0xF0 {
+		t.Fatalf("initial timer b = %02x, want f0", byte(initial))
+	}
+
+	mfp.Advance(cfg.FrameCycles())
+	current, err := mfp.Read(1, mfpBase+mfpTBDR)
+	if err != nil {
+		t.Fatalf("read current timer b: %v", err)
+	}
+	if byte(current) >= 0xF0 {
+		t.Fatalf("expected timer b event-count mode to count down, got %02x", byte(current))
+	}
+}
+
+func TestMFPTimerBEventCountModePausesDuringVerticalBlank(t *testing.T) {
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
+	mfp := NewMFP(cfg)
+
+	if err := mfp.Write(1, mfpBase+mfpTBDR, 0xF0); err != nil {
+		t.Fatalf("write timer b data: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTBCR, 0x08); err != nil {
+		t.Fatalf("write timer b event-count control: %v", err)
+	}
+
+	activeEnd := mfpActiveVideoLines * cfg.FrameCycles() / mfpPALScanlines
+	mfp.Advance(activeEnd + 1_000)
+	blankValue, err := mfp.Read(1, mfpBase+mfpTBDR)
+	if err != nil {
+		t.Fatalf("read blank timer b: %v", err)
+	}
+
+	mfp.Advance(10_000)
+	current, err := mfp.Read(1, mfpBase+mfpTBDR)
+	if err != nil {
+		t.Fatalf("read current timer b: %v", err)
+	}
+	if current != blankValue {
+		t.Fatalf("expected timer b event-count mode to pause during vblank, got %02x then %02x", byte(blankValue), byte(current))
+	}
+}
+
 func TestMFPSoftwareEOIBlocksLowerPriorityInterrupts(t *testing.T) {
 	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 

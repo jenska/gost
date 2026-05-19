@@ -106,6 +106,9 @@ func (o *OverlayROM) Contains(address uint32) bool {
 }
 
 func (o *OverlayROM) Read(size cpu.Size, address uint32) (uint32, error) {
+	if o.usesSyntheticResetSP() && address < 4 {
+		return readResetSPFragment(size, address, o.ram.Size())
+	}
 	return o.rom.readAtOffset(size, address)
 }
 
@@ -135,6 +138,28 @@ func (o *OverlayROM) Disable() {
 
 func (o *OverlayROM) Enabled() bool {
 	return o.enabled
+}
+
+func (o *OverlayROM) usesSyntheticResetSP() bool {
+	if o == nil || o.rom == nil || o.ram == nil || len(o.rom.data) < 8 {
+		return false
+	}
+	resetSP := readUint32BE(o.rom.data, 0)
+	return resetSP == 0 || resetSP > o.ram.Size()
+}
+
+func readResetSPFragment(size cpu.Size, address uint32, resetSP uint32) (uint32, error) {
+	if address+uint32(size) > 4 {
+		return 0, cpu.BusError(address)
+	}
+	shift := (4 - address - uint32(size)) * 8
+	mask := uint32(0xff)
+	if size == cpu.Word {
+		mask = 0xffff
+	} else if size == cpu.Long {
+		mask = 0xffffffff
+	}
+	return (resetSP >> shift) & mask, nil
 }
 
 const memoryConfigBase = 0xFF8000
@@ -310,6 +335,10 @@ func mmuBankCode(size uint32) byte {
 }
 
 func translateSTBank(address, ramBankSize, mmuBankSize uint32) uint32 {
+	if ramBankSize == mmuBankSize2M && address < mmuBankSize {
+		return address
+	}
+
 	var translated uint32
 
 	switch ramBankSize {

@@ -14,6 +14,8 @@ github.com/jenska/m68kdasm v1.0.3 h1:PR4vyp2oHiLx/1AP/i9b8SyKepJ45SSffOIPgwPheek
 github.com/jenska/m68kdasm v1.0.3/go.mod h1:h55feO8bc94SqDEtLgTBVsv83dGKLtyt6mylQyVruvk=
 github.com/jenska/m68kemu v1.2.4-0.20260415074248-328873d702d6 h1:rX/YoPMrZNGVWjs1dnlUGl/6NN5JLiVymHE4QXQr+e0=
 github.com/jenska/m68kemu v1.2.4-0.20260415074248-328873d702d6/go.mod h1:xBUUUMQeyEJLfN5pMSf8+7lIy5pTyU62ba4xw5lOHjo=
+github.com/jenska/m68kemu v1.2.4-0.20260430050713-667fadb8bb2f h1:60Df3Eu7bBc5YdPJkin2E9uc//2M0UyUH7mM3KtrSD8=
+github.com/jenska/m68kemu v1.2.4-0.20260430050713-667fadb8bb2f/go.mod h1:xBUUUMQeyEJLfN5pMSf8+7lIy5pTyU62ba4xw5lOHjo=
 github.com/jenska/ym2149 v1.0.0 h1:aFJ16oG9PJnBKGG9L+qVlpXcERlqLdrRQ0krN22Om+U=
 github.com/jenska/ym2149 v1.0.0/go.mod h1:ofQOh+UvCnBYlFhOY3ZM1bVJB0sXU/OtnRpW7N6kxb8=
 github.com/jezek/xgb v1.3.1 h1:NQCAEfQyzN+3RjWUSHBuVIxQcy2YfG3/mNvKfs/0rEg=

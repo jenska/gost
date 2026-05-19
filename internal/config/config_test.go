@@ -235,3 +235,45 @@ func TestLoadCanSetFloppyBPathFromConfigFile(t *testing.T) {
 		t.Fatalf("unexpected drive B disk path: got %q want disk-b.msa", cfg.FloppyB)
 	}
 }
+
+func TestLoadROMPadsOddLengthImages(t *testing.T) {
+	path := writeTempROM(t, []byte{0x12, 0x34, 0x56})
+
+	image, err := LoadROM(path)
+	if err != nil {
+		t.Fatalf("load ROM: %v", err)
+	}
+	if got, want := len(image), 4; got != want {
+		t.Fatalf("unexpected ROM length: got %d want %d", got, want)
+	}
+	if image[3] != 0xFF {
+		t.Fatalf("unexpected padded byte: got %02x want ff", image[3])
+	}
+}
+
+func TestLoadROMKeepsEvenLengthImages(t *testing.T) {
+	path := writeTempROM(t, []byte{0x12, 0x34})
+
+	image, err := LoadROM(path)
+	if err != nil {
+		t.Fatalf("load ROM: %v", err)
+	}
+	if got, want := len(image), 2; got != want {
+		t.Fatalf("unexpected ROM length: got %d want %d", got, want)
+	}
+}
+
+func writeTempROM(t *testing.T, data []byte) string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "rom-*.img")
+	if err != nil {
+		t.Fatalf("create temp ROM: %v", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		t.Fatalf("write temp ROM: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close temp ROM: %v", err)
+	}
+	return file.Name()
+}

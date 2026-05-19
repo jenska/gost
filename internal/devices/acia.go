@@ -27,9 +27,9 @@ type ACIA struct {
 	rxCooldown [aciaChannelCt]bool
 }
 
-// NewACIA wires the IKBD behind channel 0 and leaves MIDI channel 1 attachable.
+// NewACIA wires the IKBD behind channel 0 and  MIDI behind channel 1.
 func NewACIA(aciaIRQ func(bool)) *ACIA {
-	a := &ACIA{ikbd: NewIKBD(), aciaIRQ: aciaIRQ}
+	a := &ACIA{ikbd: NewIKBD(), midi: NewMIDI(), aciaIRQ: aciaIRQ}
 	a.Reset()
 	return a
 }
@@ -95,7 +95,7 @@ func (a *ACIA) Write(size cpu.Size, address uint32, value uint32) error {
 	case 2, 3:
 		if channel == 0 {
 			a.ikbd.HandleCommand(byte(value))
-		} else if a.midi != nil {
+		} else {
 			a.midi.WriteOutput(byte(value))
 		}
 	}
@@ -149,7 +149,7 @@ func (a *ACIA) pollIKBD() {
 }
 
 func (a *ACIA) pollMIDI() {
-	if a.rxLoaded[1] || a.midi == nil || !a.midi.InputAvailable() {
+	if a.rxLoaded[1] || !a.midi.InputAvailable() {
 		return
 	}
 	value, ok := a.midi.PopInput()
@@ -187,11 +187,6 @@ func aciaChannelIndex(address uint32) uint32 {
 	return (address - aciaBase) / aciaChannelSize
 }
 
-func (a *ACIA) AttachMIDI(midi *MIDI) {
-	a.midi = midi
-	a.pollMIDI()
-}
-
 func (a *ACIA) PushKey(scancode byte, pressed bool) {
 	a.ikbd.PushKey(scancode, pressed)
 }
@@ -201,22 +196,14 @@ func (a *ACIA) PushMouse(dx, dy int, buttons byte) {
 }
 
 func (a *ACIA) PushMIDIInput(data []byte) {
-	if a.midi == nil {
-		return
-	}
 	a.midi.PushInput(data)
 	a.pollMIDI()
 }
 
 func (a *ACIA) MIDIOutput() []byte {
-	if a.midi == nil {
-		return nil
-	}
 	return a.midi.Output()
 }
 
 func (a *ACIA) ClearMIDIOutput() {
-	if a.midi != nil {
-		a.midi.ClearOutput()
-	}
+	a.midi.ClearOutput()
 }

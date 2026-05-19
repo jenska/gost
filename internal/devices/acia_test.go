@@ -59,14 +59,12 @@ func TestACIAMIDIChannelStaysIndependent(t *testing.T) {
 
 func TestACIAMIDITransmitCapturesOutput(t *testing.T) {
 	acia := NewACIA(nil)
-	midi := NewMIDI()
-	acia.AttachMIDI(midi)
 
 	if err := acia.Write(1, aciaBase+6, 0x90); err != nil {
 		t.Fatalf("write MIDI data: %v", err)
 	}
 
-	output := midi.Output()
+	output := acia.midi.Output()
 	if len(output) != 1 || output[0] != 0x90 {
 		t.Fatalf("MIDI output = %x, want 90", output)
 	}
@@ -74,7 +72,6 @@ func TestACIAMIDITransmitCapturesOutput(t *testing.T) {
 
 func TestACIAMIDIReceiveByte(t *testing.T) {
 	acia := NewACIA(nil)
-	acia.AttachMIDI(NewMIDI())
 
 	acia.PushMIDIInput([]byte{0x90})
 
@@ -97,7 +94,6 @@ func TestACIAMIDIReceiveByte(t *testing.T) {
 
 func TestACIAMIDIStaggersQueuedBytesAcrossAdvances(t *testing.T) {
 	acia := NewACIA(nil)
-	acia.AttachMIDI(NewMIDI())
 
 	acia.PushMIDIInput([]byte{0x90, 0x40})
 
@@ -182,7 +178,6 @@ func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
 func TestACIAMIDISignalsMFPInterruptOnReceive(t *testing.T) {
 	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
 	acia := NewACIA(mfp.SetACIAInterrupt)
-	acia.AttachMIDI(NewMIDI())
 
 	if err := mfp.Write(1, mfpBase+mfpVR, 0x40); err != nil {
 		t.Fatalf("write vector base: %v", err)

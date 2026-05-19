@@ -673,3 +673,14 @@ func mhzToHz(mhz float64) (uint64, error) {
 	}
 	return hz, nil
 }
+
+func LoadROM(path string) ([]byte, error) {
+	image, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(image)%2 != 0 {
+		image = append(image, 0xFF)
+	}
+	return image, nil
+}

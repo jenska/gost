@@ -208,10 +208,6 @@ func TestMachineMapsAttachedCartridgeROM(t *testing.T) {
 	if value != 0x12 {
 		t.Fatalf("cartridge write changed data: got %02x want 12", value)
 	}
-
-	if got, want := machine.CartridgeROM(), []byte{0x12, 0x34, 0x56, 0x78}; string(got) != string(want) {
-		t.Fatalf("unexpected cartridge image copy: got %x want %x", got, want)
-	}
 }
 
 func TestMachineAbsentCartridgeProbeReadsFF(t *testing.T) {
@@ -223,9 +219,6 @@ func TestMachineAbsentCartridgeProbeReadsFF(t *testing.T) {
 	}
 	if value != 0xFFFFFFFF {
 		t.Fatalf("unexpected absent cartridge probe: got %08x want ffffffff", value)
-	}
-	if image := machine.CartridgeROM(); len(image) != 0 {
-		t.Fatalf("expected no attached cartridge image, got %x", image)
 	}
 }
 
@@ -789,6 +782,97 @@ func TestVBLInterruptRunsHandler(t *testing.T) {
 
 	if got := machine.Registers().D[1]; got != 1 {
 		t.Fatalf("VBL handler did not run: D1=%08x", uint32(got))
+	}
+}
+
+type testIRQSource struct {
+	pending []devices.Interrupt
+}
+
+func (s *testIRQSource) DrainInterrupts() []devices.Interrupt {
+	out := append([]devices.Interrupt(nil), s.pending...)
+	s.pending = nil
+	return out
+}
+
+func TestMachineDropsMaskedAutovectorPulse(t *testing.T) {
+	rom := loopROM([]byte{
+		0x46, 0xFC, 0x27, 0x00, // move #$2700,sr
+		0x46, 0xFC, 0x20, 0x00, // move #$2000,sr
+		0x4E, 0x71, // nop
+		0x60, 0xFE, // bra.s -2
+	})
+	machine := mustMachine(t, rom)
+	machine.irqSources = []devices.InterruptSource{
+		&testIRQSource{pending: []devices.Interrupt{{Level: 4}}},
+	}
+
+	handlerAddress := uint32(0x00002000)
+	vectorBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(vectorBytes, handlerAddress)
+	if err := machine.LoadIntoRAM(uint32((24+4)*4), vectorBytes); err != nil {
+		t.Fatalf("load vbl vector: %v", err)
+	}
+	if err := machine.LoadIntoRAM(handlerAddress, []byte{
+		0x72, 0x01, // moveq #1,d1
+		0x4E, 0x73, // rte
+	}); err != nil {
+		t.Fatalf("load vbl handler: %v", err)
+	}
+
+	if err := machine.cpu.Step(); err != nil {
+		t.Fatalf("set interrupt mask: %v", err)
+	}
+	machine.dispatchInterrupts()
+	for i := 0; i < 3; i++ {
+		if err := machine.cpu.Step(); err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+	}
+
+	if got := machine.Registers().D[1]; got != 0 {
+		t.Fatalf("masked autovector pulse should have been dropped, D1=%08x", uint32(got))
+	}
+}
+
+func TestMachineKeepsMaskedVectoredInterruptPending(t *testing.T) {
+	rom := loopROM([]byte{
+		0x46, 0xFC, 0x27, 0x00, // move #$2700,sr
+		0x46, 0xFC, 0x20, 0x00, // move #$2000,sr
+		0x4E, 0x71, // nop
+		0x60, 0xFE, // bra.s -2
+	})
+	machine := mustMachine(t, rom)
+	vector := uint8(64)
+	machine.irqSources = []devices.InterruptSource{
+		&testIRQSource{pending: []devices.Interrupt{{Level: 6, Vector: &vector}}},
+	}
+
+	handlerAddress := uint32(0x00002000)
+	vectorBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(vectorBytes, handlerAddress)
+	if err := machine.LoadIntoRAM(uint32(vector)*4, vectorBytes); err != nil {
+		t.Fatalf("load interrupt vector: %v", err)
+	}
+	if err := machine.LoadIntoRAM(handlerAddress, []byte{
+		0x72, 0x01, // moveq #1,d1
+		0x4E, 0x73, // rte
+	}); err != nil {
+		t.Fatalf("load interrupt handler: %v", err)
+	}
+
+	if err := machine.cpu.Step(); err != nil {
+		t.Fatalf("set interrupt mask: %v", err)
+	}
+	machine.dispatchInterrupts()
+	for i := 0; i < 3; i++ {
+		if err := machine.cpu.Step(); err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+	}
+
+	if got := machine.Registers().D[1]; got != 1 {
+		t.Fatalf("vectored interrupt should remain pending while masked, D1=%08x", uint32(got))
 	}
 }
 

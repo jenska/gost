@@ -12,6 +12,12 @@ const (
 	// which implies a 2.4576 MHz MFP timer input clock.
 	mfpTimerInputHz = 2_457_600
 
+	mfpPALScanlines     = 313
+	mfpNTSCScanlines    = 263
+	mfpActiveVideoLines = 200
+	mfpDefaultClockHz   = config.DefaultClockHz
+	mfpDefaultFrameHz   = config.DefaultFrameHz
+
 	mfpGPIP  = 0x01
 	mfpAER   = 0x03
 	mfpDDR   = 0x05
@@ -70,6 +76,12 @@ type MFP struct {
 	serialRx       byte
 	serialRxReady  bool
 	clockRemainder uint64
+
+	eventCountFrameCycles uint64
+	eventCountScanlines   uint64
+	eventCountActiveLines uint64
+	eventCountCycle       uint64
+	eventCountNextLine    uint64
 }
 
 func NewMFP(cfg *config.Config) *MFP {
@@ -103,6 +115,9 @@ func (m *MFP) Reset() {
 	m.serialRxReady = false
 	m.registers[mfpTSR] = mfpTSRBufferEmpty
 	m.clockRemainder = 0
+	m.configureEventCountTiming()
+	m.eventCountCycle = 0
+	m.eventCountNextLine = 1
 	m.aciaIRQActive = false
 	m.printerBusy = false
 	m.fdcIRQActive = false
@@ -136,6 +151,8 @@ func (m *MFP) Write(size cpu.Size, address uint32, value uint32) error {
 }
 
 func (m *MFP) Advance(cycles uint64) {
+	m.advanceEventCountTimers(cycles)
+
 	m.clockRemainder += cycles * mfpTimerInputHz
 	ticks := m.clockRemainder / m.cfg.ClockHz
 	m.clockRemainder %= m.cfg.ClockHz
@@ -145,7 +162,7 @@ func (m *MFP) Advance(cycles uint64) {
 
 	for i := range m.timers {
 		timer := &m.timers[i]
-		if !timer.enabled || timer.prescaler == 0 {
+		if !timer.enabled || timer.control == 8 || timer.prescaler == 0 {
 			continue
 		}
 
@@ -183,7 +200,7 @@ func (m *MFP) NextEventCycles() (uint64, bool) {
 	minTicks := uint64(0)
 	for i := range m.timers {
 		timer := &m.timers[i]
-		if !timer.enabled || timer.prescaler == 0 || timer.counter == 0 {
+		if !timer.enabled || timer.control == 8 || timer.prescaler == 0 || timer.counter == 0 {
 			continue
 		}
 		if minTicks == 0 || timer.counter < minTicks {
@@ -191,7 +208,7 @@ func (m *MFP) NextEventCycles() (uint64, bool) {
 		}
 	}
 	if minTicks == 0 {
-		return 0, false
+		return m.nextEventCountCycles()
 	}
 
 	numerator := minTicks*m.cfg.ClockHz - m.clockRemainder
@@ -204,6 +221,9 @@ func (m *MFP) NextEventCycles() (uint64, bool) {
 	}
 	if cycles == 0 {
 		cycles = 1
+	}
+	if eventCycles, ok := m.nextEventCountCycles(); ok && eventCycles < cycles {
+		return eventCycles, true
 	}
 	return cycles, true
 }
@@ -286,10 +306,14 @@ func (m *MFP) configureTimer(index int, control byte) {
 	timer := &m.timers[index]
 	timer.control = control & 0x0F
 	timer.prescaler = timerPrescaler(timer.control)
-	timer.enabled = timer.prescaler != 0
+	timer.enabled = timer.prescaler != 0 || timer.control == 8
 
 	if !timer.enabled {
 		timer.counter = 0
+		return
+	}
+	if timer.control == 8 {
+		timer.counter = uint64(m.timerReloadValue(timer.dataReg))
 		return
 	}
 
@@ -298,7 +322,14 @@ func (m *MFP) configureTimer(index int, control byte) {
 
 func (m *MFP) reloadTimer(index int) {
 	timer := &m.timers[index]
-	if !timer.enabled || timer.prescaler == 0 {
+	if !timer.enabled {
+		return
+	}
+	if timer.control == 8 {
+		timer.counter = uint64(m.timerReloadValue(timer.dataReg))
+		return
+	}
+	if timer.prescaler == 0 {
 		return
 	}
 	timer.counter = uint64(m.timerReloadValue(timer.dataReg)) * timer.prescaler
@@ -335,6 +366,12 @@ func timerPrescaler(mode byte) uint64 {
 
 func (m *MFP) timerCurrentValue(index int) byte {
 	timer := &m.timers[index]
+	if timer.control == 8 {
+		if !timer.enabled || timer.counter >= 256 {
+			return m.registers[timer.dataReg]
+		}
+		return byte(timer.counter)
+	}
 	if !timer.enabled || timer.prescaler == 0 || timer.counter == 0 {
 		return m.registers[timer.dataReg]
 	}
@@ -344,6 +381,126 @@ func (m *MFP) timerCurrentValue(index int) byte {
 		return 0
 	}
 	return byte(ticks)
+}
+
+func (m *MFP) configureEventCountTiming() {
+	clockHz := uint64(mfpDefaultClockHz)
+	frameHz := uint64(mfpDefaultFrameHz)
+	if m.cfg != nil {
+		if m.cfg.ClockHz != 0 {
+			clockHz = m.cfg.ClockHz
+		}
+		if m.cfg.FrameHz != 0 {
+			frameHz = m.cfg.FrameHz
+		}
+	}
+	m.eventCountFrameCycles = clockHz / frameHz
+	if m.eventCountFrameCycles == 0 {
+		m.eventCountFrameCycles = 1
+	}
+	if frameHz >= 55 {
+		m.eventCountScanlines = mfpNTSCScanlines
+	} else {
+		m.eventCountScanlines = mfpPALScanlines
+	}
+	m.eventCountActiveLines = mfpActiveVideoLines
+	if m.eventCountActiveLines > m.eventCountScanlines {
+		m.eventCountActiveLines = m.eventCountScanlines
+	}
+}
+
+func (m *MFP) advanceEventCountTimers(cycles uint64) {
+	if m.eventCountFrameCycles == 0 || m.eventCountScanlines == 0 {
+		return
+	}
+	for {
+		next := m.eventCountNextLineCycle()
+		if m.eventCountCycle < next {
+			step := next - m.eventCountCycle
+			if step > cycles {
+				m.eventCountCycle += cycles
+				return
+			}
+			m.eventCountCycle += step
+			cycles -= step
+		}
+
+		if m.eventCountNextLine >= m.eventCountScanlines {
+			m.eventCountCycle -= m.eventCountFrameCycles
+			m.eventCountNextLine = 1
+			if cycles == 0 {
+				return
+			}
+			continue
+		}
+
+		if m.eventCountNextLine <= m.eventCountActiveLines {
+			m.pulseEventCountTimers()
+		}
+		m.eventCountNextLine++
+		if cycles == 0 {
+			return
+		}
+	}
+}
+
+func (m *MFP) pulseEventCountTimers() {
+	for i := range m.timers {
+		timer := &m.timers[i]
+		if !timer.enabled || timer.control != 8 {
+			continue
+		}
+		if timer.counter > 1 {
+			timer.counter--
+			continue
+		}
+		timer.counter = uint64(m.timerReloadValue(timer.dataReg))
+		m.raiseChannel(timer.channel)
+	}
+}
+
+func (m *MFP) nextEventCountCycles() (uint64, bool) {
+	if !m.hasEnabledEventCountTimer() || m.eventCountFrameCycles == 0 || m.eventCountScanlines == 0 {
+		return 0, false
+	}
+	if m.eventCountNextLine <= m.eventCountActiveLines {
+		next := m.eventCountNextLineCycle()
+		if m.eventCountCycle >= next {
+			return 1, true
+		}
+		return next - m.eventCountCycle, true
+	}
+
+	firstLine := m.eventCountFrameCycles / m.eventCountScanlines
+	if firstLine == 0 {
+		firstLine = 1
+	}
+	cyclesToFrameEnd := m.eventCountFrameCycles - m.eventCountCycle
+	if m.eventCountCycle >= m.eventCountFrameCycles {
+		cyclesToFrameEnd = 1
+	}
+	return cyclesToFrameEnd + firstLine, true
+}
+
+func (m *MFP) hasEnabledEventCountTimer() bool {
+	for i := range m.timers {
+		timer := &m.timers[i]
+		if timer.enabled && timer.control == 8 {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MFP) eventCountNextLineCycle() uint64 {
+	if m.eventCountNextLine == 0 {
+		m.eventCountNextLine = 1
+	}
+	cycle := m.eventCountNextLine * m.eventCountFrameCycles / m.eventCountScanlines
+	if cycle == 0 {
+		return 1
+	}
+	return cycle
 }
 
 func (m *MFP) raiseChannel(channel int) {

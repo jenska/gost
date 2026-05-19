@@ -1148,11 +1148,6 @@ func (f *FDC) selectedDisk() *fdcDrive {
 	return &f.drives[f.selectedDrive]
 }
 
-func (f *FDC) hasSelectedDisk() bool {
-	disk := f.selectedDisk()
-	return disk != nil && len(disk.image) != 0
-}
-
 func (f *FDC) hasHardDisk0() bool {
 	return len(f.hardDisk0) != 0
 }
@@ -1599,11 +1594,4 @@ func copyAt(dst []byte, offset int, src []byte) {
 			dst[i] = ' '
 		}
 	}
-}
-
-func abs(value int) int {
-	if value < 0 {
-		return -value
-	}
-	return value
 }

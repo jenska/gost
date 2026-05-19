@@ -49,14 +49,23 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 	psg := devices.NewPSG(cfg.ClockHz)
 	printer := devices.NewPrinterPort()
 	rs232 := devices.NewRS232()
-	midi := devices.NewMIDI()
 	steSound, steSoundDevice := newModelSTESound(cfg, ram)
 
 	mfp.AttachRS232(rs232)
-	acia.AttachMIDI(midi)
-	if err := configureStorageAndClock(cfg, fdc, mfp); err != nil {
-		return nil, err
+
+	if cfg.RTC {
+		// The ICD RTC is reached through ACSI command bytes and reports its
+		// detect/session line through MFP GPIP5.
+		rtc := devices.NewICDRTC()
+		mfp.AttachICDRTC(rtc)
+		fdc.AttachICDRTC(rtc)
 	}
+
+	sizeBytes := cfg.HardDiskSizeMB * 1024 * 1024
+	if err := fdc.CreateVirtualHardDisk(sizeBytes); err != nil {
+		return nil, fmt.Errorf("create virtual hard disk: %w", err)
+	}
+
 	wirePSGPorts(psg, fdc, mfp, printer)
 
 	busDevices := []cpu.Device{
@@ -71,13 +80,10 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		fdc,
 		psg,
 		steSoundDevice,
+		cartridge,
 		newMonsterProbeRegion(),
 	}
-	if cartridge != nil {
-		busDevices = append(busDevices, cartridge)
-	} else {
-		busDevices = append(busDevices, newAbsentCartridgeProbeRegion())
-	}
+
 	busDevices = append(busDevices,
 		newOpenBusRegion(romImage),
 		rom,
@@ -96,7 +102,6 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		cpu:          processor,
 		ram:          ram,
 		rom:          rom,
-		cartridge:    cartridge,
 		overlayROM:   overlayROM,
 		memoryConfig: memoryConfig,
 		shifter:      shifter,
@@ -107,7 +112,6 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		psg:          psg,
 		printer:      printer,
 		rs232:        rs232,
-		midi:         midi,
 		steSound:     steSound,
 		clocked:      clockedDevices(glue, mfp, acia, fdc, psg, steSound),
 		irqSources:   []devices.InterruptSource{glue, mfp, acia, fdc},
@@ -130,14 +134,19 @@ func clockedDevices(glue *devices.GLUE, mfp *devices.MFP, acia *devices.ACIA, fd
 	return clocked
 }
 
-func newCartridgeROM(image []byte) (*devices.CartridgeROM, error) {
+func newCartridgeROM(image []byte) (cpu.Device, error) {
 	if len(image) == 0 {
-		return nil, nil
+		return devices.NewFixedValueRegion(
+			0xFFFFFFFF,
+			devices.AddressRange{Start: 0xFA0000, End: 0xFA0010},
+		), nil
 	}
+
 	cartridge, err := devices.NewCartridgeROM(image)
 	if err != nil {
 		return nil, fmt.Errorf("create cartridge ROM: %w", err)
 	}
+
 	return cartridge, nil
 }
 
@@ -160,24 +169,6 @@ func newModelSTESound(cfg *config.Config, ram *devices.RAM) (*devices.STESound, 
 	return nil, devices.NewAbsentSTESound()
 }
 
-func configureStorageAndClock(cfg *config.Config, fdc *devices.FDC, mfp *devices.MFP) error {
-	if cfg.RTC {
-		// The ICD RTC is reached through ACSI command bytes and reports its
-		// detect/session line through MFP GPIP5.
-		rtc := devices.NewICDRTC()
-		mfp.AttachICDRTC(rtc)
-		fdc.AttachICDRTC(rtc)
-	}
-	if cfg.HardDiskSizeMB == 0 {
-		return nil
-	}
-	sizeBytes := cfg.HardDiskSizeMB * 1024 * 1024
-	if err := fdc.CreateVirtualHardDisk(sizeBytes); err != nil {
-		return fmt.Errorf("create virtual hard disk: %w", err)
-	}
-	return nil
-}
-
 func wirePSGPorts(psg *devices.PSG, fdc *devices.FDC, mfp *devices.MFP, printer *devices.PrinterPort) {
 	mfp.SetPrinterBusy(printer.Busy())
 	psg.SetPortAObserver(func(value byte) {
@@ -193,13 +184,6 @@ func wirePSGPorts(psg *devices.PSG, fdc *devices.FDC, mfp *devices.MFP, printer 
 func newMonsterProbeRegion() *devices.BusErrorRegion {
 	return devices.NewBusErrorRegion(
 		devices.AddressRange{Start: 0xFFFE00, End: 0xFFFE10},
-	)
-}
-
-func newAbsentCartridgeProbeRegion() *devices.FixedValueRegion {
-	return devices.NewFixedValueRegion(
-		0xFFFFFFFF,
-		devices.AddressRange{Start: 0xFA0000, End: 0xFA0010},
 	)
 }
 

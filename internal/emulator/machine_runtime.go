@@ -161,7 +161,18 @@ func (m *Machine) advanceDevices(cycles uint64) {
 func (m *Machine) dispatchInterrupts() {
 	for _, source := range m.irqSources {
 		for _, irq := range source.DrainInterrupts() {
+			if m.maskedAutovectorPulse(irq) {
+				continue
+			}
 			_ = m.cpu.RequestInterrupt(irq.Level, irq.Vector)
 		}
 	}
+}
+
+func (m *Machine) maskedAutovectorPulse(irq devices.Interrupt) bool {
+	if irq.Vector != nil {
+		return false
+	}
+	mask := uint8((m.cpu.Registers().SR >> 8) & 0x7)
+	return irq.Level <= mask
 }

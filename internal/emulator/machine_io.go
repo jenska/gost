@@ -53,7 +53,6 @@ type (
 		psg           *devices.PSG
 		printer       *devices.PrinterPort
 		rs232         *devices.RS232
-		midi          *devices.MIDI
 		steSound      *devices.STESound
 		clocked       []devices.Clocked
 		irqSources    []devices.InterruptSource
@@ -230,21 +229,12 @@ func (m *Machine) PushMIDIInput(data []byte) {
 
 // MIDIOutput returns bytes written by guest software to ACIA channel 1.
 func (m *Machine) MIDIOutput() []byte {
-	return m.midi.Output()
+	return m.acia.MIDIOutput()
 }
 
 // ClearMIDIOutput discards captured MIDI transmit bytes.
 func (m *Machine) ClearMIDIOutput() {
-	m.midi.ClearOutput()
-}
-
-// CartridgeROM returns a copy of the attached cartridge image, or nil when no
-// cartridge is present.
-func (m *Machine) CartridgeROM() []byte {
-	if m.cartridge == nil {
-		return nil
-	}
-	return m.cartridge.Bytes()
+	m.acia.ClearMIDIOutput()
 }
 
 // LoadIntoRAM copies payload into guest RAM at address. It is intentionally
