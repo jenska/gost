@@ -15,27 +15,19 @@ import (
 )
 
 type App struct {
-	machine      *emulator.Machine
-	scale        float64
-	texture      *ebitenlib.Image
-	prevKeys     map[ebitenlib.Key]bool
-	guestMouseX  int
-	guestMouseY  int
-	lastButtons  byte
-	mousePrimed  bool
-	mouseReady   bool
-	mouseSyncing int
-	mouseStable  int
-	mouseInside  bool
-	cursorHidden bool
+	machine     *emulator.Machine
+	scale       float64
+	texture     *ebitenlib.Image
+	prevKeys    map[ebitenlib.Key]bool
+	hostMouseX  int
+	hostMouseY  int
+	lastButtons byte
+	mouseReady  bool
+	cursorMode  ebitenlib.CursorModeType
 }
 
 const (
-	initialMouseSyncFrames = 12
-	maxMouseSyncStep       = 32
-	initialMouseWarmup     = 12
-	reentryMouseWarmup     = 2
-	audioBufferSize        = 75 * time.Millisecond
+	audioBufferSize = 75 * time.Millisecond
 )
 
 func Run(machine *emulator.Machine, cfg config.Config) error {
@@ -46,15 +38,11 @@ func Run(machine *emulator.Machine, cfg config.Config) error {
 	}
 
 	width, height := machine.DisplayDimensions()
-	_, _, viewportWidth, viewportHeight := machine.DisplayViewport()
-	if viewportWidth <= 0 || viewportHeight <= 0 {
-		viewportWidth, viewportHeight = machine.Dimensions()
-	}
 	if app.scale <= 0 {
 		app.scale = 2
 	}
 	app.texture = ebitenlib.NewImage(width, height)
-	app.resetMouseTracking(viewportWidth, viewportHeight)
+	app.resetMouseTracking()
 
 	ebitenlib.SetWindowTitle("GoST Emulator")
 	ebitenlib.SetWindowSize(scaledWindowSize(width, height, app.scale))
@@ -82,14 +70,10 @@ func (a *App) Update() error {
 	}
 	if changed {
 		width, height := a.machine.DisplayDimensions()
-		_, _, viewportWidth, viewportHeight := a.machine.DisplayViewport()
-		if viewportWidth <= 0 || viewportHeight <= 0 {
-			viewportWidth, viewportHeight = a.machine.Dimensions()
-		}
 		if a.texture == nil || a.texture.Bounds().Dx() != width || a.texture.Bounds().Dy() != height {
 			a.texture = ebitenlib.NewImage(width, height)
 			ebitenlib.SetWindowSize(scaledWindowSize(width, height, a.scale))
-			a.resetMouseTracking(viewportWidth, viewportHeight)
+			a.resetMouseTracking()
 		}
 		a.texture.WritePixels(a.machine.DisplayFrameBuffer())
 	}
@@ -134,19 +118,15 @@ func (a *App) handleKeyboard() {
 
 func (a *App) handleMouse() {
 	x, y := ebitenlib.CursorPosition()
-	displayX, displayY, width, height := a.machine.DisplayViewport()
-	guestWidth, guestHeight := a.machine.Dimensions()
-	if guestWidth <= 0 || guestHeight <= 0 {
-		guestWidth, guestHeight = width, height
-	}
+	width, height := a.machine.DisplayDimensions()
 	if width <= 0 || height <= 0 {
-		width, height = guestWidth, guestHeight
-		displayX, displayY = 0, 0
+		width, height = a.machine.Dimensions()
 	}
 	focused := ebitenlib.IsFocused()
+	captured := ebitenlib.CursorMode() == ebitenlib.CursorModeCaptured
 	inside := focused &&
-		x >= displayX && y >= displayY &&
-		x < displayX+width && y < displayY+height
+		x >= 0 && y >= 0 &&
+		x < width && y < height
 
 	var buttons byte
 	if ebitenlib.IsMouseButtonPressed(ebitenlib.MouseButtonLeft) {
@@ -156,152 +136,59 @@ func (a *App) handleMouse() {
 		buttons |= 0x01
 	}
 
-	if !inside {
-		a.setHostCursorHidden(false)
-		a.mouseStable = 0
-		a.mouseInside = false
+	if !focused || (!inside && !captured) {
+		a.setHostCursorMode(ebitenlib.CursorModeVisible)
 		a.mouseReady = false
-		a.mouseSyncing = 0
 		a.lastButtons = buttons
 		return
 	}
 
-	guestX, guestY, guestOK := a.machine.MousePosition()
-	if !guestOK {
-		a.setHostCursorHidden(false)
-		a.mouseStable = 0
-		a.mouseReady = false
-		a.mouseSyncing = 0
-		a.mouseInside = true
+	if !captured {
+		a.setHostCursorMode(ebitenlib.CursorModeCaptured)
+		a.hostMouseX = x
+		a.hostMouseY = y
+		a.mouseReady = true
 		a.lastButtons = buttons
 		return
 	}
-
-	warmupFrames := initialMouseWarmup
-	if a.mousePrimed {
-		warmupFrames = reentryMouseWarmup
-	}
-	if a.mouseStable < warmupFrames {
-		a.mouseStable++
-	}
-	if a.mouseStable < warmupFrames {
-		a.setHostCursorHidden(false)
-		a.guestMouseX = guestX
-		a.guestMouseY = guestY
-		a.mouseReady = false
-		a.mouseSyncing = 0
-		a.mouseInside = true
-		a.lastButtons = buttons
-		return
-	}
-
-	a.setHostCursorHidden(true)
-	targetX, targetY := guestTargetPosition(
-		x-displayX, y-displayY,
-		width, height,
-		guestWidth, guestHeight,
-	)
 
 	if !a.mouseReady {
-		a.guestMouseX = guestX
-		a.guestMouseY = guestY
-		a.mouseSyncing = initialMouseSyncFrames
-		a.mousePrimed = true
-		a.lastButtons = buttons
+		a.hostMouseX = x
+		a.hostMouseY = y
 		a.mouseReady = true
-		a.mouseInside = true
+		a.lastButtons = buttons
+		return
 	}
 
-	if a.mouseSyncing > 0 {
-		a.guestMouseX = guestX
-		a.guestMouseY = guestY
-	}
-
-	dx := targetX - a.guestMouseX
-	dy := targetY - a.guestMouseY
-	if a.mouseSyncing > 0 {
-		dx = clampMouseSyncDelta(dx)
-		dy = clampMouseSyncDelta(dy)
-	}
+	dx := x - a.hostMouseX
+	dy := y - a.hostMouseY
+	a.hostMouseX = x
+	a.hostMouseY = y
 
 	if dx != 0 || dy != 0 || buttons != a.lastButtons {
 		a.machine.PushMouse(dx, dy, buttons)
-		a.guestMouseX += dx
-		a.guestMouseY += dy
 		a.lastButtons = buttons
 	}
-	if a.mouseSyncing > 0 {
-		if absInt(targetX-a.guestMouseX) <= 1 && absInt(targetY-a.guestMouseY) <= 1 {
-			a.mouseSyncing = 0
-			a.guestMouseX = targetX
-			a.guestMouseY = targetY
-		} else {
-			a.mouseSyncing--
-		}
-	} else {
-		a.guestMouseX = targetX
-		a.guestMouseY = targetY
-	}
-	a.mouseInside = true
 }
 
-func (a *App) resetMouseTracking(width, height int) {
-	a.guestMouseX = width / 2
-	a.guestMouseY = height / 2
+func (a *App) resetMouseTracking() {
+	a.hostMouseX = 0
+	a.hostMouseY = 0
 	a.lastButtons = 0
-	a.mousePrimed = false
 	a.mouseReady = false
-	a.mouseSyncing = 0
-	a.mouseStable = 0
-	a.mouseInside = false
-	a.cursorHidden = false
+	a.cursorMode = ebitenlib.CursorModeVisible
 }
 
-func (a *App) setHostCursorHidden(hidden bool) {
-	if a.cursorHidden == hidden {
+func (a *App) setHostCursorMode(mode ebitenlib.CursorModeType) {
+	if a.cursorMode == mode && ebitenlib.CursorMode() == mode {
 		return
 	}
-	if hidden {
-		ebitenlib.SetCursorMode(ebitenlib.CursorModeHidden)
-	} else {
-		ebitenlib.SetCursorMode(ebitenlib.CursorModeVisible)
-	}
-	a.cursorHidden = hidden
+	ebitenlib.SetCursorMode(mode)
+	a.cursorMode = mode
 }
 
 func scaledWindowSize(width, height int, scale float64) (int, int) {
 	return int(float64(width) * scale), int(float64(height) * scale)
-}
-
-func clampMouseSyncDelta(delta int) int {
-	switch {
-	case delta > maxMouseSyncStep:
-		return maxMouseSyncStep
-	case delta < -maxMouseSyncStep:
-		return -maxMouseSyncStep
-	default:
-		return delta
-	}
-}
-
-func guestTargetPosition(hostX, hostY, displayWidth, displayHeight, guestWidth, guestHeight int) (int, int) {
-	hostX, hostY = clampToBounds(hostX, hostY, displayWidth, displayHeight)
-	if guestWidth <= 0 || guestHeight <= 0 {
-		return 0, 0
-	}
-	if displayWidth <= 1 || displayHeight <= 1 {
-		return clampToBounds(hostX, hostY, guestWidth, guestHeight)
-	}
-	guestX := hostX * guestWidth / displayWidth
-	guestY := hostY * guestHeight / displayHeight
-	return clampToBounds(guestX, guestY, guestWidth, guestHeight)
-}
-
-func absInt(value int) int {
-	if value < 0 {
-		return -value
-	}
-	return value
 }
 
 func newAudioPlayer(machine *emulator.Machine) (*audio.Player, error) {
@@ -329,25 +216,6 @@ func ensureAudioContext(sampleRate int) (*audio.Context, error) {
 		return ctx, nil
 	}
 	return audio.NewContext(sampleRate), nil
-}
-
-func clampToBounds(x, y, width, height int) (int, int) {
-	if width <= 0 || height <= 0 {
-		return 0, 0
-	}
-	switch {
-	case x < 0:
-		x = 0
-	case x >= width:
-		x = width - 1
-	}
-	switch {
-	case y < 0:
-		y = 0
-	case y >= height:
-		y = height - 1
-	}
-	return x, y
 }
 
 func atariScancode(key ebitenlib.Key) (byte, bool) {
