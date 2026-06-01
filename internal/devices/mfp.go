@@ -46,8 +46,14 @@ const (
 	mfpUSARTReceiveBufferFullChannel   = 12
 	mfpUSARTTransmitBufferEmptyChannel = 10
 
-	mfpRSRBufferFull  = 0x80
-	mfpTSRBufferEmpty = 0x80
+	mfpRSRBufferFull     = 0x80
+	mfpRSROverrunError   = 0x40
+	mfpRSRParityError    = 0x20
+	mfpRSRFramingError   = 0x10
+	mfpRSRReceiverEnable = 0x01
+	mfpTSRBufferEmpty    = 0x80
+	mfpTSRUnderrunError  = 0x40
+	mfpTSRTransmitterOn  = 0x01
 )
 
 type mfpTimer struct {
@@ -75,6 +81,12 @@ type MFP struct {
 	timers         [4]mfpTimer
 	serialRx       byte
 	serialRxReady  bool
+	serialRxActive bool
+	serialRxByte   byte
+	serialRxCycles uint64
+	serialTxActive bool
+	serialTxByte   byte
+	serialTxCycles uint64
 	clockRemainder uint64
 
 	eventCountFrameCycles uint64
@@ -113,6 +125,12 @@ func (m *MFP) Reset() {
 	m.timers[3] = mfpTimer{channel: 4, dataReg: mfpTDDR}
 	m.serialRx = 0
 	m.serialRxReady = false
+	m.serialRxActive = false
+	m.serialRxByte = 0
+	m.serialRxCycles = 0
+	m.serialTxActive = false
+	m.serialTxByte = 0
+	m.serialTxCycles = 0
 	m.registers[mfpTSR] = mfpTSRBufferEmpty
 	m.clockRemainder = 0
 	m.configureEventCountTiming()
@@ -151,11 +169,13 @@ func (m *MFP) Write(size cpu.Size, address uint32, value uint32) error {
 }
 
 func (m *MFP) Advance(cycles uint64) {
+	m.advanceUSART(cycles)
 	m.advanceEventCountTimers(cycles)
 
+	clockHz := m.clockHz()
 	m.clockRemainder += cycles * mfpTimerInputHz
-	ticks := m.clockRemainder / m.cfg.ClockHz
-	m.clockRemainder %= m.cfg.ClockHz
+	ticks := m.clockRemainder / clockHz
+	m.clockRemainder %= clockHz
 	if ticks == 0 {
 		return
 	}
@@ -207,23 +227,38 @@ func (m *MFP) NextEventCycles() (uint64, bool) {
 			minTicks = timer.counter
 		}
 	}
-	if minTicks == 0 {
-		return m.nextEventCountCycles()
-	}
 
-	numerator := minTicks*m.cfg.ClockHz - m.clockRemainder
-	if numerator == 0 {
-		return 1, true
-	}
-	cycles := numerator / mfpTimerInputHz
-	if numerator%mfpTimerInputHz != 0 {
-		cycles++
-	}
-	if cycles == 0 {
-		cycles = 1
+	var cycles uint64
+	if minTicks != 0 {
+		numerator := minTicks*m.clockHz() - m.clockRemainder
+		if numerator == 0 {
+			cycles = 1
+		} else {
+			cycles = numerator / mfpTimerInputHz
+			if numerator%mfpTimerInputHz != 0 {
+				cycles++
+			}
+			if cycles == 0 {
+				cycles = 1
+			}
+		}
 	}
 	if eventCycles, ok := m.nextEventCountCycles(); ok && eventCycles < cycles {
 		return eventCycles, true
+	}
+	if serialCycles, ok := m.nextUSARTEventCycles(); ok && serialCycles < cycles {
+		return serialCycles, true
+	}
+	if cycles == 0 {
+		if eventCycles, ok := m.nextEventCountCycles(); ok {
+			cycles = eventCycles
+		}
+		if serialCycles, ok := m.nextUSARTEventCycles(); ok && (cycles == 0 || serialCycles < cycles) {
+			cycles = serialCycles
+		}
+		if cycles == 0 {
+			return 0, false
+		}
 	}
 	return cycles, true
 }
@@ -253,8 +288,19 @@ func (m *MFP) readByte(offset uint32) byte {
 
 func (m *MFP) writeByte(offset uint32, value byte) {
 	switch offset {
-	case mfpGPIP, mfpSCR, mfpUCR, mfpRSR, mfpTSR:
+	case mfpGPIP, mfpSCR, mfpUCR:
 		m.registers[offset] = value
+	case mfpRSR:
+		m.registers[offset] = value &^ (mfpRSRBufferFull | mfpRSROverrunError | mfpRSRParityError | mfpRSRFramingError)
+		if value&mfpRSRReceiverEnable == 0 {
+			m.serialRxReady = false
+			m.serialRxActive = false
+			m.serialRxCycles = 0
+		} else {
+			m.loadNextRS232Byte()
+		}
+	case mfpTSR:
+		m.registers[offset] = value &^ (mfpTSRBufferEmpty | mfpTSRUnderrunError)
 	case mfpDDR:
 		m.updateGPIPEdges()
 		m.registers[offset] = value
@@ -556,8 +602,9 @@ func (m *MFP) receiverStatus() byte {
 }
 
 func (m *MFP) transmitterStatus() byte {
-	// Transmission is byte-buffered for now, so the transmitter is immediately
-	// ready after every guest write.
+	if m.serialTxActive {
+		return m.registers[mfpTSR] &^ mfpTSRBufferEmpty
+	}
 	return m.registers[mfpTSR] | mfpTSRBufferEmpty
 }
 
@@ -574,6 +621,20 @@ func (m *MFP) readUSARTData() byte {
 
 func (m *MFP) writeUSARTData(value byte) {
 	m.registers[mfpUDR] = value
+	if m.usartTimingEnabled() {
+		if m.serialTxActive {
+			m.registers[mfpTSR] |= mfpTSRUnderrunError
+		}
+		m.serialTxByte = value
+		m.serialTxCycles = m.usartFrameCycles()
+		if m.serialTxCycles == 0 {
+			m.serialTxCycles = 1
+		}
+		m.serialTxActive = true
+		m.registers[mfpTSR] &^= mfpTSRBufferEmpty
+		return
+	}
+
 	m.registers[mfpTSR] |= mfpTSRBufferEmpty
 	if m.rs232 != nil {
 		m.rs232.WriteOutput(value)
@@ -582,7 +643,26 @@ func (m *MFP) writeUSARTData(value byte) {
 }
 
 func (m *MFP) loadNextRS232Byte() {
-	if m.serialRxReady || m.rs232 == nil {
+	if m.serialRxActive || m.rs232 == nil {
+		return
+	}
+	if m.usartTimingEnabled() {
+		if m.registers[mfpRSR]&mfpRSRReceiverEnable == 0 {
+			return
+		}
+		value, ok := m.rs232.PopInput()
+		if !ok {
+			return
+		}
+		m.serialRxByte = value
+		m.serialRxCycles = m.usartFrameCycles()
+		if m.serialRxCycles == 0 {
+			m.serialRxCycles = 1
+		}
+		m.serialRxActive = true
+		return
+	}
+	if m.serialRxReady {
 		return
 	}
 	value, ok := m.rs232.PopInput()
@@ -592,6 +672,117 @@ func (m *MFP) loadNextRS232Byte() {
 	m.serialRx = value
 	m.serialRxReady = true
 	m.raiseChannel(mfpUSARTReceiveBufferFullChannel)
+}
+
+func (m *MFP) advanceUSART(cycles uint64) {
+	if cycles == 0 {
+		return
+	}
+	if m.serialRxActive {
+		if cycles >= m.serialRxCycles {
+			m.serialRxActive = false
+			m.serialRxCycles = 0
+			if m.serialRxReady {
+				m.registers[mfpRSR] |= mfpRSROverrunError
+			}
+			m.serialRx = m.serialRxByte
+			m.serialRxReady = true
+			m.raiseChannel(mfpUSARTReceiveBufferFullChannel)
+		} else {
+			m.serialRxCycles -= cycles
+		}
+	}
+	if m.serialTxActive {
+		if cycles >= m.serialTxCycles {
+			m.serialTxActive = false
+			m.serialTxCycles = 0
+			if m.rs232 != nil {
+				m.rs232.WriteOutput(m.serialTxByte)
+			}
+			m.registers[mfpTSR] |= mfpTSRBufferEmpty
+			m.raiseChannel(mfpUSARTTransmitBufferEmptyChannel)
+		} else {
+			m.serialTxCycles -= cycles
+		}
+	}
+}
+
+func (m *MFP) nextUSARTEventCycles() (uint64, bool) {
+	var next uint64
+	if m.serialRxActive && m.serialRxCycles != 0 {
+		next = m.serialRxCycles
+	}
+	if m.serialTxActive && m.serialTxCycles != 0 && (next == 0 || m.serialTxCycles < next) {
+		next = m.serialTxCycles
+	}
+	if next == 0 {
+		return 0, false
+	}
+	return next, true
+}
+
+func (m *MFP) usartTimingEnabled() bool {
+	return m.registers[mfpUCR] != 0 || m.registers[mfpSCR] != 0 || m.timers[3].enabled
+}
+
+func (m *MFP) usartFrameCycles() uint64 {
+	bitCycles := m.usartBitCycles()
+	if bitCycles == 0 {
+		return 0
+	}
+	return bitCycles * uint64(m.usartFrameBits())
+}
+
+func (m *MFP) usartBitCycles() uint64 {
+	prescaler := m.timers[3].prescaler
+	if prescaler == 0 {
+		prescaler = 1
+	}
+	divisor := uint64(m.timerReloadValue(mfpTDDR))
+	if divisor == 0 {
+		divisor = 256
+	}
+	// The ST commonly drives the USART from Timer D with a 16x serial clock.
+	numerator := uint64(m.clockHz()) * prescaler * divisor * 16
+	cycles := numerator / mfpTimerInputHz
+	if numerator%mfpTimerInputHz != 0 {
+		cycles++
+	}
+	if cycles == 0 {
+		return 1
+	}
+	return cycles
+}
+
+func (m *MFP) usartFrameBits() int {
+	// Model the common async format fields from UCR: start bit, data bits,
+	// optional parity, and stop bits. A zero UCR keeps the historical 8N1 path.
+	ucr := m.registers[mfpUCR]
+	dataBits := 8
+	switch (ucr >> 5) & 0x03 {
+	case 1:
+		dataBits = 7
+	case 2:
+		dataBits = 6
+	case 3:
+		dataBits = 5
+	}
+	parityBits := 0
+	if ucr&0x04 != 0 {
+		parityBits = 1
+	}
+	stopBits := 1
+	if ucr&0x03 == 0x03 {
+		stopBits = 2
+	}
+	return 1 + dataBits + parityBits + stopBits
+}
+
+func (m *MFP) clockHz() uint64 {
+	if m.cfg != nil && m.cfg.ClockHz != 0 {
+		return m.cfg.ClockHz
+	}
+	return mfpDefaultClockHz
 }
 
 func (m *MFP) gpipState() byte {

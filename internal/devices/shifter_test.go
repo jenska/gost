@@ -445,9 +445,57 @@ func TestShifterMidFramePaletteChangeAffectsSubsequentScanlines(t *testing.T) {
 	}
 }
 
-func TestShifterRAMContentionAddsWaitStatesDuringActiveFetchWindow(t *testing.T) {
+func TestShifterMidFrameScreenBaseChangeAffectsSubsequentScanlines(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	shifter := NewSTShifter(testShifterConfig(16000), ram)
+
+	const secondFrameBase = 0x008000
+	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, 0x00); err != nil {
+		t.Fatalf("write base high: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, 0x00); err != nil {
+		t.Fatalf("write base mid: %v", err)
+	}
+	if err := shifter.Write(cpu.Word, paletteBase+2, 0x0700); err != nil {
+		t.Fatalf("write red palette: %v", err)
+	}
+	if err := shifter.Write(cpu.Word, paletteBase+4, 0x0070); err != nil {
+		t.Fatalf("write green palette: %v", err)
+	}
+	if err := ram.LoadAt(0, solidIndex1LowResFrame()); err != nil {
+		t.Fatalf("seed first frame: %v", err)
+	}
+	if err := ram.LoadAt(secondFrameBase, solidIndex2LowResFrame()); err != nil {
+		t.Fatalf("seed second frame: %v", err)
+	}
+
+	shifter.BeginFrame()
+	shifter.AdvanceFrame(shifter.frameCycles() / 2)
+	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, (secondFrameBase>>16)&0xFF); err != nil {
+		t.Fatalf("write switched base high: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, (secondFrameBase>>8)&0xFF); err != nil {
+		t.Fatalf("write switched base mid: %v", err)
+	}
+	shifter.AdvanceFrame(shifter.frameCycles() - shifter.frameCycles()/2)
+	if !shifter.EndFrame() {
+		t.Fatalf("expected end-frame render to report changes")
+	}
+
+	fb := shifter.FrameBuffer()
+	top := fb[(20*320+0)*4 : (20*320+0)*4+4]
+	if top[0] != 255 || top[1] != 0 || top[2] != 0 {
+		t.Fatalf("expected upper scanlines to use original base, got %v", top)
+	}
+	bottom := fb[(180*320+0)*4 : (180*320+0)*4+4]
+	if bottom[0] != 0 || bottom[1] != 255 || bottom[2] != 0 {
+		t.Fatalf("expected lower scanlines to use switched base, got %v", bottom)
+	}
+}
+
+func TestShifterRAMContentionAddsWaitStatesDuringActiveFetchWindow(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
 	ram.SetContentionSource(shifter)
 
 	shifter.BeginFrame()
@@ -468,9 +516,30 @@ func TestShifterRAMContentionAddsWaitStatesDuringActiveFetchWindow(t *testing.T)
 	}
 }
 
+func TestShifterRAMContentionOnlyHitsVideoDMASlots(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
+	ram.SetContentionSource(shifter)
+
+	shifter.BeginFrame()
+	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
+		t.Fatalf("expected contention at the first video DMA slot")
+	}
+
+	shifter.AdvanceFrame(1)
+	if got := ram.WaitStates(cpu.Word, 0x000100); got != 0 {
+		t.Fatalf("expected no contention between video DMA slots, got %d", got)
+	}
+
+	shifter.AdvanceFrame(shifterDMASlotCycles - 1)
+	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
+		t.Fatalf("expected contention at the next video DMA slot")
+	}
+}
+
 func TestShifterRAMContentionDropsOutsideFetchWindow(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewSTShifter(testShifterConfig(16000), ram)
+	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
 	ram.SetContentionSource(shifter)
 
 	shifter.BeginFrame()
@@ -482,6 +551,20 @@ func TestShifterRAMContentionDropsOutsideFetchWindow(t *testing.T) {
 
 	if got := ram.WaitStates(cpu.Word, 0x000100); got != 0 {
 		t.Fatalf("expected no wait states near end of scanline fetch period, got %d", got)
+	}
+}
+
+func TestShifterRAMContentionDropsAfterLineFetchBudget(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
+	ram.SetContentionSource(shifter)
+
+	shifter.BeginFrame()
+	lineCycles := shifter.frameCycles() / 200
+	shifter.AdvanceFrame(shifter.videoDMAFetchCycles(lineCycles) + shifterDMASlotCycles)
+
+	if got := ram.WaitStates(cpu.Word, 0x000100); got != 0 {
+		t.Fatalf("expected no wait states after visible-line DMA fetches, got %d", got)
 	}
 }
 
@@ -823,6 +906,23 @@ func solidIndex1LowResFrame() []byte {
 			offset := group * 8
 			line[offset] = 0xFF
 			line[offset+1] = 0xFF
+		}
+	}
+	return frame
+}
+
+func solidIndex2LowResFrame() []byte {
+	const (
+		lines  = 200
+		stride = 160
+	)
+	frame := make([]byte, lines*stride)
+	for y := range lines {
+		line := frame[y*stride : (y+1)*stride]
+		for group := range 20 {
+			offset := group * 8
+			line[offset+2] = 0xFF
+			line[offset+3] = 0xFF
 		}
 	}
 	return frame

@@ -815,3 +815,128 @@ func TestMFPRS232TransmitCapturesOutputAndInterrupts(t *testing.T) {
 		t.Fatalf("unexpected transmit vector: %+v", irqs[0].Vector)
 	}
 }
+
+func TestMFPRS232TimedReceiveWaitsForFrameCompletion(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
+	mfp.AttachRS232(NewRS232())
+
+	configureTimedUSART(t, mfp)
+	mfp.PushRS232Input([]byte("A"))
+
+	frameCycles := mfp.usartFrameCycles()
+	if next, ok := mfp.NextEventCycles(); !ok || next == 0 || next > frameCycles {
+		t.Fatalf("next MFP event = %d,%v; want non-zero event no later than %d", next, ok, frameCycles)
+	}
+
+	status, err := mfp.Read(1, mfpBase+mfpRSR)
+	if err != nil {
+		t.Fatalf("read initial RSR: %v", err)
+	}
+	if byte(status)&mfpRSRBufferFull != 0 {
+		t.Fatalf("timed receive completed too early: RSR=%02x", byte(status))
+	}
+
+	mfp.Advance(frameCycles - 1)
+	status, err = mfp.Read(1, mfpBase+mfpRSR)
+	if err != nil {
+		t.Fatalf("read pre-complete RSR: %v", err)
+	}
+	if byte(status)&mfpRSRBufferFull != 0 {
+		t.Fatalf("timed receive completed one cycle early: RSR=%02x", byte(status))
+	}
+
+	mfp.Advance(1)
+	status, err = mfp.Read(1, mfpBase+mfpRSR)
+	if err != nil {
+		t.Fatalf("read completed RSR: %v", err)
+	}
+	if byte(status)&mfpRSRBufferFull == 0 {
+		t.Fatalf("expected completed receive to set RSR buffer-full, got %02x", byte(status))
+	}
+	data, err := mfp.Read(1, mfpBase+mfpUDR)
+	if err != nil {
+		t.Fatalf("read completed UDR: %v", err)
+	}
+	if byte(data) != 'A' {
+		t.Fatalf("timed receive data = %q, want A", byte(data))
+	}
+}
+
+func TestMFPRS232TimedTransmitCompletesAfterFrameCycles(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
+	rs232 := NewRS232()
+	mfp.AttachRS232(rs232)
+	configureTimedUSART(t, mfp)
+
+	if err := mfp.Write(1, mfpBase+mfpUDR, 'Z'); err != nil {
+		t.Fatalf("write UDR: %v", err)
+	}
+	if output := rs232.Output(); len(output) != 0 {
+		t.Fatalf("timed transmit output completed too early: %q", string(output))
+	}
+	status, err := mfp.Read(1, mfpBase+mfpTSR)
+	if err != nil {
+		t.Fatalf("read active TSR: %v", err)
+	}
+	if byte(status)&mfpTSRBufferEmpty != 0 {
+		t.Fatalf("expected active transmit to clear buffer-empty, got %02x", byte(status))
+	}
+
+	mfp.Advance(mfp.usartFrameCycles())
+	if got, want := string(rs232.Output()), "Z"; got != want {
+		t.Fatalf("timed RS232 output = %q, want %q", got, want)
+	}
+	status, err = mfp.Read(1, mfpBase+mfpTSR)
+	if err != nil {
+		t.Fatalf("read completed TSR: %v", err)
+	}
+	if byte(status)&mfpTSRBufferEmpty == 0 {
+		t.Fatalf("expected completed transmit to set buffer-empty, got %02x", byte(status))
+	}
+}
+
+func TestMFPRS232TimedReceiveOverrunSetsStatus(t *testing.T) {
+	mfp := NewMFP(&config.Config{ClockHz: 8_000_000})
+	mfp.AttachRS232(NewRS232())
+	configureTimedUSART(t, mfp)
+
+	mfp.PushRS232Input([]byte("AB"))
+	frameCycles := mfp.usartFrameCycles()
+	mfp.Advance(frameCycles)
+	mfp.loadNextRS232Byte()
+	mfp.Advance(frameCycles)
+
+	status, err := mfp.Read(1, mfpBase+mfpRSR)
+	if err != nil {
+		t.Fatalf("read overrun RSR: %v", err)
+	}
+	if byte(status)&mfpRSROverrunError == 0 {
+		t.Fatalf("expected overrun status bit, got %02x", byte(status))
+	}
+	data, err := mfp.Read(1, mfpBase+mfpUDR)
+	if err != nil {
+		t.Fatalf("read overrun UDR: %v", err)
+	}
+	if byte(data) != 'B' {
+		t.Fatalf("expected overrun to leave newest byte in UDR, got %q", byte(data))
+	}
+}
+
+func configureTimedUSART(t *testing.T, mfp *MFP) {
+	t.Helper()
+	if err := mfp.Write(1, mfpBase+mfpUCR, 0x80); err != nil {
+		t.Fatalf("write UCR: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTDDR, 4); err != nil {
+		t.Fatalf("write Timer D data: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTCDCR, 0x01); err != nil {
+		t.Fatalf("start Timer D: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpRSR, mfpRSRReceiverEnable); err != nil {
+		t.Fatalf("enable receiver: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTSR, mfpTSRTransmitterOn); err != nil {
+		t.Fatalf("enable transmitter: %v", err)
+	}
+}

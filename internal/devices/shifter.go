@@ -26,11 +26,10 @@ const (
 	defaultShifterClockHz = 8_000_000
 	defaultShifterFrameHz = 50
 
-	shifterContentionLowMediumNumerator = 3
-	shifterContentionLowMediumDenom     = 4
-	shifterContentionHighNumerator      = 3
-	shifterContentionHighDenom          = 8
-	shifterContentionWaitStates         = 1
+	shifterLowMediumWordsPerLine = 80
+	shifterHighWordsPerLine      = 40
+	shifterDMASlotCycles         = 4
+	shifterContentionWaitStates  = 1
 
 	shifterSyncBlankDisplayBit = 0x01
 	// Track blank/display state at a finer horizontal resolution than the
@@ -505,8 +504,7 @@ func (s *Shifter) WaitStatesForRAMAccess(cpu.Size, uint32) uint32 {
 		lineCycles = 1
 	}
 	posInLine := s.frameCyclePos % lineCycles
-	// The shifter only contends with CPU RAM access while fetching display data.
-	if posInLine >= s.contentionWindowCycles(lineCycles) {
+	if !s.inVideoDMASlot(posInLine, lineCycles) {
 		return 0
 	}
 	if s.debugEnabled {
@@ -526,23 +524,32 @@ func dimensionsForResolution(resolution byte) (int, int) {
 	}
 }
 
-func (s *Shifter) contentionWindowCycles(lineCycles uint64) uint64 {
+func (s *Shifter) inVideoDMASlot(posInLine, lineCycles uint64) bool {
+	fetchCycles := s.videoDMAFetchCycles(lineCycles)
+	if fetchCycles == 0 || posInLine >= fetchCycles {
+		return false
+	}
+	return posInLine%shifterDMASlotCycles == 0
+}
+
+func (s *Shifter) videoDMAFetchCycles(lineCycles uint64) uint64 {
+	if lineCycles == 0 {
+		return 0
+	}
+	var words uint64
 	switch s.resolution & 3 {
 	case 0, 1:
-		window := (lineCycles * shifterContentionLowMediumNumerator) / shifterContentionLowMediumDenom
-		if window == 0 {
-			return 1
-		}
-		return window
+		words = shifterLowMediumWordsPerLine
 	case 2:
-		window := (lineCycles * shifterContentionHighNumerator) / shifterContentionHighDenom
-		if window == 0 {
-			return 1
-		}
-		return window
+		words = shifterHighWordsPerLine
 	default:
 		return 0
 	}
+	fetchCycles := words * shifterDMASlotCycles
+	if fetchCycles > lineCycles {
+		return lineCycles
+	}
+	return fetchCycles
 }
 
 func renderLow(s *Shifter) {
