@@ -2,6 +2,7 @@ package ebiten
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 
 	ebitenlib "github.com/hajimehoshi/ebiten/v2"
@@ -122,11 +123,6 @@ func (a *App) handleMouse() {
 	if width <= 0 || height <= 0 {
 		width, height = a.machine.Dimensions()
 	}
-	focused := ebitenlib.IsFocused()
-	captured := ebitenlib.CursorMode() == ebitenlib.CursorModeCaptured
-	inside := focused &&
-		x >= 0 && y >= 0 &&
-		x < width && y < height
 
 	var buttons byte
 	if ebitenlib.IsMouseButtonPressed(ebitenlib.MouseButtonLeft) {
@@ -135,6 +131,15 @@ func (a *App) handleMouse() {
 	if ebitenlib.IsMouseButtonPressed(ebitenlib.MouseButtonRight) {
 		buttons |= 0x01
 	}
+
+	captured := ebitenlib.CursorMode() == ebitenlib.CursorModeCaptured
+	focused := ebitenlib.IsFocused()
+	if runtime.GOOS == "js" && (captured || buttons != 0 || a.mouseReady) {
+		focused = true
+	}
+	inside := focused &&
+		x >= 0 && y >= 0 &&
+		x < width && y < height
 
 	if !focused || (!inside && !captured) {
 		a.setHostCursorMode(ebitenlib.CursorModeVisible)
@@ -145,11 +150,22 @@ func (a *App) handleMouse() {
 
 	if !captured {
 		a.setHostCursorMode(ebitenlib.CursorModeCaptured)
-		a.hostMouseX = x
-		a.hostMouseY = y
-		a.mouseReady = true
-		a.lastButtons = buttons
-		return
+		if !a.mouseReady {
+			a.hostMouseX = x
+			a.hostMouseY = y
+			a.mouseReady = true
+			if runtime.GOOS == "js" && buttons != a.lastButtons {
+				a.machine.PushMouse(0, 0, buttons)
+			}
+			a.lastButtons = buttons
+			return
+		}
+		if runtime.GOOS != "js" {
+			a.hostMouseX = x
+			a.hostMouseY = y
+			a.lastButtons = buttons
+			return
+		}
 	}
 
 	if !a.mouseReady {
