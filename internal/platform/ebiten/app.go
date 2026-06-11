@@ -150,6 +150,20 @@ func (a *App) handleMouse() {
 
 	if !captured {
 		a.setHostCursorMode(ebitenlib.CursorModeCaptured)
+		if runtime.GOOS == "js" {
+			if mouseX, mouseY, ok := a.machine.MousePosition(); ok {
+				dx := x - mouseX
+				dy := y - mouseY
+				if dx != 0 || dy != 0 || buttons != a.lastButtons {
+					a.machine.PushMouse(dx, dy, buttons)
+				}
+				a.hostMouseX = x
+				a.hostMouseY = y
+				a.mouseReady = true
+				a.lastButtons = buttons
+				return
+			}
+		}
 		if !a.mouseReady {
 			a.hostMouseX = x
 			a.hostMouseY = y
