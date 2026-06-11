@@ -141,7 +141,7 @@ Load order is: preset defaults, then JSON config file, then CLI flags.
 
 Yes: this project already compiles to `GOOS=js GOARCH=wasm`, and the bundled EmuTOS image makes a browser build practical without adding ROM download steps.
 
-Build the browser demo assets into `docs/`:
+Build the browser demo assets into `wasm/`:
 
 ```bash
 make wasm
@@ -150,7 +150,7 @@ make wasm
 Serve the generated files locally:
 
 ```bash
-python3 -m http.server --directory docs 8000
+python3 -m http.server --directory wasm 8000
 ```
 
 Then open [http://localhost:8000](http://localhost:8000).
@@ -161,7 +161,7 @@ Current browser-build limitations:
 
 - The browser build always boots the bundled EmuTOS image.
 - CLI paths such as `--rom`, `--floppy-a`, `--floppy-b`, `--hd-size-mb`, `--hd-image`, and `--dump-frame` remain desktop/headless features unless a browser-side file picker is added later.
-- The generated `.wasm` binary must be served over HTTP; opening `docs/index.html` directly from disk will not work.
+- The generated `.wasm` binary must be served over HTTP; opening `wasm/index.html` directly from disk will not work.
 
 ## Development
 

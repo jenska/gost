@@ -2,8 +2,8 @@ bin/
 .DS_Store
 coverage.out
 *.test
-docs/gost.wasm
-docs/wasm_exec.js
-docs/.nojekyll
+wasm/gost.wasm
+wasm/wasm_exec.js
+wasm/.nojekyll
 TOS/
 gost

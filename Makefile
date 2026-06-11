@@ -3,7 +3,7 @@ APP ?= gost
 CMD ?= ./cmd/gost
 BIN_DIR ?= bin
 BIN ?= $(BIN_DIR)/$(APP)
-WASM_DIR ?= docs
+WASM_DIR ?= wasm
 WASM_BIN ?= $(WASM_DIR)/gost.wasm
 WASM_EXEC ?= $(WASM_DIR)/wasm_exec.js
 GO_WASM_EXEC ?= $(shell $(GO) env GOROOT)/lib/wasm/wasm_exec.js
@@ -31,7 +31,7 @@ help:
 	@printf "  make headless         Run headless for FRAMES=%s\n" "$(FRAMES)"
 	@printf "  make headless-rom     Run headless with a local ROM via ROM=/path/to/tos.rom\n"
 	@printf "  make headless-mega-tos102 Run Mega ST headless with local TOS 1.02 ROM\n"
-	@printf "  make wasm             Build docs/gost.wasm for the browser demo\n"
+	@printf "  make wasm             Build wasm/gost.wasm for the browser demo\n"
 	@printf "  make clean            Remove built artifacts\n"
 	@printf "\n"
 	@printf "Examples:\n"

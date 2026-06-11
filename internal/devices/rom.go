@@ -154,9 +154,10 @@ func readResetSPFragment(size cpu.Size, address uint32, resetSP uint32) (uint32,
 	}
 	shift := (4 - address - uint32(size)) * 8
 	mask := uint32(0xff)
-	if size == cpu.Word {
+	switch size {
+	case cpu.Word:
 		mask = 0xffff
-	} else if size == cpu.Long {
+	case cpu.Long:
 		mask = 0xffffffff
 	}
 	return (resetSP >> shift) & mask, nil

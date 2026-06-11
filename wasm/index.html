@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    >
+    <title>GoST WebAssembly</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --screen-width: 640px;
+        --screen-height: 400px;
+        --case: #d6d0c2;
+        --case-dark: #a9a294;
+        --case-edge: #777164;
+        --plastic: #ece6d7;
+        --ink: #232323;
+        --muted: #666156;
+        --red: #d23c2f;
+        --green: #39b35a;
+        --shadow: rgba(31, 26, 18, 0.34);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: #928c80;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family:
+          "Avenir Next",
+          "Helvetica Neue",
+          Arial,
+          sans-serif;
+        color: var(--ink);
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+          linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+          radial-gradient(circle at 50% 0, #ddd4c2 0, #bcb4a5 42%, #8e877a 100%);
+        background-size: 22px 22px, 22px 22px, auto;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background: radial-gradient(circle at 50% 28%, transparent 0 32%, rgba(0, 0, 0, 0.18) 100%);
+        mix-blend-mode: multiply;
+      }
+
+      .layout {
+        position: relative;
+        z-index: 1;
+        width: min(980px, calc(100vw - 24px));
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 28px 0;
+        display: grid;
+        align-content: center;
+        gap: 18px;
+      }
+
+      .intro {
+        width: min(760px, 100%);
+        margin: 0 auto;
+        text-align: center;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2.2rem, 7vw, 5.4rem);
+        line-height: 0.95;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .subtitle {
+        margin: 12px auto 0;
+        max-width: 700px;
+        color: #3d3932;
+        font-size: clamp(0.98rem, 2vw, 1.15rem);
+        line-height: 1.55;
+      }
+
+      .computer {
+        width: min(calc(var(--screen-width) + 108px), 100%);
+        margin: 0 auto;
+        filter: drop-shadow(0 32px 36px var(--shadow));
+      }
+
+      .monitor {
+        position: relative;
+        width: 100%;
+        padding: 30px 34px 26px;
+        border: 2px solid var(--case-edge);
+        border-radius: 20px 20px 16px 16px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.48), transparent 26%),
+          linear-gradient(180deg, var(--plastic), var(--case) 52%, var(--case-dark));
+        box-shadow:
+          inset 0 2px 0 rgba(255, 255, 255, 0.72),
+          inset 0 -8px 16px rgba(68, 60, 48, 0.22);
+      }
+
+      .monitor::before {
+        content: "";
+        position: absolute;
+        inset: 12px 14px auto;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.28);
+      }
+
+      .bezel {
+        position: relative;
+        width: 100%;
+        padding: 18px;
+        border-radius: 12px;
+        border: 2px solid #403d38;
+        background:
+          linear-gradient(145deg, #171717, #383633 52%, #111);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+          inset 0 18px 32px rgba(255, 255, 255, 0.08);
+      }
+
+      .viewport {
+        width: 100%;
+        margin: 0 auto;
+        aspect-ratio: 16 / 10;
+        border: 2px solid #090909;
+        border-radius: 2px;
+        background: #000;
+        overflow: hidden;
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.1),
+          inset 0 0 28px rgba(255, 255, 255, 0.08);
+      }
+
+      iframe {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+      }
+
+      .monitor-footer {
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 8px 0;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 0.9rem;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .mark {
+        width: 30px;
+        height: 22px;
+        border-radius: 4px 4px 2px 2px;
+        background:
+          linear-gradient(90deg, var(--red) 0 31%, transparent 31% 36%, var(--red) 36% 64%, transparent 64% 69%, var(--red) 69% 100%);
+      }
+
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: var(--muted);
+        font: 700 0.72rem/1 "SFMono-Regular", Consolas, monospace;
+        text-transform: uppercase;
+      }
+
+      .power {
+        width: 12px;
+        height: 12px;
+        border: 1px solid #1d5f31;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 32%, #c9ffd4, var(--green) 42%, #12662a 100%);
+        box-shadow: 0 0 10px rgba(57, 179, 90, 0.7);
+      }
+
+      .keyboard {
+        width: 84%;
+        height: 58px;
+        margin: -2px auto 0;
+        border: 2px solid var(--case-edge);
+        border-top: 0;
+        border-radius: 0 0 24px 24px;
+        background:
+          repeating-linear-gradient(90deg, rgba(35, 35, 35, 0.16) 0 18px, transparent 18px 24px),
+          linear-gradient(180deg, #c6bfb1, #90897c);
+        box-shadow: inset 0 -10px 18px rgba(47, 41, 33, 0.28);
+      }
+
+      .hint {
+        width: min(760px, 100%);
+        margin: 0 auto;
+        color: #514c43;
+        text-align: center;
+        font: 700 0.78rem/1.45 "SFMono-Regular", Consolas, monospace;
+        text-transform: uppercase;
+      }
+
+      @media (max-width: 760px) {
+        .layout {
+          padding: 18px 0;
+          gap: 12px;
+        }
+
+        .monitor {
+          padding: 18px 14px 16px;
+          border-radius: 14px;
+        }
+
+        .bezel {
+          padding: 9px;
+        }
+
+        .monitor-footer {
+          min-height: 42px;
+          padding-top: 12px;
+        }
+
+        .keyboard {
+          width: 92%;
+          height: 42px;
+        }
+
+        .controls {
+          gap: 8px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="layout">
+      <header class="intro">
+        <h1>GoST</h1>
+        <p class="subtitle">
+          An Atari ST emulator written in Go. 
+          This WebAssembly version makes the current state playable directly in the browser.
+        </p>
+      </header>
+
+      <section class="computer" aria-label="GoST emulator">
+        <div class="monitor">
+          <div class="bezel">
+            <div class="viewport">
+              <iframe
+                src="./app.html"
+                title="GoST emulator"
+                allow="fullscreen; pointer-lock"
+                allowfullscreen
+                loading="eager"
+              ></iframe>
+            </div>
+          </div>
+          <div class="monitor-footer">
+            <div class="badge" aria-label="GoST Atari ST inspired display">
+              <span class="mark" aria-hidden="true"></span>
+              <span>GoST 520</span>
+            </div>
+            <div class="controls" aria-hidden="true">
+              <span>Power</span>
+              <span class="power"></span>
+            </div>
+          </div>
+        </div>
+        <div class="keyboard" aria-hidden="true"></div>
+      </section>
+
+      <p class="hint">640x400 · click the screen for keyboard and mouse</p>
+    </main>
+  </body>
+</html>
