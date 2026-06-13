@@ -8,6 +8,8 @@ GoST is an Atari ST emulator in Go built around [`github.com/jenska/m68kemu`](ht
 
 Browser build target: [GoST WebAssembly demo](https://jenska.github.io/gost/)
 
+Latest release notes: [v0.3.0](CHANGELOG.md#v030---2026-06-13)
+
 ## Status
 
 Major milestone:

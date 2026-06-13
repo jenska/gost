@@ -1,0 +1,33 @@
+# Changelog
+
+## v0.3.0 - 2026-06-13
+
+### Added
+
+- Added basic STE DMA sound support for STE model mode.
+- Added basic printer port support.
+- Added optional ICD-compatible ACSI real-time clock support.
+- Added persistent ACSI hard-disk image support with raw-sector and Anex86-compatible `.hdi` handling.
+- Added asynchronous PNG frame dumping from immutable framebuffer snapshots.
+- Added browser demo layout and input handling updates after moving browser assets to `wasm/`.
+
+### Changed
+
+- Parallelized Shifter scanline rendering while keeping emulation state ownership single-threaded.
+- Optimized Blitter hot paths and audio mixing/host audio queue behavior.
+- Improved MFP UART timing, GLUE/VBL/HBL interrupt timing, and Shifter contention behavior.
+- Updated the CPU dependency to `github.com/jenska/m68kemu v1.3.0`.
+- Modernized the codebase for Go 1.26 language features, including range-over-int and built-in `min`/`max`.
+- Condensed and updated README documentation for CLI usage, device coverage, and concurrency boundaries.
+
+### Fixed
+
+- Fixed real-time clock behavior and TOS boot/runtime issues exposed during desktop bring-up.
+- Improved mouse handling in the Ebitengine and WebAssembly frontends.
+- Cleaned up loop and bounds-check patterns across emulator and device code.
+
+### Notes
+
+- This remains a development release focused on the usable GEM desktop baseline, host-side performance, and broader device coverage.
+- Real TOS compatibility, exact MMU behavior, copy-protected disk formats, and full IKBD/MIDI coverage are still incomplete.
+
