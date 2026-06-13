@@ -16,7 +16,7 @@ GoST has moved beyond early bring-up and now provides a usable Atari ST desktop 
 
 - The bundled EmuTOS image boots to the GEM desktop in both monochrome and color-monitor modes.
 - The desktop frontend runs in an Ebitengine window with working keyboard, mouse, and audio paths.
-- Headless execution, PNG frame dumping, CPU/boot tracing, and browser builds are available for development and debugging.
+- Headless execution, asynchronous PNG frame dumping, CPU/boot tracing, and browser builds are available for development and debugging.
 - The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, MIDI/RS232 byte I/O, floppy DMA/FDC, YM2149-backed PSG audio, and basic STE DMA sound.
 
 This is still not a complete Atari ST emulator for broad real-software compatibility yet. The current focus is cleanup, stabilization, and expanding compatibility from the working desktop baseline.
@@ -50,6 +50,7 @@ Current focus:
 - Optional ICD-compatible ACSI real-time clock
 - Desktop frontend via Ebitengine
 - Headless execution with PNG framebuffer dumping
+- Host-side PNG frame/screenshot encoding can run on worker goroutines from immutable framebuffer snapshots
 - CPU, boot, and verbose tracing for bring-up and debugging
 - WebAssembly build target for browser-based experiments
 - Automated Go test coverage for devices, emulator behavior, and frontend integration
@@ -135,7 +136,7 @@ Load order is: preset defaults, then JSON config file, then CLI flags.
 - `--trace <mode>`: enable tracing, currently `cpu`, `cpu-verbose`, `boot`, `boot-verbose`, `shifter`, or `shifter-verbose`
 - `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces
 - `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces
-- `--dump-frame <path>`: write the last rendered framebuffer to a PNG file
+- `--dump-frame <path>`: write the last rendered framebuffer to a PNG file; encoding uses the same snapshot-safe frame dump path that can queue multiple PNG jobs in parallel from host-side tooling
 
 ## WebAssembly
 
@@ -201,34 +202,28 @@ make help
 
 At this stage, the emulator core is intentionally single-threaded. The CPU, bus, memory map, device advancement, and interrupt dispatch currently run in a deterministic lockstep loop. That makes bring-up, debugging, and test behavior much easier to reason about while the hardware models are still incomplete.
 
-Using goroutines "wherever possible" is not recommended yet. For an emulator, broad early concurrency tends to introduce races, lock contention, and timing bugs before correctness is established. The current priority is accurate and predictable behavior rather than parallel execution.
+Using goroutines "wherever possible" is not recommended in the emulation core. For an emulator, broad concurrency tends to introduce races, lock contention, and timing bugs before correctness is established. Current concurrency is kept at phase boundaries and host-side pipelines where immutable snapshots or queues make ownership explicit.
 
 ### Recommended Near-Term Approach
 
 - Keep the emulation core single-threaded.
-- Prefer goroutines only at host-side boundaries such as async file loading, trace/log streaming, debugger tooling, or future audio buffering.
+- Prefer goroutines only at host-side boundaries such as async file loading, trace/log streaming, debugger tooling, audio buffering, or frame/screenshot/video export.
 - If concurrency is introduced in the machine layer, prefer a single emulation goroutine that owns all `Machine` state and accepts input/events through channels.
+
+### Host-Side Export Guidance
+
+Frame dumping and screenshot-style export are safe concurrency boundaries after a frame has completed. The emulator captures an RGBA framebuffer snapshot, then worker goroutines can encode PNG output without touching live RAM, shifter registers, or the active framebuffer. The same model should be used for future video encoding: queue immutable frame snapshots to an encoder pipeline and keep all codec work outside the emulation step.
 
 ### Shifter Guidance
 
-The shifter is a possible future concurrency boundary, but not in its current form. Today it renders directly from live RAM and live register state, so moving rendering to another goroutine would require synchronization around RAM, palette registers, resolution, base address, and framebuffer ownership.
-
-If shifter work is parallelized later, the safer design is:
-
-- Keep emulation-side shifter state single-threaded.
-- At frame boundaries, capture an immutable snapshot of the visible video state.
-- Include the screen base, resolution, palette, and the RAM bytes needed for the visible frame.
-- Hand that snapshot to a renderer goroutine that converts bitplanes into an RGBA back buffer.
-- Present the completed back buffer on a later host frame.
-
-This preserves deterministic emulation while creating room for asynchronous framebuffer conversion and double-buffering.
+The shifter render path now parallelizes scanline conversion within the frame boundary while keeping emulation-side state single-threaded. Register/RAM sampling remains deterministic; worker goroutines operate on prepared line state and write disjoint framebuffer ranges. Host export still uses copied framebuffer snapshots rather than the live back buffer.
 
 ## Current Implementation Notes
 
 - The CPU core is provided by `m68kemu`; this repo does not implement its own 68000.
 - If no ROM path is passed, `cmd/gost` boots the bundled EmuTOS image by default.
 - The machine runs with an 8 MHz default clock and 50 Hz frame cadence.
-- The video path renders from RAM-backed bitplanes into an RGBA framebuffer for the host frontend.
+- The video path renders from RAM-backed bitplanes into an RGBA framebuffer for the host frontend, with host-side PNG export queued from immutable framebuffer snapshots.
 - Interrupts are routed into the CPU through the machine layer.
 - The floppy controller now covers WD1772 command groups (type I/II/III/IV) over sector images, including seek/step commands, sector and track DMA reads/writes, and read-address support.
 - A virtual ACSI hard disk is attached by default with 30 MiB capacity.
