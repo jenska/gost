@@ -1,6 +1,7 @@
 package devices
 
 import (
+	"runtime"
 	"time"
 
 	"github.com/jenska/gost/internal/config"
@@ -65,7 +66,7 @@ var (
 	// RGBA spans to keep the inner render loops branch-light.
 	lowModeNibbleIndices    [1 << 16][4]byte
 	mediumModeNibbleIndices [1 << 8][4]byte
-	monoByteRGBA            [1 << 8][32]byte
+	monoWordRGBA            [1 << 16][64]byte
 )
 
 func init() {
@@ -112,21 +113,22 @@ func init() {
 		}
 	}
 
-	// High resolution: expand one byte into 8 monochrome RGBA pixels.
-	for value := range len(monoByteRGBA) {
-		for pixel := range 8 {
+	// High resolution fast path: expand one word into 16 monochrome RGBA
+	// pixels, avoiding two table copies in the hot render loop.
+	for value := range len(monoWordRGBA) {
+		for pixel := range 16 {
 			dst := pixel * 4
-			if value&(1<<(7-pixel)) != 0 {
-				monoByteRGBA[value][dst] = 0x00
-				monoByteRGBA[value][dst+1] = 0x00
-				monoByteRGBA[value][dst+2] = 0x00
-				monoByteRGBA[value][dst+3] = 0xFF
+			if value&(1<<(15-pixel)) != 0 {
+				monoWordRGBA[value][dst] = 0x00
+				monoWordRGBA[value][dst+1] = 0x00
+				monoWordRGBA[value][dst+2] = 0x00
+				monoWordRGBA[value][dst+3] = 0xFF
 				continue
 			}
-			monoByteRGBA[value][dst] = 0xFF
-			monoByteRGBA[value][dst+1] = 0xFF
-			monoByteRGBA[value][dst+2] = 0xFF
-			monoByteRGBA[value][dst+3] = 0xFF
+			monoWordRGBA[value][dst] = 0xFF
+			monoWordRGBA[value][dst+1] = 0xFF
+			monoWordRGBA[value][dst+2] = 0xFF
+			monoWordRGBA[value][dst+3] = 0xFF
 		}
 	}
 }
@@ -185,10 +187,15 @@ type Shifter struct {
 	height           int
 	videoCounter     uint32
 	frameCyclePos    uint64
-	frameRenderer    func(s *Shifter)
+	frameResolution  byte
 	frameActive      bool
 	lineStates       []shifterLineState
+	lineAddrs        []uint32
+	renderStats      []shifterRenderStats
+	renderWorkers    []chan shifterRenderTask
+	renderDone       chan struct{}
 	slotSyncModes    []byte
+	frameHasBlank    bool
 	lastRendered     uint64
 	debugEnabled     bool
 	debugStats       ShifterDebugStats
@@ -263,10 +270,13 @@ func (s *Shifter) Reset() {
 	s.framebuffer = make([]byte, s.width*s.height*4)
 	s.videoCounter = 0
 	s.frameCyclePos = 0
-	s.frameRenderer = renderLow
+	s.frameResolution = 0
 	s.frameActive = false
 	s.lineStates = s.lineStates[:0]
+	s.lineAddrs = s.lineAddrs[:0]
+	s.renderStats = s.renderStats[:0]
 	s.slotSyncModes = s.slotSyncModes[:0]
+	s.frameHasBlank = false
 	s.lastRendered = 0
 	s.debugStats = ShifterDebugStats{}
 	s.framePixelsDrawn = 0
@@ -374,19 +384,12 @@ func (s *Shifter) Render(cpuCycles uint64) bool {
 
 func (s *Shifter) BeginFrame() {
 	mode := s.resolution & 3
+	s.frameResolution = mode
 	width, height := dimensionsForResolution(mode)
 	if width != s.width || height != s.height || len(s.framebuffer) != width*height*4 {
 		s.width = width
 		s.height = height
 		s.framebuffer = make([]byte, width*height*4)
-	}
-	switch mode {
-	case 0:
-		s.frameRenderer = renderLow
-	case 1:
-		s.frameRenderer = renderMedium
-	default:
-		s.frameRenderer = renderHigh
 	}
 	s.frameCyclePos = 0
 	s.frameActive = true
@@ -449,6 +452,9 @@ func (s *Shifter) AdvanceFrame(cycles uint64) {
 	for slot := prevSlot + 1; slot <= nextSlot && slot < len(s.slotSyncModes); slot++ {
 		s.slotSyncModes[slot] = s.syncMode
 	}
+	if s.syncMode&shifterSyncBlankDisplayBit != 0 {
+		s.frameHasBlank = true
+	}
 }
 
 func (s *Shifter) EndFrame() bool {
@@ -465,7 +471,7 @@ func (s *Shifter) EndFrame() bool {
 		renderStart = time.Now()
 	}
 
-	s.frameRenderer(s)
+	s.renderFrame()
 
 	if s.debugEnabled {
 		renderNanos := time.Since(renderStart).Nanoseconds()
@@ -552,69 +558,243 @@ func (s *Shifter) videoDMAFetchCycles(lineCycles uint64) uint64 {
 	return fetchCycles
 }
 
-func renderLow(s *Shifter) {
-	fb := s.framebuffer
-	debug := s.debugEnabled
-	model := s.model
-	var drawn uint64
+type shifterRenderStats struct {
+	pixelsDrawn uint64
+	videoWords  uint64
+	readFaults  uint64
+}
+
+type shifterPaletteRGB struct {
+	reds   [paletteRegisterCt]byte
+	greens [paletteRegisterCt]byte
+	blues  [paletteRegisterCt]byte
+}
+
+type shifterRenderJob struct {
+	framebuffer []byte
+	width       int
+	height      int
+	mode        byte
+	model       shifterModel
+	states      []shifterLineState
+	lineAddrs   []uint32
+	stats       []shifterRenderStats
+	videoData   []byte
+	videoLen    uint32
+	linearVideo bool
+	ram         *RAM
+	debug       bool
+}
+
+type shifterRenderTask struct {
+	job         shifterRenderJob
+	workerIndex int
+	startY      int
+	endY        int
+	done        chan<- struct{}
+}
+
+func (s *Shifter) renderFrame() {
+	mode := s.frameResolution & 3
+	s.prepareRenderLineAddrs(mode)
+	workers := shifterRenderWorkers(s.height, mode)
+	if cap(s.renderStats) < workers {
+		s.renderStats = make([]shifterRenderStats, workers)
+	} else {
+		s.renderStats = s.renderStats[:workers]
+	}
+	for i := range s.renderStats {
+		s.renderStats[i] = shifterRenderStats{}
+	}
+
 	videoData, linearVideo := s.linearVideoRAM()
-	videoLen := uint32(len(videoData))
-	var lineAddr uint32
+	job := shifterRenderJob{
+		framebuffer: s.framebuffer,
+		width:       s.width,
+		height:      s.height,
+		mode:        mode,
+		model:       s.model,
+		states:      s.lineStates,
+		lineAddrs:   s.lineAddrs,
+		stats:       s.renderStats,
+		videoData:   videoData,
+		videoLen:    uint32(len(videoData)),
+		linearVideo: linearVideo,
+		ram:         s.ram,
+		debug:       s.debugEnabled,
+	}
+
+	var stats shifterRenderStats
+	if workers <= 1 {
+		stats = job.renderRange(0, s.height)
+	} else {
+		stats = s.renderParallel(job, workers)
+	}
+	if s.debugEnabled {
+		s.framePixelsDrawn += stats.pixelsDrawn
+		s.frameVideoWords += stats.videoWords
+		s.frameReadFaults += stats.readFaults
+	}
+	if len(s.lineAddrs) > 0 {
+		last := len(s.lineAddrs) - 1
+		s.videoCounter = s.lineAddrs[last] + s.model.lineStrideBytes(s.lineStates[last], mode)
+	}
+	s.applyBlankSegments()
+}
+
+func (s *Shifter) prepareRenderLineAddrs(mode byte) {
+	lineCount := len(s.lineStates)
+	if cap(s.lineAddrs) < lineCount {
+		s.lineAddrs = make([]uint32, lineCount)
+	} else {
+		s.lineAddrs = s.lineAddrs[:lineCount]
+	}
+	if lineCount == 0 {
+		return
+	}
+
+	model := s.model
 	var prevState shifterLineState
-	for y := range 200 {
-		lineState := s.lineState(y)
+	for y := range lineCount {
+		lineState := s.lineStates[y]
 		if y == 0 {
-			lineAddr = model.screenBaseFromState(lineState)
+			s.lineAddrs[y] = model.screenBaseFromState(lineState)
+		} else if model.sameScreenBase(prevState, lineState) {
+			s.lineAddrs[y] = s.lineAddrs[y-1] + model.lineStrideBytes(prevState, mode)
 		} else {
-			if model.sameScreenBase(prevState, lineState) {
-				lineAddr += model.lineStrideBytes(prevState, 0)
-			} else {
-				lineAddr = model.screenBaseFromState(lineState)
+			s.lineAddrs[y] = model.screenBaseFromState(lineState)
+		}
+		prevState = lineState
+	}
+}
+
+func (s *Shifter) renderParallel(job shifterRenderJob, workers int) shifterRenderStats {
+	s.ensureRenderWorkers(workers)
+	for worker := range workers {
+		start := worker * job.height / workers
+		end := (worker + 1) * job.height / workers
+		if start == end {
+			continue
+		}
+		s.renderWorkers[worker] <- shifterRenderTask{
+			job:         job,
+			workerIndex: worker,
+			startY:      start,
+			endY:        end,
+			done:        s.renderDone,
+		}
+	}
+	for range workers {
+		<-s.renderDone
+	}
+
+	var total shifterRenderStats
+	for _, stat := range job.stats {
+		total.pixelsDrawn += stat.pixelsDrawn
+		total.videoWords += stat.videoWords
+		total.readFaults += stat.readFaults
+	}
+	return total
+}
+
+func (s *Shifter) ensureRenderWorkers(count int) {
+	if cap(s.renderDone) < count {
+		s.renderDone = make(chan struct{}, count)
+	}
+	for len(s.renderWorkers) < count {
+		work := make(chan shifterRenderTask)
+		s.renderWorkers = append(s.renderWorkers, work)
+		go shifterRenderWorker(work)
+	}
+}
+
+func shifterRenderWorker(work <-chan shifterRenderTask) {
+	for task := range work {
+		task.job.stats[task.workerIndex] = task.job.renderRange(task.startY, task.endY)
+		task.done <- struct{}{}
+	}
+}
+
+func shifterRenderWorkers(height int, mode byte) int {
+	if mode == 2 {
+		return 1
+	}
+	if height < 96 {
+		return 1
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers > height/32 {
+		workers = height / 32
+	}
+	if workers < 1 {
+		return 1
+	}
+	return workers
+}
+
+func (j shifterRenderJob) renderRange(startY, endY int) shifterRenderStats {
+	switch j.mode {
+	case 0:
+		return j.renderLowRange(startY, endY)
+	case 1:
+		return j.renderMediumRange(startY, endY)
+	default:
+		return j.renderHighRange(startY, endY)
+	}
+}
+
+func (j shifterRenderJob) renderLowRange(startY, endY int) shifterRenderStats {
+	var stats shifterRenderStats
+	var palette shifterPaletteRGB
+	var prevPalette [paletteRegisterCt]uint16
+	paletteValid := false
+	for y := startY; y < endY; y++ {
+		lineState := j.states[y]
+		lineAddr := j.lineAddrs[y]
+		rowOffset := y * j.width * 4
+		row := j.framebuffer[rowOffset : rowOffset+j.width*4]
+		if !paletteValid || lineState.palette != prevPalette {
+			for i := range paletteRegisterCt {
+				palette.reds[i], palette.greens[i], palette.blues[i] = j.model.paletteColorChannels(lineState.palette[i])
 			}
+			prevPalette = lineState.palette
+			paletteValid = true
 		}
-		rowOffset := y * s.width * 4
-		row := fb[rowOffset : rowOffset+s.width*4]
-		var reds, greens, blues [paletteRegisterCt]byte
-		for i := range paletteRegisterCt {
-			reds[i], greens[i], blues[i] = model.paletteColorChannels(lineState.palette[i])
-		}
-		scroll := model.fineScroll(lineState)
+		scroll := j.model.fineScroll(lineState)
 		groups := 20 + ((scroll + 15) / 16)
 		for group := range groups {
 			offset := lineAddr + uint32(group*8)
 			var p0, p1, p2, p3 uint16
-			if linearVideo {
-				// Fast path when RAM is identity mapped.
-				if videoLen < 8 || offset > videoLen-8 {
-					if debug {
-						s.frameReadFaults++
+			if j.linearVideo {
+				if j.videoLen < 8 || offset > j.videoLen-8 {
+					if j.debug {
+						stats.readFaults++
 					}
 					continue
 				}
 				idx := int(offset)
-				p0 = uint16(videoData[idx])<<8 | uint16(videoData[idx+1])
-				p1 = uint16(videoData[idx+2])<<8 | uint16(videoData[idx+3])
-				p2 = uint16(videoData[idx+4])<<8 | uint16(videoData[idx+5])
-				p3 = uint16(videoData[idx+6])<<8 | uint16(videoData[idx+7])
-				if debug {
-					s.frameVideoWords += 4
+				p0 = uint16(j.videoData[idx])<<8 | uint16(j.videoData[idx+1])
+				p1 = uint16(j.videoData[idx+2])<<8 | uint16(j.videoData[idx+3])
+				p2 = uint16(j.videoData[idx+4])<<8 | uint16(j.videoData[idx+5])
+				p3 = uint16(j.videoData[idx+6])<<8 | uint16(j.videoData[idx+7])
+				if j.debug {
+					stats.videoWords += 4
 				}
 			} else {
-				// Fallback path for MMU/translated reads.
 				var ok bool
-				p0, ok = s.readVideoWord(offset)
+				p0, ok = j.readVideoWord(offset, &stats)
 				if !ok {
 					continue
 				}
-				p1, ok = s.readVideoWord(offset + 2)
+				p1, ok = j.readVideoWord(offset+2, &stats)
 				if !ok {
 					continue
 				}
-				p2, ok = s.readVideoWord(offset + 4)
+				p2, ok = j.readVideoWord(offset+4, &stats)
 				if !ok {
 					continue
 				}
-				p3, ok = s.readVideoWord(offset + 6)
+				p3, ok = j.readVideoWord(offset+6, &stats)
 				if !ok {
 					continue
 				}
@@ -631,81 +811,67 @@ func renderLow(s *Shifter) {
 
 				for pixel := range 4 {
 					x := baseX + pixel
-					if x < 0 || x >= s.width {
+					if x < 0 || x >= j.width {
 						continue
 					}
 					dst := x * 4
 					index := indices[pixel]
-					row[dst] = reds[index]
-					row[dst+1] = greens[index]
-					row[dst+2] = blues[index]
+					row[dst] = palette.reds[index]
+					row[dst+1] = palette.greens[index]
+					row[dst+2] = palette.blues[index]
 					row[dst+3] = 0xFF
 				}
 			}
-			if debug {
-				drawn += 16
+			if j.debug {
+				stats.pixelsDrawn += 16
 			}
 		}
-		prevState = lineState
 	}
-	if debug {
-		s.framePixelsDrawn += drawn
-	}
-	s.videoCounter = lineAddr + model.lineStrideBytes(prevState, 0)
-	s.applyBlankSegments()
+	return stats
 }
 
-func renderMedium(s *Shifter) {
-	fb := s.framebuffer
-	debug := s.debugEnabled
-	model := s.model
-	var drawn uint64
-	videoData, linearVideo := s.linearVideoRAM()
-	videoLen := uint32(len(videoData))
-	var lineAddr uint32
-	var prevState shifterLineState
-	for y := range 200 {
-		lineState := s.lineState(y)
-		if y == 0 {
-			lineAddr = model.screenBaseFromState(lineState)
-		} else {
-			if model.sameScreenBase(prevState, lineState) {
-				lineAddr += model.lineStrideBytes(prevState, 1)
-			} else {
-				lineAddr = model.screenBaseFromState(lineState)
+func (j shifterRenderJob) renderMediumRange(startY, endY int) shifterRenderStats {
+	var stats shifterRenderStats
+	var palette shifterPaletteRGB
+	var prevPalette [paletteRegisterCt]uint16
+	paletteValid := false
+	for y := startY; y < endY; y++ {
+		lineState := j.states[y]
+		lineAddr := j.lineAddrs[y]
+		rowOffset := y * j.width * 4
+		row := j.framebuffer[rowOffset : rowOffset+j.width*4]
+		if !paletteValid || lineState.palette != prevPalette {
+			for i := range paletteRegisterCt {
+				palette.reds[i], palette.greens[i], palette.blues[i] = j.model.paletteColorChannels(lineState.palette[i])
 			}
+			prevPalette = lineState.palette
+			paletteValid = true
 		}
-		rowOffset := y * s.width * 4
-		row := fb[rowOffset : rowOffset+s.width*4]
-		var reds, greens, blues [paletteRegisterCt]byte
-		for i := range paletteRegisterCt {
-			reds[i], greens[i], blues[i] = model.paletteColorChannels(lineState.palette[i])
-		}
-		scroll := model.fineScroll(lineState)
+		scroll := j.model.fineScroll(lineState)
 		groups := 40 + ((scroll + 15) / 16)
 		for group := range groups {
 			offset := lineAddr + uint32(group*4)
 			var p0, p1 uint16
-			if linearVideo {
-				if videoLen < 4 || offset > videoLen-4 {
-					if debug {
-						s.frameReadFaults++
+			if j.linearVideo {
+				if j.videoLen < 4 || offset > j.videoLen-4 {
+					if j.debug {
+						stats.readFaults++
 					}
 					continue
 				}
 				idx := int(offset)
-				p0 = uint16(videoData[idx])<<8 | uint16(videoData[idx+1])
-				p1 = uint16(videoData[idx+2])<<8 | uint16(videoData[idx+3])
-				if debug {
-					s.frameVideoWords += 2
+				p0 = uint16(j.videoData[idx])<<8 | uint16(j.videoData[idx+1])
+				p1 = uint16(j.videoData[idx+2])<<8 | uint16(j.videoData[idx+3])
+				if j.debug {
+					stats.videoWords += 2
 				}
 			} else {
 				var ok bool
-				p0, ok = s.readVideoWord(offset)
+				p0, ok = j.readVideoWord(offset, &stats)
 				if !ok {
 					continue
 				}
-				p1, ok = s.readVideoWord(offset + 2)
+				p1, ok = j.readVideoWord(offset+2, &stats)
 				if !ok {
 					continue
 				}
@@ -720,89 +886,99 @@ func renderMedium(s *Shifter) {
 
 				for pixel := range 4 {
 					x := baseX + pixel
-					if x < 0 || x >= s.width {
+					if x < 0 || x >= j.width {
 						continue
 					}
 					dst := x * 4
 					index := indices[pixel]
-					row[dst] = reds[index]
-					row[dst+1] = greens[index]
-					row[dst+2] = blues[index]
+					row[dst] = palette.reds[index]
+					row[dst+1] = palette.greens[index]
+					row[dst+2] = palette.blues[index]
 					row[dst+3] = 0xFF
 				}
 			}
-			if debug {
-				drawn += 16
+			if j.debug {
+				stats.pixelsDrawn += 16
 			}
 		}
-		prevState = lineState
 	}
-	if debug {
-		s.framePixelsDrawn += drawn
-	}
-	s.videoCounter = lineAddr + model.lineStrideBytes(prevState, 1)
-	s.applyBlankSegments()
+	return stats
 }
 
-func renderHigh(s *Shifter) {
-	fb := s.framebuffer
-	debug := s.debugEnabled
-	model := s.model
-	var drawn uint64
-	videoData, linearVideo := s.linearVideoRAM()
-	videoLen := uint32(len(videoData))
-	var lineAddr uint32
-	var prevState shifterLineState
-	for y := range 400 {
-		lineState := s.lineState(y)
-		if y == 0 {
-			lineAddr = model.screenBaseFromState(lineState)
-		} else {
-			if model.sameScreenBase(prevState, lineState) {
-				lineAddr += model.lineStrideBytes(prevState, 2)
-			} else {
-				lineAddr = model.screenBaseFromState(lineState)
+func (j shifterRenderJob) renderHighRange(startY, endY int) shifterRenderStats {
+	var stats shifterRenderStats
+	for y := startY; y < endY; y++ {
+		lineAddr := j.lineAddrs[y]
+		rowOffset := y * j.width * 4
+		if j.linearVideo {
+			if j.videoLen < 80 || lineAddr > j.videoLen-80 {
+				if j.debug {
+					stats.readFaults++
+				}
+				continue
 			}
+			src := j.videoData[int(lineAddr) : int(lineAddr)+80]
+			for group := range 40 {
+				srcOffset := group * 2
+				pixels := uint16(src[srcOffset])<<8 | uint16(src[srcOffset+1])
+				dst := rowOffset + group*64
+				copy(j.framebuffer[dst:dst+64], monoWordRGBA[pixels][:])
+			}
+			if j.debug {
+				stats.videoWords += 40
+				stats.pixelsDrawn += 640
+			}
+			continue
 		}
-		rowOffset := y * s.width * 4
 		for group := range 40 {
 			offset := lineAddr + uint32(group*2)
-			var pixels uint16
-			if linearVideo {
-				if videoLen < 2 || offset > videoLen-2 {
-					if debug {
-						s.frameReadFaults++
-					}
-					continue
-				}
-				idx := int(offset)
-				pixels = uint16(videoData[idx])<<8 | uint16(videoData[idx+1])
-				if debug {
-					s.frameVideoWords++
-				}
-			} else {
-				var ok bool
-				pixels, ok = s.readVideoWord(offset)
-				if !ok {
-					continue
-				}
+			pixels, ok := j.readVideoWord(offset, &stats)
+			if !ok {
+				continue
 			}
 			dst := rowOffset + group*64
-			hi := byte(pixels >> 8)
-			lo := byte(pixels)
-			copy(fb[dst:dst+32], monoByteRGBA[hi][:])
-			copy(fb[dst+32:dst+64], monoByteRGBA[lo][:])
-			if debug {
-				drawn += 16
+			copy(j.framebuffer[dst:dst+64], monoWordRGBA[pixels][:])
+			if j.debug {
+				stats.pixelsDrawn += 16
 			}
 		}
-		prevState = lineState
 	}
-	if debug {
-		s.framePixelsDrawn += drawn
+	return stats
+}
+
+func (j shifterRenderJob) readVideoWord(address uint32, stats *shifterRenderStats) (uint16, bool) {
+	if j.ram == nil {
+		if j.debug {
+			stats.readFaults++
+		}
+		return 0, false
 	}
-	s.videoCounter = lineAddr + model.lineStrideBytes(prevState, 2)
-	s.applyBlankSegments()
+
+	hi, hiPresent, err := j.ram.translate(address)
+	if err != nil {
+		if j.debug {
+			stats.readFaults++
+		}
+		return 0, false
+	}
+	lo, loPresent, err := j.ram.translate(address + 1)
+	if err != nil {
+		if j.debug {
+			stats.readFaults++
+		}
+		return 0, false
+	}
+	if j.debug {
+		stats.videoWords++
+	}
+	var value uint16
+	if hiPresent {
+		value |= uint16(j.ram.data[hi]) << 8
+	}
+	if loPresent {
+		value |= uint16(j.ram.data[lo])
+	}
+	return value, true
 }
 
 func displayBorderForMode(mode byte) (left, right, top, bottom int) {
@@ -816,50 +992,6 @@ func displayBorderForMode(mode byte) (left, right, top, bottom int) {
 	default:
 		return 0, 0, 0, 0
 	}
-}
-
-func (s *Shifter) readVideoWord(address uint32) (uint16, bool) {
-	// Fast path for plain RAM mapping; avoids per-byte translation overhead.
-	if s.ram != nil && s.ram.base == 0 && s.ram.mmu == nil {
-		dataLen := uint32(len(s.ram.data))
-		if dataLen < 2 || address > dataLen-2 {
-			if s.debugEnabled {
-				s.frameReadFaults++
-			}
-			return 0, false
-		}
-		if s.debugEnabled {
-			s.frameVideoWords++
-		}
-		offset := int(address)
-		return uint16(s.ram.data[offset])<<8 | uint16(s.ram.data[offset+1]), true
-	}
-
-	hi, hiPresent, err := s.ram.translate(address)
-	if err != nil {
-		if s.debugEnabled {
-			s.frameReadFaults++
-		}
-		return 0, false
-	}
-	lo, loPresent, err := s.ram.translate(address + 1)
-	if err != nil {
-		if s.debugEnabled {
-			s.frameReadFaults++
-		}
-		return 0, false
-	}
-	if s.debugEnabled {
-		s.frameVideoWords++
-	}
-	var value uint16
-	if hiPresent {
-		value |= uint16(s.ram.data[hi]) << 8
-	}
-	if loPresent {
-		value |= uint16(s.ram.data[lo])
-	}
-	return value, true
 }
 
 func (s *Shifter) linearVideoRAM() ([]byte, bool) {
@@ -987,7 +1119,7 @@ func (s *Shifter) slotSyncMode(line, segment uint32) byte {
 }
 
 func (s *Shifter) applyBlankSegments() {
-	if len(s.slotSyncModes) == 0 || s.width == 0 || s.height == 0 {
+	if !s.frameHasBlank || len(s.slotSyncModes) == 0 || s.width == 0 || s.height == 0 {
 		return
 	}
 	fb := s.framebuffer
