@@ -139,10 +139,7 @@ func (r *ICDRTC) currentClock() time.Time {
 		r.clockBase = now
 		r.clockSetAt = now
 	}
-	elapsed := r.nowTime().Sub(r.clockSetAt)
-	if elapsed < 0 {
-		elapsed = 0
-	}
+	elapsed := max(r.nowTime().Sub(r.clockSetAt), 0)
 	return r.clockBase.Add(elapsed).Truncate(time.Second)
 }
 
@@ -190,13 +187,6 @@ func (r *ICDRTC) writeSelectedNibble(value byte) {
 	now := r.nowTime()
 	r.clockBase = updated
 	r.clockSetAt = now
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func (r *ICDRTC) encodeRegisters(current time.Time) [icdRTCRegCount]byte {

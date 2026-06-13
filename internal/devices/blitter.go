@@ -115,12 +115,12 @@ func (b *Blitter) execute() {
 		return
 	}
 
-	for y := uint16(0); y < yCount; y++ {
+	for range yCount {
 		xc := xCount
 		first := true
 		var srcIn uint32
 
-		for word := uint16(0); word < xc; word++ {
+		for word := range xc {
 			last := word == xc-1
 			srcOut := uint16(0)
 

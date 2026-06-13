@@ -22,7 +22,7 @@ func (m *mixedAudioSource) DrainMonoF32(dst []float32) int {
 	if nSecondary > nPrimary {
 		clear(dst[nPrimary:nSecondary])
 	}
-	for i := 0; i < nSecondary; i++ {
+	for i := range nSecondary {
 		dst[i] = clampAudioSample(dst[i] + scratch[i])
 	}
 	if nSecondary > nPrimary {

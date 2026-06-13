@@ -88,7 +88,7 @@ func (s *STESound) Read(size cpu.Size, address uint32) (uint32, error) {
 	}
 
 	var value uint32
-	for i := 0; i < count; i++ {
+	for i := range count {
 		value = value<<8 | uint32(s.readByte(address+uint32(i)))
 	}
 	return value, nil
@@ -107,7 +107,7 @@ func (s *STESound) Write(size cpu.Size, address uint32, value uint32) error {
 		return cpu.BusError(address)
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		shift := uint((count - 1 - i) * 8)
 		s.writeByte(address+uint32(i), byte(value>>shift))
 	}

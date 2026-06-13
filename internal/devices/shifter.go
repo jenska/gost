@@ -722,10 +722,7 @@ func shifterRenderWorkers(height int, mode byte) int {
 	if height < 96 {
 		return 1
 	}
-	workers := runtime.GOMAXPROCS(0)
-	if workers > height/32 {
-		workers = height / 32
-	}
+	workers := min(runtime.GOMAXPROCS(0), height/32)
 	if workers < 1 {
 		return 1
 	}
@@ -1191,10 +1188,7 @@ func (s *Shifter) composeDisplayFrame() {
 	if s.resolution&3 == 1 {
 		// Medium-resolution output can be vertically stretched without changing
 		// guest timing or address generation.
-		yScale = s.cfg.MidResYScale
-		if yScale < 1 {
-			yScale = 1
-		}
+		yScale = max(s.cfg.MidResYScale, 1)
 	}
 
 	left, right, top, bottom := 0, 0, 0, 0

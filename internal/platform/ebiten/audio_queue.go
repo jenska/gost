@@ -21,10 +21,7 @@ type hostAudioQueue struct {
 
 func newHostAudioQueue(source emulator.AudioSource, capacity time.Duration) *hostAudioQueue {
 	sampleRate := source.OutputSampleRate()
-	capacityFrames := int(capacity.Seconds() * float64(sampleRate))
-	if capacityFrames < hostAudioPumpChunk {
-		capacityFrames = hostAudioPumpChunk
-	}
+	capacityFrames := max(int(capacity.Seconds()*float64(sampleRate)), hostAudioPumpChunk)
 	return &hostAudioQueue{
 		source:  source,
 		buffer:  make([]float32, capacityFrames),
@@ -81,18 +78,12 @@ func (q *hostAudioQueue) push(samples []float32) {
 }
 
 func (q *hostAudioQueue) popLocked(dst []float32) int {
-	n := len(dst)
-	if n > q.count {
-		n = q.count
-	}
+	n := min(len(dst), q.count)
 	if n == 0 {
 		return 0
 	}
 
-	first := n
-	if first > len(q.buffer)-q.read {
-		first = len(q.buffer) - q.read
-	}
+	first := min(n, len(q.buffer)-q.read)
 	copy(dst, q.buffer[q.read:q.read+first])
 	if first < n {
 		copy(dst[first:n], q.buffer[:n-first])

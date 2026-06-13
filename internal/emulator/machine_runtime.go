@@ -45,10 +45,7 @@ func (m *Machine) StepFrame() (bool, error) {
 }
 
 func (m *Machine) nextStepQuantum(remainingHardwareCycles uint64) uint64 {
-	quantum := remainingHardwareCycles
-	if quantum > stepQuantumCycles {
-		quantum = stepQuantumCycles
-	}
+	quantum := min(remainingHardwareCycles, stepQuantumCycles)
 	if next, ok := m.nextDeviceEventCycles(); ok && next < quantum {
 		quantum = next
 	}

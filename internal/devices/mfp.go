@@ -449,10 +449,7 @@ func (m *MFP) configureEventCountTiming() {
 	} else {
 		m.eventCountScanlines = mfpPALScanlines
 	}
-	m.eventCountActiveLines = mfpActiveVideoLines
-	if m.eventCountActiveLines > m.eventCountScanlines {
-		m.eventCountActiveLines = m.eventCountScanlines
-	}
+	m.eventCountActiveLines = min(mfpActiveVideoLines, m.eventCountScanlines)
 }
 
 func (m *MFP) advanceEventCountTimers(cycles uint64) {
@@ -831,7 +828,7 @@ func (m *MFP) updateGPIPEdges() {
 	falling := changed &^ next
 	active := (rising & m.registers[mfpAER]) | (falling &^ m.registers[mfpAER])
 	active &= inputMask
-	for bit := 0; bit < 8; bit++ {
+	for bit := range 8 {
 		if active&(1<<uint(bit)) != 0 {
 			m.raiseChannel(gpipInterruptChannel(bit))
 		}

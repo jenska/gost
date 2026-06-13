@@ -824,7 +824,7 @@ func TestMachineDropsMaskedAutovectorPulse(t *testing.T) {
 		t.Fatalf("set interrupt mask: %v", err)
 	}
 	machine.dispatchInterrupts()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := machine.cpu.Step(); err != nil {
 			t.Fatalf("step %d: %v", i, err)
 		}
@@ -865,7 +865,7 @@ func TestMachineKeepsMaskedVectoredInterruptPending(t *testing.T) {
 		t.Fatalf("set interrupt mask: %v", err)
 	}
 	machine.dispatchInterrupts()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := machine.cpu.Step(); err != nil {
 			t.Fatalf("step %d: %v", i, err)
 		}

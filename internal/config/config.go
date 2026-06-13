@@ -614,7 +614,7 @@ func lookupFlagValue(args []string, name string) (string, bool) {
 	longName := "--" + name
 	shortName := "-" + name
 
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		arg := args[i]
 		switch {
 		case arg == longName || arg == shortName:

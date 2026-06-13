@@ -1,7 +1,7 @@
 package ebiten
 
 import (
-	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -20,7 +20,7 @@ func TestHostAudioQueuePumpsAndDrainsSamples(t *testing.T) {
 		t.Fatalf("drain count = %d, want %d", n, len(out))
 	}
 	want := []float32{0.1, 0.2, 0.3, 0, 0}
-	if !reflect.DeepEqual(out, want) {
+	if !slices.Equal(out, want) {
 		t.Fatalf("drained samples = %#v, want %#v", out, want)
 	}
 }
@@ -36,7 +36,7 @@ func TestHostAudioQueueDropsOldestSamplesOnOverflow(t *testing.T) {
 	out := make([]float32, 4)
 	queue.DrainMonoF32(out)
 	want := []float32{3, 4, 5, 6}
-	if !reflect.DeepEqual(out, want) {
+	if !slices.Equal(out, want) {
 		t.Fatalf("drained samples = %#v, want %#v", out, want)
 	}
 }

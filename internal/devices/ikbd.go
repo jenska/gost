@@ -280,10 +280,7 @@ func (i *IKBD) currentClock() time.Time {
 		i.clockBase = now
 		i.clockSetAt = now
 	}
-	elapsed := i.nowTime().Sub(i.clockSetAt)
-	if elapsed < 0 {
-		elapsed = 0
-	}
+	elapsed := max(i.nowTime().Sub(i.clockSetAt), 0)
 	return i.clockBase.Add(elapsed).Truncate(time.Second)
 }
 
@@ -356,13 +353,6 @@ func withClockDate(current time.Time, year int, month time.Month, day int) time.
 
 func daysIn(year int, month time.Month) int {
 	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.Local).Day()
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // clampMouseDelta limits relative mouse motion to the signed 8-bit packet
