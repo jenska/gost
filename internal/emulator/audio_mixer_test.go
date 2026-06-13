@@ -23,9 +23,44 @@ func TestMixedAudioSourceMixesAndClamps(t *testing.T) {
 	}
 }
 
+func BenchmarkMixedAudioSourceDrain(b *testing.B) {
+	primary := newRepeatingAudioSource(48_000, 0.25)
+	secondary := newRepeatingAudioSource(48_000, 0.5)
+	mixer := newMixedAudioSource(primary, secondary)
+	out := make([]float32, 1024)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(out) * 4))
+	b.ResetTimer()
+
+	for range b.N {
+		_ = mixer.DrainMonoF32(out)
+	}
+}
+
 type fixedAudioSource struct {
 	samples    []float32
 	sampleRate int
+}
+
+type repeatingAudioSource struct {
+	sample     float32
+	sampleRate int
+}
+
+func newRepeatingAudioSource(sampleRate int, sample float32) *repeatingAudioSource {
+	return &repeatingAudioSource{sampleRate: sampleRate, sample: sample}
+}
+
+func (r *repeatingAudioSource) DrainMonoF32(dst []float32) int {
+	for i := range dst {
+		dst[i] = r.sample
+	}
+	return len(dst)
+}
+
+func (r *repeatingAudioSource) OutputSampleRate() int {
+	return r.sampleRate
 }
 
 func (f *fixedAudioSource) DrainMonoF32(dst []float32) int {

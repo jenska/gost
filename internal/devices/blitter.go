@@ -111,6 +111,10 @@ func (b *Blitter) execute() {
 	status := b.regs[0x3C]
 	skew := b.regs[0x3D]
 
+	if b.executeLinearFastPath(xCount, yCount, srcXInc, srcYInc, dstXInc, dstYInc, srcAddr, dstAddr, status, skew) {
+		return
+	}
+
 	for y := uint16(0); y < yCount; y++ {
 		xc := xCount
 		first := true
@@ -185,6 +189,134 @@ func (b *Blitter) execute() {
 	b.setDstAddr(dstAddr)
 	b.setYCount(0)
 	b.regs[0x3C] = (status &^ blitterBusy) | (b.regs[0x3C] & (blitterHog | blitterSmudge))
+}
+
+func (b *Blitter) executeLinearFastPath(xCount, yCount uint16, srcXInc, srcYInc, dstXInc, dstYInc int16, srcAddr, dstAddr uint32, status, skew byte) bool {
+	if b.ram == nil || b.ram.base != 0 || b.ram.mmu != nil {
+		return false
+	}
+	if xCount == 0 || yCount == 0 || dstXInc != 2 || dstYInc < 0 || skew != 0 {
+		return false
+	}
+	if b.endMask1() != 0xFFFF || b.endMask2() != 0xFFFF || b.endMask3() != 0xFFFF {
+		return false
+	}
+	if b.op() != 3 {
+		return false
+	}
+
+	switch b.hop() {
+	case 1:
+		if srcXInc != 0 || srcYInc != 0 {
+			return false
+		}
+		return b.executeLinearHalftoneFillFastPath(xCount, yCount, dstYInc, dstAddr, status)
+	case 2:
+		if srcXInc != 2 || srcYInc < 0 {
+			return false
+		}
+		return b.executeLinearCopyFastPath(xCount, yCount, srcYInc, dstYInc, srcAddr, dstAddr, status)
+	default:
+		return false
+	}
+}
+
+func (b *Blitter) executeLinearCopyFastPath(xCount, yCount uint16, srcYInc, dstYInc int16, srcAddr, dstAddr uint32, status byte) bool {
+	rowBytes := uint32(xCount) * 2
+	srcStride := int64(uint32(xCount-1)*2) + int64(srcYInc)
+	dstStride := int64(uint32(xCount-1)*2) + int64(dstYInc)
+	srcEnd, ok := blitterLinearEndAddress(srcAddr, rowBytes, srcStride, yCount)
+	if !ok || !b.ramLinearRange(srcAddr, srcEnd) {
+		return false
+	}
+	dstEnd, ok := blitterLinearEndAddress(dstAddr, rowBytes, dstStride, yCount)
+	if !ok || !b.ramLinearRange(dstAddr, dstEnd) {
+		return false
+	}
+	if blitterRangesOverlap(srcAddr, srcEnd, dstAddr, dstEnd) && dstAddr > srcAddr {
+		return false
+	}
+
+	data := b.ram.data
+	srcRow := srcAddr
+	dstRow := dstAddr
+	for range yCount {
+		src := data[int(srcRow):int(srcRow+rowBytes)]
+		dst := data[int(dstRow):int(dstRow+rowBytes)]
+		copy(dst, src)
+		srcRow = addSignedAddressDelta(srcRow+uint32(xCount-1)*2, int32(srcYInc))
+		dstRow = addSignedAddressDelta(dstRow+uint32(xCount-1)*2, int32(dstYInc))
+	}
+
+	status = advanceBlitterLineNumber(status, yCount, dstYInc)
+	b.finishFastPath(srcRow, dstRow, status)
+	return true
+}
+
+func (b *Blitter) executeLinearHalftoneFillFastPath(xCount, yCount uint16, dstYInc int16, dstAddr uint32, status byte) bool {
+	rowBytes := uint32(xCount) * 2
+	dstStride := int64(uint32(xCount-1)*2) + int64(dstYInc)
+	dstEnd, ok := blitterLinearEndAddress(dstAddr, rowBytes, dstStride, yCount)
+	if !ok || !b.ramLinearRange(dstAddr, dstEnd) {
+		return false
+	}
+
+	data := b.ram.data
+	dstRow := dstAddr
+	for range yCount {
+		halftone := b.halftoneWord(status & blitterLineNo)
+		row := data[int(dstRow):int(dstRow+rowBytes)]
+		for offset := 0; offset < len(row); offset += 2 {
+			row[offset] = byte(halftone >> 8)
+			row[offset+1] = byte(halftone)
+		}
+		if dstYInc >= 0 {
+			status = (status &^ blitterLineNo) | ((status + 1) & blitterLineNo)
+		} else {
+			status = (status &^ blitterLineNo) | ((status + 15) & blitterLineNo)
+		}
+		dstRow = addSignedAddressDelta(dstRow+uint32(xCount-1)*2, int32(dstYInc))
+	}
+
+	b.finishFastPath(b.srcAddr(), dstRow, status)
+	return true
+}
+
+func (b *Blitter) finishFastPath(srcAddr, dstAddr uint32, status byte) {
+	b.setSrcAddr(srcAddr)
+	b.setDstAddr(dstAddr)
+	b.setYCount(0)
+	b.regs[0x3C] = (status &^ blitterBusy) | (b.regs[0x3C] & (blitterHog | blitterSmudge))
+}
+
+func advanceBlitterLineNumber(status byte, rows uint16, dstYInc int16) byte {
+	line := status & blitterLineNo
+	if dstYInc >= 0 {
+		line = (line + byte(rows)) & blitterLineNo
+	} else {
+		line = (line - byte(rows)) & blitterLineNo
+	}
+	return (status &^ blitterLineNo) | line
+}
+
+func blitterLinearEndAddress(start, rowBytes uint32, stride int64, rows uint16) (uint32, bool) {
+	if rows == 0 || rowBytes == 0 {
+		return start, true
+	}
+	lastRow := int64(start) + int64(rows-1)*stride
+	end := lastRow + int64(rowBytes)
+	if lastRow < 0 || end < lastRow || end > int64(^uint32(0)) {
+		return 0, false
+	}
+	return uint32(end), true
+}
+
+func (b *Blitter) ramLinearRange(start, end uint32) bool {
+	return start <= end && end <= uint32(len(b.ram.data))
+}
+
+func blitterRangesOverlap(aStart, aEnd, bStart, bEnd uint32) bool {
+	return aStart < bEnd && bStart < aEnd
 }
 
 func (b *Blitter) readWordSafe(address uint32) (uint16, error) {

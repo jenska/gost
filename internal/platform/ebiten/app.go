@@ -17,6 +17,7 @@ import (
 
 type App struct {
 	machine     *emulator.Machine
+	audio       *hostAudioQueue
 	scale       float64
 	texture     *ebitenlib.Image
 	prevKeys    map[ebitenlib.Key]bool
@@ -28,7 +29,8 @@ type App struct {
 }
 
 const (
-	audioBufferSize = 75 * time.Millisecond
+	audioBufferSize    = 75 * time.Millisecond
+	audioQueueDuration = 250 * time.Millisecond
 )
 
 func Run(machine *emulator.Machine, cfg config.Config) error {
@@ -44,6 +46,8 @@ func Run(machine *emulator.Machine, cfg config.Config) error {
 	}
 	app.texture = ebitenlib.NewImage(width, height)
 	app.resetMouseTracking()
+	source := atarist.New(machine.AudioSource(), atarist.Config{})
+	app.audio = newHostAudioQueue(source, audioQueueDuration)
 
 	ebitenlib.SetWindowTitle("GoST Emulator")
 	ebitenlib.SetWindowSize(scaledWindowSize(width, height, app.scale))
@@ -51,7 +55,7 @@ func Run(machine *emulator.Machine, cfg config.Config) error {
 	ebitenlib.SetTPS(int(cfg.FrameHz))
 	ebitenlib.SetFullscreen(cfg.Fullscreen)
 
-	player, err := newAudioPlayer(machine)
+	player, err := newAudioPlayer(app.audio)
 	if err != nil {
 		return err
 	}
@@ -69,6 +73,7 @@ func (a *App) Update() error {
 	if err != nil {
 		return err
 	}
+	a.audio.Pump()
 	if changed {
 		width, height := a.machine.DisplayDimensions()
 		if a.texture == nil || a.texture.Bounds().Dx() != width || a.texture.Bounds().Dy() != height {
@@ -221,8 +226,7 @@ func scaledWindowSize(width, height int, scale float64) (int, int) {
 	return int(float64(width) * scale), int(float64(height) * scale)
 }
 
-func newAudioPlayer(machine *emulator.Machine) (*audio.Player, error) {
-	source := atarist.New(machine.AudioSource(), atarist.Config{})
+func newAudioPlayer(source emulator.AudioSource) (*audio.Player, error) {
 	reader := audiostream.NewReader(source, 1024)
 
 	ctx, err := ensureAudioContext(reader.OutputSampleRate())

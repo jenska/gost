@@ -11,16 +11,17 @@ func newMixedAudioSource(primary, secondary AudioSource) *mixedAudioSource {
 }
 
 func (m *mixedAudioSource) DrainMonoF32(dst []float32) int {
-	clear(dst)
 	nPrimary := m.primary.DrainMonoF32(dst)
 
 	if cap(m.scratch) < len(dst) {
 		m.scratch = make([]float32, len(dst))
 	}
 	scratch := m.scratch[:len(dst)]
-	clear(scratch)
 	nSecondary := m.secondary.DrainMonoF32(scratch)
 
+	if nSecondary > nPrimary {
+		clear(dst[nPrimary:nSecondary])
+	}
 	for i := 0; i < nSecondary; i++ {
 		dst[i] = clampAudioSample(dst[i] + scratch[i])
 	}
