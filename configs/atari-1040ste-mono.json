@@ -1,0 +1,7 @@
+{
+  "preset": "stf",
+  "model": "ste",
+  "ram-size": 1048576,
+  "color-monitor": false,
+  "floppy-a": "./FLOPPIES/1st_word_plus_2.02_disk_1_1986_gst_software.stx"
+}

@@ -7,7 +7,18 @@ import (
 )
 
 const msaMagic = 0x0E0F
-const dimHeaderSize = 32
+const (
+	dimHeaderSize = 32
+	stxHeaderSize = 16
+)
+
+const (
+	stxTrackFlagSectorDescriptors = 0x01
+	stxTrackFlagImage             = 0x40
+	stxTrackFlagSyncOffset        = 0x80
+	stxSectorFlagRecordNotFound   = 0x10
+	stxSectorSizeCode512          = 2
+)
 
 type DiskGeometry struct {
 	SectorsPerTrack int
@@ -33,6 +44,12 @@ func LoadDiskImage(path string) (*DiskImage, error) {
 	if err != nil {
 		return nil, err
 	}
+	if looksLikeSTX(data) {
+		return decodeSTX(data)
+	}
+	if looksLikeSCP(data) {
+		return nil, fmt.Errorf("SCP flux images are not supported yet; use a .stx, .st, .msa, .dim, or compatible .adi image")
+	}
 	if !looksLikeMSA(data) {
 		if looksLikeDIM(data) {
 			return decodeDIM(data)
@@ -54,6 +71,21 @@ func looksLikeDIM(data []byte) bool {
 		data[6] <= 1 &&
 		data[8] > 0 &&
 		data[0x0A] == 0
+}
+
+func looksLikeSTX(data []byte) bool {
+	return len(data) >= stxHeaderSize &&
+		data[0] == 'R' &&
+		data[1] == 'S' &&
+		data[2] == 'Y' &&
+		data[3] == 0
+}
+
+func looksLikeSCP(data []byte) bool {
+	return len(data) >= 3 &&
+		data[0] == 'S' &&
+		data[1] == 'C' &&
+		data[2] == 'P'
 }
 
 func decodeDIM(data []byte) (*DiskImage, error) {
@@ -86,6 +118,164 @@ func decodeDIM(data []byte) (*DiskImage, error) {
 			Tracks:          endTrack - startTrack + 1,
 		},
 	}, nil
+}
+
+type stxSectorKey struct {
+	track  int
+	side   int
+	sector int
+}
+
+type stxSectorDescriptor struct {
+	dataOffset uint32
+	track      byte
+	head       byte
+	sector     byte
+	sizeCode   byte
+	fdcFlags   byte
+}
+
+func decodeSTX(data []byte) (*DiskImage, error) {
+	if len(data) < stxHeaderSize {
+		return nil, fmt.Errorf("STX image too short")
+	}
+	if !looksLikeSTX(data) {
+		return nil, fmt.Errorf("invalid STX file identifier")
+	}
+	version := binary.LittleEndian.Uint16(data[4:6])
+	if version != 3 {
+		return nil, fmt.Errorf("unsupported STX version %d", version)
+	}
+
+	trackCount := int(data[0x0A])
+	pos := stxHeaderSize
+	sectors := make(map[stxSectorKey][]byte)
+	maxTrack, maxSide, maxSector := -1, -1, 0
+	for trackRecord := range trackCount {
+		if pos+stxHeaderSize > len(data) {
+			return nil, fmt.Errorf("unexpected end of STX image before track %d", trackRecord)
+		}
+		recordStart := pos
+		recordSize := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+		fuzzyCount := int(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
+		sectorCount := int(binary.LittleEndian.Uint16(data[pos+8 : pos+10]))
+		trackFlags := binary.LittleEndian.Uint16(data[pos+10 : pos+12])
+		trackNumber := data[pos+14]
+		recordEnd := recordStart + recordSize
+		if recordSize < stxHeaderSize || recordEnd < recordStart || recordEnd > len(data) {
+			return nil, fmt.Errorf("invalid STX track %d record size %d", trackRecord, recordSize)
+		}
+
+		track := int(trackNumber & 0x7F)
+		side := int(trackNumber >> 7)
+		cursor := recordStart + stxHeaderSize
+		if trackFlags&stxTrackFlagSectorDescriptors == 0 {
+			if fuzzyCount != 0 {
+				return nil, fmt.Errorf("STX track %d has fuzzy data without sector descriptors", trackRecord)
+			}
+			cursor, maxTrack, maxSide, maxSector = decodeSTXStandardTrackData(
+				data, cursor, recordEnd, sectors, track, side, sectorCount, maxTrack, maxSide, maxSector)
+			if cursor < 0 {
+				return nil, fmt.Errorf("truncated STX standard sector data in track %d", trackRecord)
+			}
+			pos = recordEnd
+			continue
+		}
+
+		descriptors, err := decodeSTXSectorDescriptors(data, cursor, recordEnd, sectorCount)
+		if err != nil {
+			return nil, fmt.Errorf("decode STX sector descriptors for track %d: %w", trackRecord, err)
+		}
+		cursor += sectorCount * stxHeaderSize
+		if cursor+fuzzyCount > recordEnd {
+			return nil, fmt.Errorf("truncated STX fuzzy mask in track %d", trackRecord)
+		}
+		dataStart := cursor + fuzzyCount
+
+		if trackFlags&stxTrackFlagImage != 0 {
+			headerSize := 2
+			if trackFlags&stxTrackFlagSyncOffset != 0 {
+				headerSize = 4
+			}
+			if dataStart+headerSize > recordEnd {
+				return nil, fmt.Errorf("truncated STX track image header in track %d", trackRecord)
+			}
+		}
+
+		for _, desc := range descriptors {
+			if desc.fdcFlags&stxSectorFlagRecordNotFound != 0 || desc.sizeCode != stxSectorSizeCode512 {
+				continue
+			}
+			start := dataStart + int(desc.dataOffset)
+			if start+512 > recordEnd {
+				return nil, fmt.Errorf("STX sector %d/%d/%d points outside track record", track, side, desc.sector)
+			}
+			sector := int(desc.sector)
+			if sector <= 0 {
+				continue
+			}
+			key := stxSectorKey{track: track, side: side, sector: sector}
+			if _, exists := sectors[key]; exists {
+				continue
+			}
+			sectors[key] = append([]byte(nil), data[start:start+512]...)
+			maxTrack = max(maxTrack, track)
+			maxSide = max(maxSide, side)
+			maxSector = max(maxSector, sector)
+		}
+		pos = recordEnd
+	}
+	if len(sectors) == 0 {
+		return nil, fmt.Errorf("STX image does not contain supported 512-byte sectors")
+	}
+
+	out := make([]byte, (maxTrack+1)*(maxSide+1)*maxSector*512)
+	for key, sectorData := range sectors {
+		offset := ((key.track*(maxSide+1) + key.side) * maxSector) + (key.sector - 1)
+		copy(out[offset*512:], sectorData)
+	}
+	return &DiskImage{
+		Data: out,
+		Geometry: DiskGeometry{
+			SectorsPerTrack: maxSector,
+			Sides:           maxSide + 1,
+			Tracks:          maxTrack + 1,
+		},
+	}, nil
+}
+
+func decodeSTXStandardTrackData(data []byte, cursor, recordEnd int, sectors map[stxSectorKey][]byte, track, side, sectorCount, maxTrack, maxSide, maxSector int) (int, int, int, int) {
+	for sector := 1; sector <= sectorCount; sector++ {
+		if cursor+512 > recordEnd {
+			return -1, maxTrack, maxSide, maxSector
+		}
+		key := stxSectorKey{track: track, side: side, sector: sector}
+		sectors[key] = append([]byte(nil), data[cursor:cursor+512]...)
+		cursor += 512
+		maxTrack = max(maxTrack, track)
+		maxSide = max(maxSide, side)
+		maxSector = max(maxSector, sector)
+	}
+	return cursor, maxTrack, maxSide, maxSector
+}
+
+func decodeSTXSectorDescriptors(data []byte, cursor, recordEnd, sectorCount int) ([]stxSectorDescriptor, error) {
+	if cursor+sectorCount*stxHeaderSize > recordEnd {
+		return nil, fmt.Errorf("descriptor table exceeds track record")
+	}
+	descriptors := make([]stxSectorDescriptor, 0, sectorCount)
+	for range sectorCount {
+		descriptors = append(descriptors, stxSectorDescriptor{
+			dataOffset: binary.LittleEndian.Uint32(data[cursor : cursor+4]),
+			track:      data[cursor+8],
+			head:       data[cursor+9],
+			sector:     data[cursor+10],
+			sizeCode:   data[cursor+11],
+			fdcFlags:   data[cursor+14],
+		})
+		cursor += stxHeaderSize
+	}
+	return descriptors, nil
 }
 
 func decodeMSA(data []byte) (*DiskImage, error) {

@@ -47,7 +47,7 @@ Current focus:
 - MFP timer delivery plus GLUE-backed VBL/HBL autovector timing
 - Basic MIDI and RS232 byte I/O paths for ACIA/MFP register-level testing
 - Optional read-only cartridge ROM mapping at `$FA0000-$FBFFFF`
-- Floppy DMA/FDC path with `.st`, `.msa`, `.dim`, and compatible headered `.adi` image support
+- Floppy DMA/FDC path with `.st`, `.msa`, `.stx`, `.dim`, and compatible headered `.adi` image support
 - Virtual ACSI hard disk (30 MiB default) that enumerates as C: under bundled EmuTOS
 - Optional ICD-compatible ACSI real-time clock
 - Desktop frontend via Ebitengine
@@ -89,8 +89,6 @@ make run
 go run ./cmd/gost
 ```
 
-If `downloads/atari-st/PDATS321.msa` exists locally, `make run` and `make headless` automatically mount it as drive A.
-
 The repository ignores `TOS/`, so personal ROM images can be kept there for local testing without adding them to Git. The Makefile also provides convenience targets such as `make headless`, `make run-rom`, `make headless-rom`, `make run-mega-tos102`, `make test`, `make build`, and `make help`.
 
 CLI flags can be passed through `ARGS` when using Make targets, or directly after `go run ./cmd/gost`.
@@ -113,6 +111,19 @@ JSON config files are also supported. Config keys use the same names as CLI flag
 
 Load order is: preset defaults, then JSON config file, then CLI flags.
 
+Ready-to-use machine profiles are available in `configs/`:
+
+- `configs/atari-1040stf-color.json`
+- `configs/atari-1040stf-mono.json`
+- `configs/atari-1040ste-color.json`
+- `configs/atari-1040ste-mono.json`
+
+Use them with `--config`, for example:
+
+```bash
+go run ./cmd/gost --config configs/atari-1040ste-color.json
+```
+
 ### CLI Flags
 
 - `--config <path>`: optional JSON config file loaded before CLI overrides
@@ -120,8 +131,8 @@ Load order is: preset defaults, then JSON config file, then CLI flags.
 - `--model <name>`: hardware model, currently `st` or `ste`
 - `--rom <path>`: path to the TOS ROM image; bundled EmuTOS is used when omitted
 - `--cartridge <path>`: optional cartridge ROM image mapped read-only at `$FA0000-$FBFFFF` (up to 128 KiB)
-- `--floppy-a <path>`: optional floppy disk image for drive A (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
-- `--floppy-b <path>`: optional floppy disk image for drive B (`.st`, `.msa`, `.dim`, or compatible headered `.adi`)
+- `--floppy-a <path>`: optional floppy disk image for drive A (`.st`, `.msa`, `.stx`, `.dim`, or compatible headered `.adi`)
+- `--floppy-b <path>`: optional floppy disk image for drive B (`.st`, `.msa`, `.stx`, `.dim`, or compatible headered `.adi`)
 - `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
 - `--hd-image <path>`: optional persistent ACSI hard disk image file; raw sector images and `.hdi` containers are supported
 - `--rtc`: enable the optional ICD-compatible ACSI real-time clock
@@ -228,6 +239,7 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 - The video path renders from RAM-backed bitplanes into an RGBA framebuffer for the host frontend, with host-side PNG export queued from immutable framebuffer snapshots.
 - Interrupts are routed into the CPU through the machine layer.
 - The floppy controller now covers WD1772 command groups (type I/II/III/IV) over sector images, including seek/step commands, sector and track DMA reads/writes, and read-address support.
+- Pasti `.stx` files are decoded into GoST's current sector-image model when they contain normal 512-byte sectors. STX-specific protection metadata such as fuzzy bits, timing records, duplicate sector IDs, non-512-byte sectors, and exact track-image behavior is not fully emulated yet.
 - A virtual ACSI hard disk is attached by default with 30 MiB capacity.
 - Use `--hd-image` to persist hard-disk contents across emulator restarts; `.hdi` files are stored with an Anex86-compatible header.
 - Use `--rtc` to attach the ICD-compatible ACSI real-time clock backed by the host system clock.

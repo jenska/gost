@@ -1,0 +1,6 @@
+{
+  "preset": "stf",
+  "model": "ste",
+  "ram-size": 1048576,
+  "color-monitor": true
+}

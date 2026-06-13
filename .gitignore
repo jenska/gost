@@ -6,4 +6,7 @@ wasm/gost.wasm
 wasm/wasm_exec.js
 wasm/.nojekyll
 TOS/
+FLOPPIES/
 gost
+.vscode/
+.tmp/

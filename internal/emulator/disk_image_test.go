@@ -1,6 +1,7 @@
 package emulator
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -141,4 +142,119 @@ func TestLoadDiskImageRejectsCompressedDIM(t *testing.T) {
 	if _, err := LoadDiskImage(path); err == nil {
 		t.Fatalf("expected compressed DIM-style image to be rejected")
 	}
+}
+
+func TestLoadDiskImageDecodesSTXStandardSectors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "disk.stx")
+	sector1 := make([]byte, 512)
+	sector2 := make([]byte, 512)
+	sector1[0] = 0x11
+	sector2[0] = 0x22
+	image := stxTestHeader(1)
+	track := make([]byte, 16)
+	binary.LittleEndian.PutUint32(track[0:4], uint32(16+len(sector1)+len(sector2)))
+	binary.LittleEndian.PutUint16(track[8:10], 2)
+	image = append(image, track...)
+	image = append(image, sector1...)
+	image = append(image, sector2...)
+	if err := os.WriteFile(path, image, 0o644); err != nil {
+		t.Fatalf("write STX disk image: %v", err)
+	}
+
+	got, err := LoadDiskImage(path)
+	if err != nil {
+		t.Fatalf("load STX disk image: %v", err)
+	}
+	if got.Geometry.SectorsPerTrack != 2 || got.Geometry.Sides != 1 || got.Geometry.Tracks != 1 {
+		t.Fatalf("unexpected STX geometry: %+v", got.Geometry)
+	}
+	if len(got.Data) != 1024 {
+		t.Fatalf("decoded STX length = %d, want 1024", len(got.Data))
+	}
+	if got.Data[0] != 0x11 || got.Data[512] != 0x22 {
+		t.Fatalf("unexpected STX sector markers: %02x %02x", got.Data[0], got.Data[512])
+	}
+}
+
+func TestLoadDiskImageDecodesSTXDescriptorTrackImageSectors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "disk.stx")
+	sector := make([]byte, 512)
+	sector[0] = 0xCA
+	sector[511] = 0xFE
+	trackImage := append([]byte{0x02, 0x00}, sector...)
+	image := stxTestHeader(1)
+	track := make([]byte, 16)
+	binary.LittleEndian.PutUint32(track[0:4], uint32(16+16+len(trackImage)))
+	binary.LittleEndian.PutUint16(track[8:10], 1)
+	binary.LittleEndian.PutUint16(track[10:12], stxTrackFlagSectorDescriptors|stxTrackFlagImage)
+	image = append(image, track...)
+	desc := make([]byte, 16)
+	binary.LittleEndian.PutUint32(desc[0:4], 2)
+	desc[8] = 0
+	desc[9] = 0
+	desc[10] = 1
+	desc[11] = stxSectorSizeCode512
+	image = append(image, desc...)
+	image = append(image, trackImage...)
+	if err := os.WriteFile(path, image, 0o644); err != nil {
+		t.Fatalf("write STX disk image: %v", err)
+	}
+
+	got, err := LoadDiskImage(path)
+	if err != nil {
+		t.Fatalf("load STX disk image: %v", err)
+	}
+	if got.Geometry.SectorsPerTrack != 1 || got.Geometry.Sides != 1 || got.Geometry.Tracks != 1 {
+		t.Fatalf("unexpected STX geometry: %+v", got.Geometry)
+	}
+	if len(got.Data) != 512 {
+		t.Fatalf("decoded STX length = %d, want 512", len(got.Data))
+	}
+	if got.Data[0] != 0xCA || got.Data[511] != 0xFE {
+		t.Fatalf("unexpected STX data markers: %02x %02x", got.Data[0], got.Data[511])
+	}
+}
+
+func TestLoadDiskImageDecodesLocalAtarimaniaSTX(t *testing.T) {
+	path := filepath.Join("..", "..", "FLOPPIES", "1st_word_plus_2.02_disk_1_1986_gst_software.stx")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("local STX fixture not available: %v", err)
+	}
+
+	got, err := LoadDiskImage(path)
+	if err != nil {
+		t.Fatalf("load local STX disk image: %v", err)
+	}
+	if got.Geometry.SectorsPerTrack != 9 || got.Geometry.Sides != 1 || got.Geometry.Tracks != 80 {
+		t.Fatalf("unexpected local STX geometry: %+v", got.Geometry)
+	}
+	if len(got.Data) != 9*80*512 {
+		t.Fatalf("decoded local STX length = %d, want %d", len(got.Data), 9*80*512)
+	}
+	if got.Data[8] != 0x94 || got.Data[9] != 0xE0 {
+		t.Fatalf("unexpected local STX boot marker: %02x %02x", got.Data[8], got.Data[9])
+	}
+}
+
+func TestLoadDiskImageRejectsSCPFluxImages(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "disk.scp")
+	if err := os.WriteFile(path, []byte{'S', 'C', 'P', 0x19}, 0o644); err != nil {
+		t.Fatalf("write SCP disk image: %v", err)
+	}
+
+	if _, err := LoadDiskImage(path); err == nil {
+		t.Fatalf("expected SCP flux image to be rejected")
+	}
+}
+
+func stxTestHeader(trackCount byte) []byte {
+	header := make([]byte, 16)
+	copy(header[:4], []byte{'R', 'S', 'Y', 0})
+	binary.LittleEndian.PutUint16(header[4:6], 3)
+	header[0x0A] = trackCount
+	header[0x0B] = 2
+	return header
 }
