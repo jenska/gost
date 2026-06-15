@@ -384,6 +384,7 @@ type PSG struct {
 | **TOS 1.02** | OS | ⚠️ Manual/local boot testing | External-ROM workflow exists, but direct automated coverage is still limited |
 | **TOS 1.04** | OS | ⚠️ Manual/local boot testing | External-ROM workflow exists, but direct automated coverage is still limited |
 | **EmuTOS 1.4 (Color)** | OS | ✅ Boots | Color desktop mode |
+| **1st Word Plus 2.02** | Word processor | ✅ Runs | Verified with local Atarimania `.stx` disk 1/2 images on the 1040STE monochrome profile |
 
 ### 3.2 Known Failing / Untested Software
 
@@ -404,6 +405,7 @@ type PSG struct {
 |--------|------|-------|-------|
 | **.ST (Raw)** | ✅ | ✅ | Standard sector image |
 | **.MSA (Compressed)** | ✅ | ❌ | Decompressed in memory |
+| **.STX (Pasti)** | ✅ | ❌ | Normal 512-byte sectors decoded into the current sector-image model; protection/timing metadata not fully emulated |
 | **.DIM / compatible .ADI** | ✅ | ❌ | 32-byte headered sector image; compressed payloads rejected |
 | **.HDI** | ✅ | ✅ | Anex86-compatible hard-disk container for `--hd-image` |
 | **.D64** | ❌ | ❌ | Commodore 64 (rarely used on ST) |

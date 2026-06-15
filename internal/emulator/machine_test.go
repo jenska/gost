@@ -3,6 +3,7 @@ package emulator
 import (
 	"encoding/binary"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jenska/gost/internal/assets"
@@ -501,6 +502,50 @@ func TestMachineInsertFloppySupportsDriveB(t *testing.T) {
 	}
 	if err := machine.InsertFloppy(2, disk); err == nil {
 		t.Fatalf("expected unsupported drive error")
+	}
+}
+
+func TestMachineSmokeBootsWithLocal1stWordPlusSTX(t *testing.T) {
+	diskAPath := filepath.Join("..", "..", "FLOPPIES", "1st_word_plus_2.02_disk_1_1986_gst_software.stx")
+	diskBPath := filepath.Join("..", "..", "FLOPPIES", "1st_word_plus_2.02_disk_2_1986_gst_software.stx")
+	if _, err := os.Stat(diskAPath); err != nil {
+		t.Skipf("local 1st Word Plus STX disk A not available: %v", err)
+	}
+	if _, err := os.Stat(diskBPath); err != nil {
+		t.Skipf("local 1st Word Plus STX disk B not available: %v", err)
+	}
+
+	diskA, err := LoadDiskImage(diskAPath)
+	if err != nil {
+		t.Fatalf("load 1st Word Plus STX disk A: %v", err)
+	}
+	diskB, err := LoadDiskImage(diskBPath)
+	if err != nil {
+		t.Fatalf("load 1st Word Plus STX disk B: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Model = config.MachineModelSTE
+	cfg.RAMSize = config.STFDefaultRAMSize
+	cfg.ColorMonitor = false
+	machine, err := NewMachine(cfg, assets.DefaultROM())
+	if err != nil {
+		t.Fatalf("create 1040STE mono machine: %v", err)
+	}
+	if err := machine.InsertFloppy(0, diskA); err != nil {
+		t.Fatalf("insert 1st Word Plus disk A: %v", err)
+	}
+	if err := machine.InsertFloppy(1, diskB); err != nil {
+		t.Fatalf("insert 1st Word Plus disk B: %v", err)
+	}
+
+	for frame := range 120 {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d with 1st Word Plus STX mounted: %v", frame, err)
+		}
+	}
+	if machine.shifter.ScreenBase() == 0 {
+		t.Fatalf("expected bundled ROM boot with 1st Word Plus STX mounted to program a screen base")
 	}
 }
 

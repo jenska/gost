@@ -33,6 +33,8 @@ Current focus:
 - Improve compatibility with more real Atari ST applications and disk images.
 - Continue filling hardware behavior gaps where real software exposes them.
 
+Known working software includes 1st Word Plus 2.02 from Atarimania `.stx` floppy images on the 1040STE monochrome profile.
+
 ## Features
 
 - Motorola 68000 emulation via [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu)
@@ -103,6 +105,7 @@ JSON config files are also supported. Config keys use the same names as CLI flag
   "hd-size-mb": 30,
   "rtc": true,
   "cpu-mhz": 8,
+  "cpu-clock-hz": 8000000,
   "color-monitor": false,
   "trace-start": "0xE00000",
   "trace-end": "0xE01000"
@@ -139,6 +142,7 @@ go run ./cmd/gost --config configs/atari-1040ste-color.json
 - `--ram-size <bytes>`: emulated RAM size in bytes
 - `--clock-hz <n>`: base machine clock frequency in Hz
 - `--cpu-mhz <n>`: CPU frequency in MHz; changes CPU speed without changing other hardware timing
+- `--cpu-clock-hz <n>`: CPU frequency in Hz; equivalent to `--cpu-mhz` but avoids decimal conversion
 - `--frame-hz <n>`: display and VBL refresh rate in Hz; frame timing is derived from `clock-hz / frame-hz`
 - `--color-monitor`: emulate an Atari color monitor instead of monochrome
 - `--midres-y-scale <n>`: scale medium-resolution display height on host output (`1` = off)
@@ -240,6 +244,7 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 - Interrupts are routed into the CPU through the machine layer.
 - The floppy controller now covers WD1772 command groups (type I/II/III/IV) over sector images, including seek/step commands, sector and track DMA reads/writes, and read-address support.
 - Pasti `.stx` files are decoded into GoST's current sector-image model when they contain normal 512-byte sectors. STX-specific protection metadata such as fuzzy bits, timing records, duplicate sector IDs, non-512-byte sectors, and exact track-image behavior is not fully emulated yet.
+- 1st Word Plus 2.02 has been verified from Atarimania `.stx` disk images with drive A/B mounted under the 1040STE monochrome profile.
 - A virtual ACSI hard disk is attached by default with 30 MiB capacity.
 - Use `--hd-image` to persist hard-disk contents across emulator restarts; `.hdi` files are stored with an Anex86-compatible header.
 - Use `--rtc` to attach the ICD-compatible ACSI real-time clock backed by the host system clock.

@@ -106,6 +106,22 @@ func TestLoadCanReadPresetFromConfigFile(t *testing.T) {
 	}
 }
 
+func TestLoadCanReadCPUClockHzFromConfigFile(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gost.json")
+	if err := os.WriteFile(configPath, []byte(`{"preset":"stf","cpu-clock-hz":32000000}`), 0o644); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	cfg, err := Load([]string{"--config", configPath})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.CPUClockHz != 32_000_000 {
+		t.Fatalf("unexpected CPU clock: got %d want %d", cfg.CPUClockHz, 32_000_000)
+	}
+}
+
 func TestFlagsOverrideConfigFileSettings(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "gost.json")
 	if err := os.WriteFile(configPath, []byte(`{"preset":"stf","ram-size":524288,"color-monitor":true}`), 0o644); err != nil {
