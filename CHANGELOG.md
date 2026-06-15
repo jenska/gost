@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Documented 1st Word Plus 2.02 as working from local Atarimania `.stx` floppy images on the 1040STE monochrome profile.
+- Added an optional local smoke test for booting with the 1st Word Plus 2.02 `.stx` disk pair mounted.
+
 ## v0.3.0 - 2026-06-13
 
 ### Added
@@ -30,4 +37,3 @@
 
 - This remains a development release focused on the usable GEM desktop baseline, host-side performance, and broader device coverage.
 - Real TOS compatibility, exact MMU behavior, copy-protected disk formats, and full IKBD/MIDI coverage are still incomplete.
-

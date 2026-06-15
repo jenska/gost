@@ -446,6 +446,10 @@ func (p configPatch) Apply(cfg *Config) error {
 				return fmt.Errorf("decode %q: %w", key, err)
 			}
 			cfg.CPUClockHz = value
+		case KeyCPUClockHz:
+			if err := decodeJSON(raw, &cfg.CPUClockHz); err != nil {
+				return fmt.Errorf("decode %q: %w", key, err)
+			}
 		case KeyFrameHz:
 			if err := decodeJSON(raw, &cfg.FrameHz); err != nil {
 				return fmt.Errorf("decode %q: %w", key, err)
@@ -524,6 +528,7 @@ func parseFlags(cfg *Config, args []string) error {
 	fs.Var(uint32Flag{target: &cfg.RAMSize}, KeyRAMSize, "amount of emulated RAM in bytes")
 	fs.Uint64Var(&cfg.ClockHz, KeyClockHz, cfg.ClockHz, "base machine clock frequency in Hz")
 	fs.Var(mhzFlag{target: &cfg.CPUClockHz}, KeyCPUMHz, "CPU frequency in MHz (hardware timing remains unchanged)")
+	fs.Uint64Var(&cfg.CPUClockHz, KeyCPUClockHz, cfg.CPUClockHz, "CPU frequency in Hz (hardware timing remains unchanged)")
 	fs.Uint64Var(&cfg.FrameHz, KeyFrameHz, cfg.FrameHz, "frames per second for display and VBL timing")
 	fs.BoolVar(&cfg.ColorMonitor, KeyColorMonitor, cfg.ColorMonitor, "emulate an Atari color monitor instead of monochrome")
 	fs.BoolVar(&cfg.RTC, KeyRTC, cfg.RTC, "enable the ICD-compatible ACSI real-time clock")
