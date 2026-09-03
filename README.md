@@ -71,7 +71,7 @@ internal/platform       Host frontend integrations
 
 ## Requirements
 
-- Go 1.26+
+- Go 1.27+
 
 The repository includes a bundled default ROM:
 
@@ -154,6 +154,8 @@ go run ./cmd/gost --config configs/atari-1040ste-color.json
 - `--trace-start <addr>`: first PC included in `boot` and `boot-verbose` traces
 - `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces
 - `--dump-frame <path>`: write the last rendered framebuffer to a PNG file; encoding uses the same snapshot-safe frame dump path that can queue multiple PNG jobs in parallel from host-side tooling
+
+During desktop execution, press `F12` to open the GoST overlay. The current overlay provides drive A/B floppy path fields with `Browse`, `Mount`, and `Eject` controls. `Browse` opens the native file selector where supported, while manual path entry remains available on every build. Mounting supports the same disk image formats as `--floppy-a` and `--floppy-b`.
 
 ## WebAssembly
 

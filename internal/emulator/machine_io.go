@@ -169,6 +169,14 @@ func (m *Machine) InsertFloppy(drive int, image *DiskImage) error {
 	)
 }
 
+// EjectFloppy removes the disk image from floppy drive 0 (A:) or 1 (B:).
+func (m *Machine) EjectFloppy(drive int) error {
+	if drive < 0 || drive > 1 {
+		return fmt.Errorf("unsupported floppy drive %d", drive)
+	}
+	return m.fdc.EjectDiskFromDrive(drive)
+}
+
 func (m *Machine) RequestInterrupt(level uint8, vector *uint8) error {
 	return m.cpu.RequestInterrupt(level, vector)
 }

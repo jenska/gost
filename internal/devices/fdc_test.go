@@ -375,6 +375,35 @@ func TestFDCSelectedDriveBWithoutDiskReturnsRecordNotFound(t *testing.T) {
 	}
 }
 
+func TestFDCEjectDiskClearsDriveState(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	fdc := NewFDC(ram, nil)
+
+	if err := fdc.InsertDiskIntoDriveWithGeometry(1, make([]byte, fdcSectorSize), 1, 1, 1); err != nil {
+		t.Fatalf("insert drive B disk: %v", err)
+	}
+	if err := fdc.SetDiskWriteProtectedForDrive(1, true); err != nil {
+		t.Fatalf("write-protect drive B: %v", err)
+	}
+	if err := fdc.SetDiskSectorErrorForDrive(1, 0, 0, 1, FDCMediaErrorCRC); err != nil {
+		t.Fatalf("set drive B sector error: %v", err)
+	}
+
+	if err := fdc.EjectDiskFromDrive(1); err != nil {
+		t.Fatalf("eject drive B disk: %v", err)
+	}
+	drive := fdc.drives[1]
+	if len(drive.image) != 0 || drive.sectorsPerTrack != 0 || drive.sides != 0 || drive.tracks != 0 {
+		t.Fatalf("drive B was not cleared after eject: %+v", drive)
+	}
+	if drive.writeProtected {
+		t.Fatalf("drive B write-protect state should be cleared after eject")
+	}
+	if len(drive.errors) != 0 {
+		t.Fatalf("drive B sector errors should be cleared after eject")
+	}
+}
+
 func TestFDCWriteSectorCopiesRAMIntoDisk(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	fdc := NewFDC(ram, nil)

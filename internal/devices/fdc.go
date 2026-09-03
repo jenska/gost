@@ -234,6 +234,19 @@ func (f *FDC) InsertDiskIntoDriveWithGeometry(drive int, image []byte, sectorsPe
 	return nil
 }
 
+func (f *FDC) EjectDisk() error {
+	return f.EjectDiskFromDrive(0)
+}
+
+func (f *FDC) EjectDiskFromDrive(drive int) error {
+	if err := validateFloppyDrive(drive); err != nil {
+		return err
+	}
+	f.drives[drive] = fdcDrive{}
+	f.status = f.baseStatus()
+	return nil
+}
+
 func (f *FDC) SetDiskWriteProtected(writeProtected bool) {
 	_ = f.SetDiskWriteProtectedForDrive(0, writeProtected)
 }

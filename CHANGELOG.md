@@ -6,6 +6,7 @@
 
 - Documented 1st Word Plus 2.02 as working from local Atarimania `.stx` floppy images on the 1040STE monochrome profile.
 - Added an optional local smoke test for booting with the 1st Word Plus 2.02 `.stx` disk pair mounted.
+- Added the first GUI support for runtime floppy mounting: FDC/Machine eject APIs, an Ebiten host-command queue, and an F12 Ebiten UI panel with drive A/B path fields plus Browse/Mount/Eject controls.
 
 ## v0.3.0 - 2026-06-13
 
