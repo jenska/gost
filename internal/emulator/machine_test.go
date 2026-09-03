@@ -505,6 +505,21 @@ func TestMachineInsertFloppySupportsDriveB(t *testing.T) {
 	}
 }
 
+func TestMachineEjectFloppyClearsDrive(t *testing.T) {
+	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
+	disk := NewDiskImage(make([]byte, 512))
+
+	if err := machine.InsertFloppy(1, disk); err != nil {
+		t.Fatalf("insert drive B disk: %v", err)
+	}
+	if err := machine.EjectFloppy(1); err != nil {
+		t.Fatalf("eject drive B disk: %v", err)
+	}
+	if err := machine.EjectFloppy(2); err == nil {
+		t.Fatalf("expected unsupported drive error")
+	}
+}
+
 func TestMachineSmokeBootsWithLocal1stWordPlusSTX(t *testing.T) {
 	diskAPath := filepath.Join("..", "..", "FLOPPIES", "1st_word_plus_2.02_disk_1_1986_gst_software.stx")
 	diskBPath := filepath.Join("..", "..", "FLOPPIES", "1st_word_plus_2.02_disk_2_1986_gst_software.stx")

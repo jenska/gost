@@ -1,6 +1,7 @@
 package ebiten
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"time"
@@ -10,22 +11,31 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/jenska/gost/internal/config"
 	"github.com/jenska/gost/internal/emulator"
+	"github.com/jenska/gost/internal/platform/host"
 	"github.com/jenska/gost/internal/platform/inputmap"
 	"github.com/jenska/ym2149/renderer/atarist"
 	"github.com/jenska/ym2149/renderer/audiostream"
 )
 
 type App struct {
-	machine     *emulator.Machine
-	audio       *hostAudioQueue
-	scale       float64
-	texture     *ebitenlib.Image
-	prevKeys    map[ebitenlib.Key]bool
-	hostMouseX  int
-	hostMouseY  int
-	lastButtons byte
-	mouseReady  bool
-	cursorMode  ebitenlib.CursorModeType
+	machine              *emulator.Machine
+	audio                *hostAudioQueue
+	scale                float64
+	texture              *ebitenlib.Image
+	prevKeys             map[ebitenlib.Key]bool
+	hostMouseX           int
+	hostMouseY           int
+	lastButtons          byte
+	mouseReady           bool
+	cursorMode           ebitenlib.CursorModeType
+	overlay              *overlay
+	mountedFloppies      [2]string
+	hostCommands         []hostCommand
+	lastHostCommandError string
+	fileSelector         func() (string, error)
+	fileDialogResults    chan fileDialogResult
+	fileDialogPending    [2]bool
+	selectedFloppyPaths  [2]string
 }
 
 const (
@@ -33,10 +43,33 @@ const (
 	audioQueueDuration = 250 * time.Millisecond
 )
 
+type hostCommandKind int
+
+const (
+	hostCommandMountFloppy hostCommandKind = iota
+	hostCommandEjectFloppy
+)
+
+type hostCommand struct {
+	kind  hostCommandKind
+	drive int
+	path  string
+}
+
+type fileDialogResult struct {
+	drive int
+	path  string
+	err   error
+}
+
 func Run(machine *emulator.Machine, cfg config.Config) error {
 	app := &App{
-		machine:  machine,
-		scale:    cfg.Scale,
+		machine: machine,
+		scale:   cfg.Scale,
+		mountedFloppies: [2]string{
+			cfg.FloppyA,
+			cfg.FloppyB,
+		},
 		prevKeys: make(map[ebitenlib.Key]bool),
 	}
 
@@ -66,8 +99,16 @@ func Run(machine *emulator.Machine, cfg config.Config) error {
 }
 
 func (a *App) Update() error {
-	a.handleKeyboard()
-	a.handleMouse()
+	a.applyFileDialogResults()
+	a.applyHostCommands()
+	a.handleOverlayToggle()
+	if a.overlayVisible() {
+		a.setHostCursorMode(ebitenlib.CursorModeVisible)
+		a.overlay.Update()
+	} else {
+		a.handleKeyboard()
+		a.handleMouse()
+	}
 
 	changed, err := a.machine.StepFrame()
 	if err != nil {
@@ -86,11 +127,161 @@ func (a *App) Update() error {
 	return nil
 }
 
+func (a *App) QueueMountFloppy(drive int, path string) {
+	a.hostCommands = append(a.hostCommands, hostCommand{
+		kind:  hostCommandMountFloppy,
+		drive: drive,
+		path:  path,
+	})
+}
+
+func (a *App) QueueEjectFloppy(drive int) {
+	a.hostCommands = append(a.hostCommands, hostCommand{
+		kind:  hostCommandEjectFloppy,
+		drive: drive,
+	})
+}
+
+func (a *App) MountedFloppyPath(drive int) string {
+	if drive < 0 || drive >= len(a.mountedFloppies) {
+		return ""
+	}
+	return a.mountedFloppies[drive]
+}
+
+func (a *App) LastHostCommandError() string {
+	return a.lastHostCommandError
+}
+
+func (a *App) QueueBrowseFloppy(drive int) {
+	if drive < 0 || drive >= len(a.fileDialogPending) {
+		a.lastHostCommandError = fmt.Sprintf("unsupported floppy drive %d", drive)
+		return
+	}
+	if a.fileDialogPending[drive] {
+		a.lastHostCommandError = fmt.Sprintf("drive %c file selector already open", 'A'+drive)
+		return
+	}
+	if a.fileDialogResults == nil {
+		a.fileDialogResults = make(chan fileDialogResult, len(a.fileDialogPending))
+	}
+	a.fileDialogPending[drive] = true
+	a.lastHostCommandError = fmt.Sprintf("Opening drive %c file selector...", 'A'+drive)
+	results := a.fileDialogResults
+	selector := a.selectFloppyDiskImage
+	go func() {
+		path, err := selector()
+		results <- fileDialogResult{drive: drive, path: path, err: err}
+	}()
+}
+
+func (a *App) SelectedFloppyPath(drive int) string {
+	if drive < 0 || drive >= len(a.selectedFloppyPaths) {
+		return ""
+	}
+	return a.selectedFloppyPaths[drive]
+}
+
+func (a *App) ClearSelectedFloppyPath(drive int) {
+	if drive < 0 || drive >= len(a.selectedFloppyPaths) {
+		return
+	}
+	a.selectedFloppyPaths[drive] = ""
+}
+
+func (a *App) selectFloppyDiskImage() (string, error) {
+	if a.fileSelector != nil {
+		return a.fileSelector()
+	}
+	return host.SelectFloppyDiskImage()
+}
+
+func (a *App) applyFileDialogResults() {
+	for a.fileDialogResults != nil {
+		select {
+		case result := <-a.fileDialogResults:
+			a.applyFileDialogResult(result)
+		default:
+			return
+		}
+	}
+}
+
+func (a *App) applyFileDialogResult(result fileDialogResult) {
+	if result.drive < 0 || result.drive >= len(a.fileDialogPending) {
+		a.lastHostCommandError = fmt.Sprintf("unsupported floppy drive %d", result.drive)
+		return
+	}
+	a.fileDialogPending[result.drive] = false
+	if result.err != nil {
+		if errors.Is(result.err, host.ErrFileDialogCanceled) {
+			a.lastHostCommandError = ""
+			return
+		}
+		a.lastHostCommandError = result.err.Error()
+		return
+	}
+	a.selectedFloppyPaths[result.drive] = result.path
+	a.lastHostCommandError = ""
+}
+
+func (a *App) applyHostCommands() {
+	commands := a.hostCommands
+	a.hostCommands = nil
+	for _, command := range commands {
+		if err := a.applyHostCommand(command); err != nil {
+			a.lastHostCommandError = err.Error()
+			return
+		}
+		a.lastHostCommandError = ""
+	}
+}
+
+func (a *App) applyHostCommand(command hostCommand) error {
+	switch command.kind {
+	case hostCommandMountFloppy:
+		return a.mountFloppy(command.drive, command.path)
+	case hostCommandEjectFloppy:
+		return a.ejectFloppy(command.drive)
+	default:
+		return fmt.Errorf("unsupported host command %d", command.kind)
+	}
+}
+
+func (a *App) mountFloppy(drive int, path string) error {
+	if drive < 0 || drive >= len(a.mountedFloppies) {
+		return fmt.Errorf("unsupported floppy drive %d", drive)
+	}
+	disk, err := emulator.LoadDiskImage(path)
+	if err != nil {
+		return fmt.Errorf("load drive %c disk: %w", 'A'+drive, err)
+	}
+	if err := a.machine.InsertFloppy(drive, disk); err != nil {
+		return fmt.Errorf("insert drive %c disk: %w", 'A'+drive, err)
+	}
+	a.mountedFloppies[drive] = path
+	return nil
+}
+
+func (a *App) ejectFloppy(drive int) error {
+	if drive < 0 || drive >= len(a.mountedFloppies) {
+		return fmt.Errorf("unsupported floppy drive %d", drive)
+	}
+	if err := a.machine.EjectFloppy(drive); err != nil {
+		return fmt.Errorf("eject drive %c disk: %w", 'A'+drive, err)
+	}
+	a.mountedFloppies[drive] = ""
+	return nil
+}
+
 func (a *App) Draw(screen *ebitenlib.Image) {
 	if a.texture == nil {
 		return
 	}
 	screen.DrawImage(a.texture, nil)
+	if a.overlayVisible() {
+		a.overlay.Draw(screen)
+	}
 }
 
 func (a *App) Layout(int, int) (int, int) {
@@ -212,6 +403,26 @@ func (a *App) resetMouseTracking() {
 	a.lastButtons = 0
 	a.mouseReady = false
 	a.cursorMode = ebitenlib.CursorModeVisible
+}
+
+func (a *App) handleOverlayToggle() {
+	if inpututil.IsKeyJustPressed(ebitenlib.KeyF12) {
+		a.setOverlayVisible(!a.overlayVisible())
+	}
+}
+
+func (a *App) overlayVisible() bool {
+	return a.overlay.Visible()
+}
+
+func (a *App) setOverlayVisible(visible bool) {
+	if a.overlay == nil {
+		a.overlay = newOverlay(a)
+	}
+	a.overlay.SetVisible(visible)
+	if visible {
+		a.resetMouseTracking()
+	}
 }
 
 func (a *App) setHostCursorMode(mode ebitenlib.CursorModeType) {
