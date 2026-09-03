@@ -2,11 +2,24 @@
 
 ## Unreleased
 
+## v0.4.0 - 2026-09-04
+
 ### Added
 
+- Added the first GUI support for runtime floppy mounting: press `F12` during desktop execution to open an overlay with drive A/B path fields plus `Browse`, `Mount`, and `Eject` controls. `Browse` opens the native file selector on macOS and falls back to manual path entry on every other build; mounting accepts the same disk image formats as `--floppy-a` / `--floppy-b`.
+- Added `FDC` / `Machine` disk-eject APIs (`EjectDiskFromDrive`, `EjectFloppy`) and an Ebiten host-command queue that applies mount/eject/browse requests on the game-loop thread, reporting failures on a status line instead of aborting.
 - Documented 1st Word Plus 2.02 as working from local Atarimania `.stx` floppy images on the 1040STE monochrome profile.
 - Added an optional local smoke test for booting with the 1st Word Plus 2.02 `.stx` disk pair mounted.
-- Added the first GUI support for runtime floppy mounting: FDC/Machine eject APIs, an Ebiten host-command queue, and an F12 Ebiten UI panel with drive A/B path fields plus Browse/Mount/Eject controls.
+
+### Changed
+
+- Raised the minimum Go version to 1.27.
+- Updated the CPU dependency to `github.com/jenska/m68kemu v1.4.0` (tagged release) and refreshed `m68kdasm`, `ym2149`, Ebitengine, and `golang.org/x/*` to their current versions.
+- Simplified the new floppy-mount code: removed dead code and redundant guards, collapsed the panel colour indirection into `color.NRGBA`, and merged the duplicated path-refresh paths.
+
+### Notes
+
+- This remains a development release. Real TOS compatibility, exact MMU behavior, copy-protected disk formats, and full IKBD/MIDI coverage are still incomplete.
 
 ## v0.3.0 - 2026-06-13
 
