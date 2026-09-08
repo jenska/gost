@@ -33,7 +33,7 @@ func BenchmarkMixedAudioSourceDrain(b *testing.B) {
 	b.SetBytes(int64(len(out) * 4))
 	b.ResetTimer()
 
-	for range b.N {
+	for b.Loop() {
 		_ = mixer.DrainMonoF32(out)
 	}
 }

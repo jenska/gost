@@ -670,6 +670,7 @@ func (s *Shifter) prepareRenderLineAddrs(mode byte) {
 
 func (s *Shifter) renderParallel(job shifterRenderJob, workers int) shifterRenderStats {
 	s.ensureRenderWorkers(workers)
+	dispatched := 0
 	for worker := range workers {
 		start := worker * job.height / workers
 		end := (worker + 1) * job.height / workers
@@ -683,8 +684,9 @@ func (s *Shifter) renderParallel(job shifterRenderJob, workers int) shifterRende
 			endY:        end,
 			done:        s.renderDone,
 		}
+		dispatched++
 	}
-	for range workers {
+	for range dispatched {
 		<-s.renderDone
 	}
 

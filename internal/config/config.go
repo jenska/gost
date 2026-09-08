@@ -649,10 +649,22 @@ func mhzToHz(mhz float64) (uint64, error) {
 	return hz, nil
 }
 
+// romImageMaxBytes is a generous ceiling on a loadable ROM image. Real TOS
+// images top out at 512 KiB and the ST ROM window spans 1 MiB; anything larger
+// is almost certainly the wrong file (a disk or hard-disk image passed as
+// --rom or --cartridge).
+const romImageMaxBytes = 1024 * 1024
+
 func LoadROM(path string) ([]byte, error) {
 	image, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	if len(image) == 0 {
+		return nil, fmt.Errorf("ROM image %q is empty", path)
+	}
+	if len(image) > romImageMaxBytes {
+		return nil, fmt.Errorf("ROM image %q is %d bytes, which exceeds the %d byte maximum", path, len(image), romImageMaxBytes)
 	}
 	if len(image)%2 != 0 {
 		image = append(image, 0xFF)

@@ -279,6 +279,22 @@ func TestLoadROMKeepsEvenLengthImages(t *testing.T) {
 	}
 }
 
+func TestLoadROMRejectsEmptyImage(t *testing.T) {
+	path := writeTempROM(t, nil)
+
+	if _, err := LoadROM(path); err == nil {
+		t.Fatal("expected an error loading an empty ROM image")
+	}
+}
+
+func TestLoadROMRejectsOversizedImage(t *testing.T) {
+	path := writeTempROM(t, make([]byte, romImageMaxBytes+2))
+
+	if _, err := LoadROM(path); err == nil {
+		t.Fatalf("expected an error loading a ROM image larger than %d bytes", romImageMaxBytes)
+	}
+}
+
 func writeTempROM(t *testing.T, data []byte) string {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "rom-*.img")

@@ -166,6 +166,12 @@ func (m *Machine) dispatchInterrupts() {
 	}
 }
 
+// maskedAutovectorPulse reports whether irq is an autovectored HBL/VBL pulse that
+// the current interrupt mask would ignore. GLUE delivers these as edge pulses
+// rather than a held line, so a pulse that arrives while masked is dropped here
+// instead of latching until the mask drops. This matches how the ST's autovector
+// interrupts behave for software that briefly raises IPL during critical
+// sections; vectored (MFP) interrupts are never dropped this way.
 func (m *Machine) maskedAutovectorPulse(irq devices.Interrupt) bool {
 	if irq.Vector != nil {
 		return false

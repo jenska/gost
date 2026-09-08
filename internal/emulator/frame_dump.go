@@ -1,6 +1,7 @@
 package emulator
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/png"
@@ -11,8 +12,10 @@ import (
 )
 
 type FrameDumpEncoder struct {
-	jobs chan frameDumpJob
-	wg   sync.WaitGroup
+	jobs   chan frameDumpJob
+	wg     sync.WaitGroup
+	mu     sync.Mutex
+	closed bool
 }
 
 type frameDumpJob struct {
@@ -53,13 +56,22 @@ func (e *FrameDumpEncoder) EncodePNG(path string, width, height int, pixels []by
 		return result
 	}
 	snapshot := append([]byte(nil), pixels...)
-	e.jobs <- frameDumpJob{
+	job := frameDumpJob{
 		path:   path,
 		width:  width,
 		height: height,
 		pixels: snapshot,
 		result: result,
 	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		result <- fmt.Errorf("frame dump encoder is closed")
+		close(result)
+		return result
+	}
+	e.jobs <- job
 	return result
 }
 
@@ -67,7 +79,12 @@ func (e *FrameDumpEncoder) Close() {
 	if e == nil {
 		return
 	}
-	close(e.jobs)
+	e.mu.Lock()
+	if !e.closed {
+		e.closed = true
+		close(e.jobs)
+	}
+	e.mu.Unlock()
 	e.wg.Wait()
 }
 
@@ -149,11 +166,9 @@ func writeFramePNG(path string, width, height int, pixels []byte) error {
 		}
 	}
 
-	file, err := os.Create(path)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
 		return err
 	}
-	defer file.Close()
-
-	return png.Encode(file, img)
+	return writeFileAtomic(path, buf.Bytes(), 0o644)
 }

@@ -23,6 +23,7 @@ type GLUE struct {
 	cycleInFrame   uint64
 	nextLine       uint64
 	pending        []Interrupt
+	draining       []Interrupt
 }
 
 func NewGLUE(cfg ...*config.Config) *GLUE {
@@ -93,13 +94,17 @@ func (g *GLUE) Advance(cycles uint64) {
 	}
 }
 
+// DrainInterrupts returns the interrupts queued since the last call. GLUE emits
+// an HBL pulse every scanline and is drained twice per emulation quantum, so the
+// result is handed back in a reused buffer that stays valid only until the next
+// DrainInterrupts call.
 func (g *GLUE) DrainInterrupts() []Interrupt {
 	if len(g.pending) == 0 {
 		return nil
 	}
-	out := append([]Interrupt(nil), g.pending...)
+	g.draining = append(g.draining[:0], g.pending...)
 	g.pending = g.pending[:0]
-	return out
+	return g.draining
 }
 
 func (g *GLUE) NextEventCycles() (uint64, bool) {

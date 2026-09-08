@@ -202,10 +202,40 @@ func isHDIPath(path string) bool {
 	return strings.EqualFold(filepath.Ext(path), ".hdi")
 }
 
+// writeFileAtomic writes data to a uniquely named temporary file in the target
+// directory and renames it into place, so a crash or write error never leaves a
+// half-written file at path. The temporary file is removed on any failure.
 func writeFileAtomic(path string, data []byte, perms os.FileMode) error {
-	tempPath := path + ".tmp"
-	if err := os.WriteFile(tempPath, data, perms); err != nil {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tempPath, path)
+	tmpPath := tmp.Name()
+
+	committed := false
+	defer func() {
+		if !committed {
+			tmp.Close()
+			os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, perms); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }

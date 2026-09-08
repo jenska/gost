@@ -1,8 +1,6 @@
 # GoST - Atari ST Emulator in Go
 
-<p align="center">
-  <img src="assets/media/gost.png" alt="GoST logo" width="240">
-</p>
+![GoST logo](assets/media/gost.png)
 
 GoST is an Atari ST emulator in Go built around [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu) for Motorola 68000 CPU emulation.
 
@@ -159,7 +157,7 @@ During desktop execution, press `F12` to open the GoST overlay. The current over
 
 ## WebAssembly
 
-Yes: this project already compiles to `GOOS=js GOARCH=wasm`, and the bundled EmuTOS image makes a browser build practical without adding ROM download steps.
+GoST compiles to `GOOS=js GOARCH=wasm`, and the bundled EmuTOS image lets the browser build boot without a separate ROM download step.
 
 Build the browser demo assets into `wasm/`:
 

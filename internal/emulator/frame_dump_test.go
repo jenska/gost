@@ -43,6 +43,22 @@ func TestFrameDumpEncoderSnapshotsPixelsBeforeEncode(t *testing.T) {
 	assertPNGPixel(t, filepath.Join(dir, "snapshot.png"), []byte{0x10, 0x20, 0x30, 0xFF})
 }
 
+func TestFrameDumpEncoderRejectsEncodeAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	encoder := NewFrameDumpEncoder(1)
+	encoder.Close()
+	encoder.Close() // Close must be idempotent.
+
+	frame := solidTestRGBA(1, 1, []byte{0x10, 0x20, 0x30, 0xFF})
+	result := encoder.EncodePNG(filepath.Join(dir, "closed.png"), 1, 1, frame)
+	if err := <-result; err == nil {
+		t.Fatal("expected an error encoding through a closed encoder")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "closed.png")); !os.IsNotExist(err) {
+		t.Fatalf("closed encoder wrote a file: %v", err)
+	}
+}
+
 func solidTestRGBA(width, height int, rgba []byte) []byte {
 	frame := make([]byte, width*height*4)
 	for offset := 0; offset < len(frame); offset += 4 {
