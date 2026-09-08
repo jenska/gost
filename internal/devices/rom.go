@@ -86,6 +86,17 @@ func (r *ROM) Bytes() []byte {
 	return append([]byte(nil), r.data...)
 }
 
+// Image returns the live ROM backing bytes. The contents are immutable, so the
+// slice is safe to hand to a read-only fast-memory region.
+func (r *ROM) Image() []byte {
+	return r.data
+}
+
+// Aliases returns the base addresses at which the ROM image is mapped.
+func (r *ROM) Aliases() []uint32 {
+	return append([]uint32(nil), r.aliases...)
+}
+
 func (r *ROM) Slice(address uint32, size cpu.Size) (uint32, error) {
 	return r.Read(size, address)
 }

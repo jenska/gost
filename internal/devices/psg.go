@@ -32,8 +32,8 @@ func NewPSG(cpuClockHz uint64) *PSG {
 	}
 }
 
-func (p *PSG) Contains(address uint32) bool {
-	return address >= psgBase && address < psgBase+psgSize
+func (p *PSG) AddressRange() (uint32, uint32) {
+	return psgBase, psgBase + psgSize - 1
 }
 
 func (p *PSG) WaitStates(cpu.Size, uint32) uint32 {

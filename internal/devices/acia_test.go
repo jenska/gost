@@ -162,7 +162,7 @@ func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected one MFP interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x46 {
+	if irqs[0].Vector != 0x46 {
 		t.Fatalf("unexpected ACIA MFP vector: %+v", irqs[0].Vector)
 	}
 
@@ -198,7 +198,7 @@ func TestACIAMIDISignalsMFPInterruptOnReceive(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected one MFP interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x46 {
+	if irqs[0].Vector != 0x46 {
 		t.Fatalf("unexpected ACIA MFP vector: %+v", irqs[0].Vector)
 	}
 

@@ -74,34 +74,34 @@ func (m *Machine) EnableTrace(mode string, writer io.Writer) {
 		writer = io.Discard
 	}
 	m.traceWriter = writer
-	m.cpu.SetTracer(nil)
-	m.cpu.SetBusTracer(nil)
-	m.cpu.SetExceptionTracer(nil)
 	m.shifter.SetDebug(false)
 
+	// EnableTrace fully owns the CPU observation hooks: every call replaces the
+	// whole set, so an unhandled mode clears them.
+	var hooks cpu.Hooks
 	switch TraceMode(mode) {
 	case TraceModeSimple:
-		m.cpu.SetTracer(func(info cpu.TraceInfo) {
+		hooks.Trace = func(info cpu.TraceInfo) {
 			fmt.Fprintf(m.traceWriter, "pc=%06x sr=%04x cycles=%d\n", info.PC, info.SR, m.cpu.Cycles())
-		})
+		}
 	case TraceModeSimpleVerbose:
 		logger := cpu.NewVerboseLogger(m.cpu, m.bus, m.traceWriter, cpu.VerboseLoggerOptions{
 			IncludeCycles: true,
 		})
-		m.cpu.SetTracer(logger.Trace)
+		hooks.Trace = logger.Trace
 	case TraceModeBootSimple:
-		m.enableBootTrace(false)
+		hooks = m.bootTraceHooks(false)
 	case TraceModeBootVerbose:
-		m.enableBootTrace(true)
+		hooks = m.bootTraceHooks(true)
 	case TraceModeShifterSimple, TraceModeShifterVerbose:
 		m.shifter.SetDebug(true)
-	default:
-		m.cpu.SetTracer(nil)
 	}
+	m.cpu.SetHooks(hooks)
 }
 
-func (m *Machine) enableBootTrace(verbose bool) {
-	m.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+func (m *Machine) bootTraceHooks(verbose bool) cpu.Hooks {
+	var hooks cpu.Hooks
+	hooks.Bus = func(info cpu.BusAccessInfo) {
 		address := info.Address & 0xFFFFFF
 		if info.InstructionFetch || !bootTraceAddressSet[address] {
 			return
@@ -116,8 +116,8 @@ func (m *Machine) enableBootTrace(verbose bool) {
 			regs.A[7],
 			traceValueString(info.Size, info.Value),
 		)
-	})
-	m.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	}
+	hooks.Exception = func(info cpu.ExceptionInfo) {
 		if info.FaultValid {
 			fmt.Fprintf(m.traceWriter, "exception vector=%d pc=%06x newpc=%06x opcode=%04x fault=%06x sr=%04x newsr=%04x\n",
 				info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.FaultAddress&0xFFFFFF, info.SR, info.NewSR)
@@ -125,23 +125,23 @@ func (m *Machine) enableBootTrace(verbose bool) {
 		}
 		fmt.Fprintf(m.traceWriter, "exception vector=%d pc=%06x newpc=%06x opcode=%04x sr=%04x newsr=%04x\n",
 			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR)
-	})
+	}
 
 	if verbose {
 		logger := cpu.NewVerboseLogger(m.cpu, m.bus, m.traceWriter, cpu.VerboseLoggerOptions{
 			IncludeRegisters: true,
 			IncludeCycles:    true,
 		})
-		m.cpu.SetTracer(func(info cpu.TraceInfo) {
+		hooks.Trace = func(info cpu.TraceInfo) {
 			pc := info.PC & 0xFFFFFF
 			if m.tracePCInRange(pc) {
 				logger.Trace(info)
 			}
-		})
-		return
+		}
+		return hooks
 	}
 
-	m.cpu.SetTracer(func(info cpu.TraceInfo) {
+	hooks.Trace = func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if !m.tracePCInRange(pc) {
 			return
@@ -160,7 +160,8 @@ func (m *Machine) enableBootTrace(verbose bool) {
 			info.Registers.A[7],
 			m.decodeTraceInstruction(info),
 		)
-	})
+	}
+	return hooks
 }
 
 func (m *Machine) tracePCInRange(pc uint32) bool {

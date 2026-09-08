@@ -6,7 +6,7 @@ require (
 	github.com/ebitenui/ebitenui v0.7.3
 	github.com/hajimehoshi/ebiten/v2 v2.9.11
 	github.com/jenska/m68kdasm v1.1.0
-	github.com/jenska/m68kemu v1.4.0
+	github.com/jenska/m68kemu v1.5.0
 	github.com/jenska/ym2149 v1.1.0
 	golang.org/x/image v0.45.0
 )

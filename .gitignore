@@ -10,3 +10,5 @@ FLOPPIES/
 gost
 .vscode/
 .tmp/
+go.work
+go.work.sum

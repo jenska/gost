@@ -1,0 +1,8 @@
+{
+  "preset": "st",
+  "model": "st",
+  "ram-size": 1048576,
+  "color-monitor": true,
+  "rom": "TOS/TOS100GE.IMG",
+  "scale": 2
+}

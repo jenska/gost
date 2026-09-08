@@ -150,8 +150,8 @@ func NewFDC(ram *RAM, irq func(bool)) *FDC {
 	return f
 }
 
-func (f *FDC) Contains(address uint32) bool {
-	return address >= fdcBase && address < fdcBase+fdcSize
+func (f *FDC) AddressRange() (uint32, uint32) {
+	return fdcBase, fdcBase + fdcSize - 1
 }
 
 func (f *FDC) WaitStates(cpu.Size, uint32) uint32 {
@@ -1099,7 +1099,7 @@ func (f *FDC) commandSectorCount(cmd byte) (count int, multi bool) {
 
 func (f *FDC) queueInterrupt() {
 	vector := f.vector
-	f.pending = append(f.pending, Interrupt{Level: 5, Vector: &vector})
+	f.pending = append(f.pending, Interrupt{Level: 5, Vector: vector})
 	if f.irq != nil {
 		f.irq(true)
 	}

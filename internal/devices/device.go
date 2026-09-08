@@ -6,12 +6,16 @@ import (
 	cpu "github.com/jenska/m68kemu"
 )
 
+// AutoVector is the Interrupt.Vector value that asks the CPU to auto-vector the
+// request (vector 24+Level) rather than take a device-supplied vector.
+const AutoVector = cpu.AutoVector
+
 // Interrupt models a pending CPU interrupt from a device to the CPU.
 type Interrupt struct {
 	// Level is the interrupt priority level (1-7).
 	Level uint8
-	// Vector is a pointer to the exception vector address if applicable, nil for autovector.
-	Vector *uint8
+	// Vector is the exception vector number, or AutoVector to auto-vector.
+	Vector uint8
 }
 
 // Clocked represents a device that advances its internal state with CPU cycles.

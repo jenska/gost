@@ -102,8 +102,8 @@ func NewMFP(cfg *config.Config) *MFP {
 	return m
 }
 
-func (m *MFP) Contains(address uint32) bool {
-	return address >= mfpBase && address < mfpBase+mfpSize
+func (m *MFP) AddressRange() (uint32, uint32) {
+	return mfpBase, mfpBase + mfpSize - 1
 }
 
 func (m *MFP) WaitStates(cpu.Size, uint32) uint32 {
@@ -213,7 +213,7 @@ func (m *MFP) DrainInterrupts() []Interrupt {
 	}
 
 	vector := m.vectorBase + uint8(channel)
-	return []Interrupt{{Level: 6, Vector: &vector}}
+	return []Interrupt{{Level: 6, Vector: vector}}
 }
 
 func (m *MFP) NextEventCycles() (uint64, bool) {

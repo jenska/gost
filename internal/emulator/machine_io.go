@@ -60,6 +60,12 @@ type (
 		cpuCycleCarry uint64
 		traceWriter   io.Writer
 		frameCounter  uint64
+		// fastRegions is the reusable buffer of flat-memory regions handed to the
+		// CPU via SetFastMemory (installed once per reset, ROM mirrors only).
+		fastRegions []cpu.FastRegion
+		// disableFastMemory forces every access back through the bus. Used by
+		// benchmarks and by anyone debugging a suspected fast-region fault.
+		disableFastMemory bool
 	}
 )
 
@@ -177,7 +183,9 @@ func (m *Machine) EjectFloppy(drive int) error {
 	return m.fdc.EjectDiskFromDrive(drive)
 }
 
-func (m *Machine) RequestInterrupt(level uint8, vector *uint8) error {
+// RequestInterrupt queues a CPU interrupt at the given level (1-7). Pass
+// cpu.AutoVector for vector to auto-vector it.
+func (m *Machine) RequestInterrupt(level, vector uint8) error {
 	return m.cpu.RequestInterrupt(level, vector)
 }
 
