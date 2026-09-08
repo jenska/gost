@@ -13,13 +13,17 @@ ROM ?=
 RUN_CONFIG ?= configs/atari-1040ste-mono.json
 RUN_FLOPPY_ARGS :=
 
-.PHONY: help ci build test run run-rom  headless headless-rom  wasm clean
+.PHONY: help ci build test test-race vet fmt fmt-check run run-rom  headless headless-rom  wasm clean
 
 help:
 	@printf "Available targets:\n"
-	@printf "  make ci               Run tests and build native + wasm artifacts\n"
+	@printf "  make ci               Run format/vet checks, race tests, and build native + wasm artifacts\n"
 	@printf "  make build            Build the emulator binary\n"
 	@printf "  make test             Run the Go test suite\n"
+	@printf "  make test-race        Run the Go test suite with the race detector\n"
+	@printf "  make vet              Run go vet over all packages\n"
+	@printf "  make fmt              Format all Go sources with gofmt\n"
+	@printf "  make fmt-check        Fail if any Go source needs gofmt\n"
 	@printf "  make run              Run the desktop emulator with %s\n" "$(RUN_CONFIG)"
 	@printf "  make run-rom          Run with a local ROM via ROM=/path/to/tos.rom\n"
 	@printf "  make headless         Run headless for FRAMES=%s\n" "$(FRAMES)"
@@ -38,7 +42,7 @@ help:
 	@printf "  make run ARGS='--floppy-a /path/to/disk.msa'\n"
 	@printf "  make wasm\n"
 
-ci: test build wasm
+ci: fmt-check vet test-race build wasm
 
 build:
 	@mkdir -p $(BIN_DIR)
@@ -46,6 +50,22 @@ build:
 
 test:
 	$(GO) test ./...
+
+test-race:
+	$(GO) test -race ./...
+
+vet:
+	$(GO) vet ./...
+
+fmt:
+	gofmt -w $(shell $(GO) list -f '{{.Dir}}' ./...)
+
+fmt-check:
+	@unformatted=$$(gofmt -l $(shell $(GO) list -f '{{.Dir}}' ./...)); \
+	if [ -n "$$unformatted" ]; then \
+		printf 'gofmt needs to be run on:\n%s\n' "$$unformatted"; \
+		exit 1; \
+	fi
 
 run:
 	$(GO) run $(CMD) --config $(RUN_CONFIG) $(RUN_FLOPPY_ARGS) $(ARGS)
