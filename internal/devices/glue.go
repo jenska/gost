@@ -35,8 +35,8 @@ func NewGLUE(cfg ...*config.Config) *GLUE {
 	return g
 }
 
-func (g *GLUE) Contains(address uint32) bool {
-	return address >= glueBase && address < glueBase+glueSize
+func (g *GLUE) AddressRange() (uint32, uint32) {
+	return glueBase, glueBase + glueSize - 1
 }
 
 func (g *GLUE) Read(size cpu.Size, address uint32) (uint32, error) {

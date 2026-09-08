@@ -55,7 +55,7 @@ func TestGLUEQueuesHBLAtScanlineBoundary(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected one HBL interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Level != 2 || irqs[0].Vector != nil {
+	if irqs[0].Level != 2 || irqs[0].Vector != AutoVector {
 		t.Fatalf("unexpected HBL interrupt: %+v", irqs[0])
 	}
 }
@@ -70,7 +70,7 @@ func TestGLUEQueuesVBLAtFrameBoundary(t *testing.T) {
 		t.Fatalf("expected GLUE frame interrupts")
 	}
 	last := irqs[len(irqs)-1]
-	if last.Level != 4 || last.Vector != nil {
+	if last.Level != 4 || last.Vector != AutoVector {
 		t.Fatalf("expected final frame interrupt to be VBL autovector, got %+v", last)
 	}
 }

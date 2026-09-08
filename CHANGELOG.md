@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Changed
+
+- Fetches and TOS-vector reads from the boot ROM now bypass the bus via a
+  read-only flat memory window (`m68kemu` `SetFastMemory`), cutting an EmuTOS
+  boot benchmark by ~8%. Wait-state accounting is unchanged, so cycle counts,
+  register state, and the debug-trace suite are byte-for-byte identical to the
+  bus path; `machine.disableFastMemory` forces every access back through the bus.
+- `EnableTrace` installs CPU observation callbacks through the single
+  `m68kemu` `SetHooks` call instead of separate setters.
+- `Machine.RequestInterrupt` and `devices.Interrupt.Vector` now take a plain
+  `uint8` vector; pass `cpu.AutoVector` / `devices.AutoVector` (zero) to
+  auto-vector, replacing the previous `*uint8`.
+- The single-range peripherals (ACIA, GLUE, MFP, PSG, FDC, Blitter, STE sound,
+  cartridge ROM) expose `AddressRange()` and drop their `Contains` boilerplate;
+  the bus page-maps them instead of scanning.
+
+### Dependencies
+
+- `github.com/jenska/m68kemu` updated to v1.5.0 for the `WithDeferredReset`,
+  `SetHooks`/`Hooks`, and `SetFastMemory` APIs, a polished public surface
+  (plain-value `RequestInterrupt`, `*Bus` on `NewCPU`, fewer exported
+  internals), and optional `Device.Contains`.
+
 ## v0.4.0 - 2026-09-04
 
 ### Added

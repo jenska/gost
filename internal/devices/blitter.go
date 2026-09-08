@@ -33,8 +33,8 @@ func NewBlitter(ram *RAM) *Blitter {
 	return b
 }
 
-func (b *Blitter) Contains(address uint32) bool {
-	return address >= blitterBase && address < blitterBase+blitterSize
+func (b *Blitter) AddressRange() (uint32, uint32) {
+	return blitterBase, blitterBase + blitterSize - 1
 }
 
 func (b *Blitter) Read(size cpu.Size, address uint32) (uint32, error) {
@@ -74,8 +74,12 @@ func (b *Blitter) Reset() {
 	clear(b.regs[:])
 }
 
+func (b *Blitter) contains(address uint32) bool {
+	return address >= blitterBase && address < blitterBase+blitterSize
+}
+
 func (b *Blitter) offsetFor(address uint32, size cpu.Size) (uint32, error) {
-	if !b.Contains(address) {
+	if !b.contains(address) {
 		return 0, cpu.BusError(address)
 	}
 	offset := address - blitterBase

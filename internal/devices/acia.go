@@ -35,8 +35,8 @@ func NewACIA(aciaIRQ func(bool)) *ACIA {
 }
 
 // Contains reports whether the given address is serviced by the ACIA.
-func (a *ACIA) Contains(address uint32) bool {
-	return address >= aciaBase && address < aciaBase+aciaSize
+func (a *ACIA) AddressRange() (uint32, uint32) {
+	return aciaBase, aciaBase + aciaSize - 1
 }
 
 // WaitStates returns the fixed ACIA bus latency.

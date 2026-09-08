@@ -70,8 +70,8 @@ func NewAbsentSTESound() *BusErrorRegion {
 	return NewBusErrorRegion(AddressRange{Start: steSoundBase, End: steSoundBase + steSoundSize})
 }
 
-func (s *STESound) Contains(address uint32) bool {
-	return address >= steSoundBase && address < steSoundBase+steSoundSize
+func (s *STESound) AddressRange() (uint32, uint32) {
+	return steSoundBase, steSoundBase + steSoundSize - 1
 }
 
 func (s *STESound) WaitStates(cpu.Size, uint32) uint32 {
@@ -340,12 +340,16 @@ func (s *STESound) playing() bool {
 	return s.control&steSoundControlEnable != 0
 }
 
+func (s *STESound) contains(address uint32) bool {
+	return address >= steSoundBase && address < steSoundBase+steSoundSize
+}
+
 func (s *STESound) accessInRange(address uint32, count int) bool {
 	if count <= 0 {
 		return false
 	}
 	end := address + uint32(count) - 1
-	return s.Contains(address) && s.Contains(end)
+	return s.contains(address) && s.contains(end)
 }
 
 func steSoundAccessSize(size cpu.Size) (int, error) {

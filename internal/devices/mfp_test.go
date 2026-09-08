@@ -33,7 +33,7 @@ func TestMFPTimerQueuesInterrupt(t *testing.T) {
 	if irqs[0].Level != 6 {
 		t.Fatalf("unexpected interrupt level: got %d want 6", irqs[0].Level)
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x4D {
+	if irqs[0].Vector != 0x4D {
 		t.Fatalf("unexpected vector: %+v", irqs[0].Vector)
 	}
 }
@@ -62,7 +62,7 @@ func TestMFPTimerCQueuesInterrupt(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x45 {
+	if irqs[0].Vector != 0x45 {
 		t.Fatalf("unexpected vector: %+v", irqs[0].Vector)
 	}
 }
@@ -155,7 +155,7 @@ func TestMFPSoftwareEOIBlocksLowerPriorityInterrupts(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x4D {
+	if irqs[0].Vector != 0x4D {
 		t.Fatalf("unexpected vector for highest priority interrupt: %+v", irqs[0].Vector)
 	}
 
@@ -179,7 +179,7 @@ func TestMFPSoftwareEOIBlocksLowerPriorityInterrupts(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt after software eoi, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x48 {
+	if irqs[0].Vector != 0x48 {
 		t.Fatalf("unexpected vector after software eoi: %+v", irqs[0].Vector)
 	}
 }
@@ -240,7 +240,7 @@ func TestMFPTimerAccumulatesFractionalCPUClock(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt after 14 CPU cycles, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x45 {
+	if irqs[0].Vector != 0x45 {
 		t.Fatalf("unexpected vector: %+v", irqs[0].Vector)
 	}
 }
@@ -275,7 +275,7 @@ func TestMFPAutoEOITimerCRepeats(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected recurring timer c interrupt under auto-EOI, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x45 {
+	if irqs[0].Vector != 0x45 {
 		t.Fatalf("unexpected recurring timer c vector: %+v", irqs[0].Vector)
 	}
 }
@@ -346,7 +346,7 @@ func TestMFPSoftwareEOIPreventsDuplicateTimerDispatchBeforeServiceClear(t *testi
 	if len(irqs) != 1 {
 		t.Fatalf("expected pending timer c interrupt after service clear, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x45 {
+	if irqs[0].Vector != 0x45 {
 		t.Fatalf("unexpected vector after service clear: %+v", irqs[0].Vector)
 	}
 }
@@ -520,7 +520,7 @@ func TestMFPGPIPAERDefaultDetectsFallingACIAEdge(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected falling ACIA edge interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x46 {
+	if irqs[0].Vector != 0x46 {
 		t.Fatalf("unexpected falling ACIA edge vector: %+v", irqs[0].Vector)
 	}
 
@@ -556,7 +556,7 @@ func TestMFPGPIPAERDetectsRisingACIAEdgeWhenConfigured(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected rising ACIA edge interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x46 {
+	if irqs[0].Vector != 0x46 {
 		t.Fatalf("unexpected rising ACIA edge vector: %+v", irqs[0].Vector)
 	}
 }
@@ -607,7 +607,7 @@ func TestMFPGPIPAERDetectsFallingRTCEdgeOnGPIP5(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected falling RTC edge interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x47 {
+	if irqs[0].Vector != 0x47 {
 		t.Fatalf("unexpected falling RTC edge vector: %+v", irqs[0].Vector)
 	}
 
@@ -719,7 +719,7 @@ func TestMFPRS232ReceiveByteSetsStatusAndInterrupt(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected receive interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x4C {
+	if irqs[0].Vector != 0x4C {
 		t.Fatalf("unexpected receive vector: %+v", irqs[0].Vector)
 	}
 
@@ -811,7 +811,7 @@ func TestMFPRS232TransmitCapturesOutputAndInterrupts(t *testing.T) {
 	if len(irqs) != 1 {
 		t.Fatalf("expected transmit interrupt, got %d", len(irqs))
 	}
-	if irqs[0].Vector == nil || *irqs[0].Vector != 0x4A {
+	if irqs[0].Vector != 0x4A {
 		t.Fatalf("unexpected transmit vector: %+v", irqs[0].Vector)
 	}
 }

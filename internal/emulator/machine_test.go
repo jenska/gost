@@ -361,7 +361,7 @@ func TestMachineInterruptHandling(t *testing.T) {
 		t.Fatalf("load interrupt handler: %v", err)
 	}
 
-	if err := machine.RequestInterrupt(6, nil); err != nil {
+	if err := machine.RequestInterrupt(6, cpu.AutoVector); err != nil {
 		t.Fatalf("request interrupt: %v", err)
 	}
 
@@ -905,7 +905,7 @@ func TestMachineKeepsMaskedVectoredInterruptPending(t *testing.T) {
 	machine := mustMachine(t, rom)
 	vector := uint8(64)
 	machine.irqSources = []devices.InterruptSource{
-		&testIRQSource{pending: []devices.Interrupt{{Level: 6, Vector: &vector}}},
+		&testIRQSource{pending: []devices.Interrupt{{Level: 6, Vector: vector}}},
 	}
 
 	handlerAddress := uint32(0x00002000)

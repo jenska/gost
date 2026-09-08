@@ -28,8 +28,8 @@ func NewCartridgeROM(image []byte) (*CartridgeROM, error) {
 	return &CartridgeROM{data: append([]byte(nil), image...)}, nil
 }
 
-func (c *CartridgeROM) Contains(address uint32) bool {
-	return address >= cartridgeROMBase && address < cartridgeROMBase+cartridgeROMSize
+func (c *CartridgeROM) AddressRange() (uint32, uint32) {
+	return cartridgeROMBase, cartridgeROMBase + cartridgeROMSize - 1
 }
 
 func (c *CartridgeROM) Read(size cpu.Size, address uint32) (uint32, error) {
