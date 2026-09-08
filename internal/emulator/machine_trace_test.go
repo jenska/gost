@@ -10,27 +10,6 @@ import (
 	cpu "github.com/jenska/m68kemu"
 )
 
-func TestIsBootTraceAddress(t *testing.T) {
-	tests := []struct {
-		name    string
-		address uint32
-		want    bool
-	}{
-		{name: "watched low memory", address: 0x000010, want: true},
-		{name: "watched io register", address: 0xFF8001, want: true},
-		{name: "masked high bits still match 24-bit bus address", address: 0x12FF8201, want: true},
-		{name: "unwatched address", address: 0x00E003CE, want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isBootTraceAddress(tt.address); got != tt.want {
-				t.Fatalf("isBootTraceAddress(%08x) = %v, want %v", tt.address, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestMachineShifterTraceModeEmitsFrameSummary(t *testing.T) {
 	machine := mustMachine(t, loopROM([]byte{0x4E, 0x71, 0x60, 0xFE}))
 	var out bytes.Buffer
@@ -94,7 +73,7 @@ func TestMachineTracePCInRange(t *testing.T) {
 
 func TestMachineNextDeviceEventCycles(t *testing.T) {
 	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50, ColorMonitor: false}
-	vbl := devices.NewVBLSource(cfg)
+	glue := devices.NewGLUE(cfg)
 	mfp := devices.NewMFP(cfg)
 	if err := mfp.Write(1, 0xFFFA23, 1); err != nil {
 		t.Fatalf("write timer c data: %v", err)
@@ -103,7 +82,7 @@ func TestMachineNextDeviceEventCycles(t *testing.T) {
 		t.Fatalf("write timer cd control: %v", err)
 	}
 
-	machine := &Machine{clocked: []devices.Clocked{mfp, vbl}}
+	machine := &Machine{clocked: []devices.Clocked{mfp, glue}}
 	cycles, ok := machine.nextDeviceEventCycles()
 	if !ok {
 		t.Fatalf("expected a next device event")

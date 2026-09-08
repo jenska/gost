@@ -41,11 +41,6 @@ const (
 	PresetMegaST  Preset = "mega-st"
 )
 
-type PresetDefinition struct {
-	Name        Preset
-	Description string
-}
-
 const (
 	KeyConfig         = "config"
 	KeyPreset         = "preset"
@@ -73,25 +68,6 @@ const (
 	KeyMidResYScale   = "midres-y-scale"
 	KeyModel          = "model"
 )
-
-var presetDefinitions = []PresetDefinition{
-	{
-		Name:        PresetDefault,
-		Description: "development-friendly defaults with 1 MiB RAM and a 30 MiB virtual hard disk",
-	},
-	{
-		Name:        PresetSTF,
-		Description: "Atari STF baseline with ST timing, 1 MiB RAM, color monitor, and a 30 MiB virtual hard disk",
-	},
-	{
-		Name:        PresetST,
-		Description: "Atari ST baseline with ST timing, 512 KiB RAM, monochrome monitor, and a 30 MiB virtual hard disk",
-	},
-	{
-		Name:        PresetMegaST,
-		Description: "Atari Mega ST baseline with ST timing, 2 MiB RAM, monochrome monitor, and a 30 MiB virtual hard disk",
-	},
-}
 
 // Config holds all configuration parameters for the Atari ST emulation.
 type Config struct {
@@ -203,12 +179,6 @@ func (f mhzFlag) Set(raw string) error {
 	}
 	*f.target = hz
 	return nil
-}
-
-func Presets() []PresetDefinition {
-	definitions := make([]PresetDefinition, len(presetDefinitions))
-	copy(definitions, presetDefinitions)
-	return definitions
 }
 
 func DefaultConfig() *Config {

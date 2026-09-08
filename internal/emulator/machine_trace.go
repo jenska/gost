@@ -173,10 +173,6 @@ func (m *Machine) tracePCInRange(pc uint32) bool {
 	return pc >= start && pc <= end
 }
 
-func isBootTraceAddress(address uint32) bool {
-	return bootTraceAddressSet[address&0xFFFFFF]
-}
-
 func traceAccessKind(write bool) string {
 	if write {
 		return "write"
