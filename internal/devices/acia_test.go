@@ -123,7 +123,7 @@ func TestACIAMIDIStaggersQueuedBytesAcrossAdvances(t *testing.T) {
 	}
 }
 
-func TestACIAKeyboardDoesNotQueueDirectCPUInterrupt(t *testing.T) {
+func TestACIAKeyboardDoesNotDriveCPUInterruptLine(t *testing.T) {
 	acia := NewACIA(nil)
 
 	if err := acia.Write(1, aciaBase, 0x95); err != nil {
@@ -133,8 +133,10 @@ func TestACIAKeyboardDoesNotQueueDirectCPUInterrupt(t *testing.T) {
 	acia.PushKey(0x1E, true)
 	acia.Advance(0)
 
-	if irqs := acia.DrainInterrupts(); len(irqs) != 0 {
-		t.Fatalf("expected no direct CPU interrupts from ACIA, got %d", len(irqs))
+	// The ACIA has no interrupt line of its own; it signals the CPU only by
+	// driving MFP GPIP i4 through the SetACIAInterrupt callback.
+	if _, drivesLine := any(acia).(interface{ PendingIRQ() (uint8, uint8) }); drivesLine {
+		t.Fatal("ACIA must route interrupts through the MFP, not drive the CPU line directly")
 	}
 }
 
@@ -158,7 +160,7 @@ func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
 	acia.PushKey(0x1E, true)
 	acia.Advance(0)
 
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected one MFP interrupt, got %d", len(irqs))
 	}
@@ -170,7 +172,7 @@ func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
 		t.Fatalf("read keyboard data: %v", err)
 	}
 
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected interrupt to clear after data read, got %d", len(irqs))
 	}
 }
@@ -194,7 +196,7 @@ func TestACIAMIDISignalsMFPInterruptOnReceive(t *testing.T) {
 
 	acia.PushMIDIInput([]byte{0x90})
 
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected one MFP interrupt, got %d", len(irqs))
 	}
@@ -205,7 +207,7 @@ func TestACIAMIDISignalsMFPInterruptOnReceive(t *testing.T) {
 	if _, err := acia.Read(1, aciaBase+6); err != nil {
 		t.Fatalf("read MIDI data: %v", err)
 	}
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected interrupt to clear after MIDI data read, got %d", len(irqs))
 	}
 }

@@ -312,14 +312,7 @@ func TestBundledEmuTOSDoesNotPanicWithoutMFPDelivery(t *testing.T) {
 	}
 	machine.clocked = filteredClocked
 
-	filteredIRQs := make([]devices.InterruptSource, 0, len(machine.irqSources))
-	for _, source := range machine.irqSources {
-		if source == machine.mfp {
-			continue
-		}
-		filteredIRQs = append(filteredIRQs, source)
-	}
-	machine.irqSources = filteredIRQs
+	keepDeviceIRQ(machine, true, false, true)
 
 	stepFrames(t, machine, 120)
 

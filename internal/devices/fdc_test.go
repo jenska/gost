@@ -896,7 +896,7 @@ func TestFDCAcsiSingleByteTestUnitReadyCompletesOnDeselect(t *testing.T) {
 	if fdc.acsiStatus != acsiStatusGood {
 		t.Fatalf("single-byte TUR status = %02x, want %02x", fdc.acsiStatus, acsiStatusGood)
 	}
-	if pending := fdc.DrainInterrupts(); len(pending) != 1 {
+	if pending := drainIRQ(fdc); len(pending) != 1 {
 		t.Fatalf("single-byte TUR should queue one interrupt, got %d", len(pending))
 	}
 }
@@ -945,7 +945,7 @@ func TestFDCAcsiPartialCommandBytesAssertHandshakeLine(t *testing.T) {
 	if len(line) < 2 || line[len(line)-2] || !line[len(line)-1] {
 		t.Fatalf("expected partial command byte to pulse handshake line low/high, got %v", line)
 	}
-	if pending := fdc.DrainInterrupts(); len(pending) != 0 {
+	if pending := drainIRQ(fdc); len(pending) != 0 {
 		t.Fatalf("partial command byte must not queue CPU interrupt, got %d", len(pending))
 	}
 }

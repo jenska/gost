@@ -5,7 +5,6 @@ go 1.27
 require (
 	github.com/ebitenui/ebitenui v0.7.3
 	github.com/hajimehoshi/ebiten/v2 v2.9.11
-	github.com/jenska/m68kdasm v1.1.0
 	github.com/jenska/m68kemu v1.5.0
 	github.com/jenska/ym2149 v1.1.0
 	golang.org/x/image v0.45.0
@@ -18,6 +17,7 @@ require (
 	github.com/ebitengine/purego v0.11.0 // indirect
 	github.com/frustra/bbcode v0.0.0-20201127003707-6ef347fbe1c8 // indirect
 	github.com/go-text/typesetting v0.3.4 // indirect
+	github.com/jenska/m68kdasm v1.1.0 // indirect
 	github.com/jezek/xgb v1.3.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect

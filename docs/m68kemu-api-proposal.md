@@ -9,9 +9,12 @@ Scope: additive where possible; one semantic change (item 2) behind an opt-in
 
 Landed in `m68kemu` (branch `api-additive-hooks-fastram`) and wired into `gost`:
 
-- **3.6 `WithDeferredReset`** — implemented in `m68kemu`; not yet adopted by
-  `gost` (the current construction order already leaves devices in a valid
-  post-cold-reset state, so it buys little until the scheduler work).
+- **3.6 `WithDeferredReset`** — implemented and adopted. `NewMachineWithCartridge`
+  builds the CPU with `WithDeferredReset` and calls `Machine.Reset` once before
+  returning, so there is a single reset path. This also fixed a latent bug: the
+  ROM fast-memory window (3.1) was only installed from `Machine.Reset`, which the
+  desktop and headless runners never call, so the shipped binary had been running
+  entirely on the bus path.
 - **3.5 `SetHooks`** — implemented and adopted; `EnableTrace` now installs the
   whole callback set in one call.
 - **3.1 fast memory** — implemented as `SetFastMemory(...FastRegion)` (multi
@@ -30,21 +33,36 @@ constant instead of `*uint8` (the minimum of **3.3**); `NewCPU` takes `*Bus`;
 `InterruptController`, `MappedDevice`, `ScheduledEvent`, `WaitHook`,
 `Bus.SetWaitHook` unexported.
 
-Primitives landed in `m68kemu` (branch `api-scheduler-irq`) but **not adopted by
-`gost`**:
+Also landed and adopted:
 
-- **3.2 `CycleScheduler.SetClockRatio`** and **3.3 `CPU.SetIRQSource`** — both
-  implemented, tested, opt-in (the queue and the 1:1 scheduler are unchanged
-  when unused).
-- Wiring `gost` onto the scheduler was tried and reverted. It is behaviourally
-  correct — the debug-trace suite and the fast/bus cycle-parity tests were
-  unchanged — but ~2× slower: the current devices advance in an "advance me by
-  N cycles" style, so as `CycleListener`s they do their per-quantum work (GLUE
-  scanline loop, MFP GPIP-edge scan, interrupt drain) on *every instruction*
-  instead of every ~512-cycle quantum. The scheduler pays off only after the
-  device layer is rewritten event-driven (each device schedules its next state
-  change), which is its own project. Until then `gost` keeps the quantum loop
-  and `cpuCyclesForHardwareCycles`.
+- **3.3 `CPU.SetIRQSource`** — adopted. `machineIRQ` aggregates the GLUE, MFP and
+  FDC lines into one level-sensitive source the core samples per instruction.
+  `dispatchInterrupts`, `maskedAutovectorPulse`, the `irqSources` slice and the
+  `InterruptSource` interface are gone; `DrainInterrupts` survives only as a
+  PendingIRQ/AckIRQ wrapper for the device unit tests. GLUE now holds an HBL/VBL
+  autovector line (asserted at each edge, cleared on `AckIRQ`) rather than
+  queuing pulses — a blank interrupt the CPU is masking is taken shortly after
+  the mask clears instead of being dropped, which is the honest level-sensitive
+  behaviour and is invisible to the EmuTOS desktop. `Machine.RunUntil` still
+  runs its per-instruction loop for device advancement; deleting it waits on
+  3.2.
+
+Primitives landed in `m68kemu` but **not adopted by `gost`**:
+
+- **3.2 `CycleScheduler.SetClockRatio`** — implemented, tested, opt-in.
+- Wiring `gost` onto the scheduler was attempted a second time against v1.5.0
+  (2026-09) and reverted again. It is behaviourally correct — the full test
+  suite, `-race`, and the fast/bus cycle-parity tests were unchanged — but a
+  120-frame EmuTOS-boot benchmark went from ~382 ms to ~465 ms (**+22%**, fast
+  memory) / ~423 ms to ~507 ms (+20%, bus only) on an M1. The v1.5.0 scheduler
+  is leaner than the earlier attempt (the doc's "~2×" is now "~20%"), but it is
+  still a pure regression: the devices advance in an "advance me by N cycles"
+  style, so as `CycleListener`s they do their per-quantum work (GLUE scanline
+  loop, MFP timer division and GPIP scan, shifter line snapshots) on *every
+  instruction* instead of every ~512-cycle quantum. The scheduler pays off only
+  after the device layer is rewritten event-driven (each device schedules its
+  next state change), which is its own project. Until then `gost` keeps the
+  quantum loop, `cpuCyclesForHardwareCycles`, and `nextDeviceEventCycles`.
 
 - **3.4 optional `Contains`** — landed. `m68kemu`'s `Device` no longer requires
   `Contains`; a device is located by `AddressRangeDevice` (page-mapped) and/or
@@ -54,8 +72,7 @@ Primitives landed in `m68kemu` (branch `api-scheduler-irq`) but **not adopted by
   check once, so the multi-device lookup is slightly faster. Debug-trace suite
   unchanged.
 
-Not started: the device-layer event-driven rewrite that 3.2/3.3 adoption
-depends on.
+Not started: the device-layer event-driven rewrite that 3.2 adoption depends on.
 
 ## 1. Motivation
 
@@ -66,9 +83,9 @@ versions do not fit the ST's timing and interrupt model, and a fourth
 
 | gost implements | m68kemu already has | why the library version is unused |
 |---|---|---|
-| `clocked []Clocked`, `advanceDevices`, `EventPredictor`, `nextStepQuantum`, `cpuCyclesForHardwareCycles`, `cpuCycleCarry` | `CycleScheduler`, `CycleListener`, `Schedule`/`ScheduleAfter` | no CPU-clock ↔ device-clock ratio; no "advance to next scheduled event" from inside `RunCycles` |
-| `irqSources`, `InterruptSource.DrainInterrupts`, `dispatchInterrupts`, `maskedAutovectorPulse` | `InterruptController`, `CPU.RequestInterrupt` | controller queues every request indefinitely and never coalesces; a masked autovector pulse is delivered late instead of dropped, so `gost` inspects `cpu.Registers().SR` by hand to discard it |
-| `Machine.RunUntil` — a per-instruction loop that re-aggregates `RunResult` | `CPU.RunUntil` | cannot advance devices or sample interrupts between instructions, so `gost` forces `MaxInstructions = 1` and defeats the internal loop |
+| `clocked []Clocked`, `advanceDevices`, `EventPredictor`, `nextStepQuantum`, `cpuCyclesForHardwareCycles`, `cpuCycleCarry` | `CycleScheduler`, `CycleListener`, `Schedule`/`ScheduleAfter` | per-instruction listener dispatch is ~20% slower than the 512-cycle quantum loop until the devices are event-driven (see 3.2 above) |
+| ~~`irqSources`, `dispatchInterrupts`, `maskedAutovectorPulse`~~ — **done**, see 3.3 above | `CPU.SetIRQSource` | — |
+| `Machine.RunUntil` — a per-instruction loop that re-aggregates `RunResult` | `CPU.RunUntil` | still needs to call `advanceDevices` between instructions; collapses to a one-line delegate once 3.2 lands |
 | — | `Bus.fastRAM`, `cpu.fastFetchMem` single-RAM fast path | only enabled when the bus holds exactly one device and it is a `*m68kemu.RAM` (`bus.go`, `refreshTopology`); `gost`'s bus has ~15 devices and its own `devices.RAM` |
 
 Relevant `gost` files: `internal/emulator/machine_runtime.go`,

@@ -42,7 +42,6 @@ type (
 		cpu           cpu.CPU
 		ram           *devices.RAM
 		rom           *devices.ROM
-		cartridge     *devices.CartridgeROM
 		overlayROM    *devices.OverlayROM
 		memoryConfig  *devices.MemoryConfig
 		shifter       *devices.Shifter
@@ -55,7 +54,6 @@ type (
 		rs232         *devices.RS232
 		steSound      *devices.STESound
 		clocked       []devices.Clocked
-		irqSources    []devices.InterruptSource
 		frameCycles   uint64
 		cpuCycleCarry uint64
 		traceWriter   io.Writer

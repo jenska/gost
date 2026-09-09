@@ -5,25 +5,21 @@ import (
 	cpu "github.com/jenska/m68kemu"
 )
 
-const (
-	glueBase          = 0xFF8006
-	glueSize          = 2
-	gluePALScanlines  = 313
-	glueNTSCScanlines = 263
-)
-
-// GLUE models the ST's glue logic that is visible to the emulator core:
-// address-decoded system-control probes plus horizontal/vertical blank
-// autovector timing. Most GLUE behavior is expressed by other devices through
-// the bus map, MFP lines, and shifter registers.
+// GLUE models the part of the ST's glue logic the emulator core needs directly:
+// the horizontal- and vertical-blank autovector timing. It is not memory-mapped
+// (the system-control probe address it used to answer is a plain ScratchRegion
+// now); the machine drives it through advanceDevices and the IRQ line.
 type GLUE struct {
-	configRegister uint16
-	frameCycles    uint64
-	scanlines      uint64
-	cycleInFrame   uint64
-	nextLine       uint64
-	pending        []Interrupt
-	draining       []Interrupt
+	frameCycles  uint64
+	scanlines    uint64
+	cycleInFrame uint64
+	nextLine     uint64
+	// lineLevel is the autovector interrupt level GLUE currently drives onto the
+	// CPU: 0 (idle), 2 (HBL) or 4 (VBL). Each scanline/frame edge (re)asserts it;
+	// AckIRQ lowers it once the CPU has taken it. A pulse the CPU never gets to
+	// (masked the whole time) is simply overwritten by the next edge, so it is
+	// taken at most about one scanline late rather than latched indefinitely.
+	lineLevel uint8
 }
 
 func NewGLUE(cfg ...*config.Config) *GLUE {
@@ -35,45 +31,10 @@ func NewGLUE(cfg ...*config.Config) *GLUE {
 	return g
 }
 
-func (g *GLUE) AddressRange() (uint32, uint32) {
-	return glueBase, glueBase + glueSize - 1
-}
-
-func (g *GLUE) Read(size cpu.Size, address uint32) (uint32, error) {
-	switch size {
-	case cpu.Byte:
-		if address&1 == 0 {
-			return uint32(g.configRegister >> 8), nil
-		}
-		return uint32(g.configRegister & 0xFF), nil
-	default:
-		return uint32(g.configRegister), nil
-	}
-}
-
-func (g *GLUE) Peek(size cpu.Size, address uint32) (uint32, error) {
-	return g.Read(size, address)
-}
-
-func (g *GLUE) Write(size cpu.Size, address uint32, value uint32) error {
-	switch size {
-	case cpu.Byte:
-		if address&1 == 0 {
-			g.configRegister = (g.configRegister & 0x00FF) | uint16(value&0xFF)<<8
-		} else {
-			g.configRegister = (g.configRegister & 0xFF00) | uint16(value&0xFF)
-		}
-	default:
-		g.configRegister = uint16(value)
-	}
-	return nil
-}
-
 func (g *GLUE) Reset() {
-	g.configRegister = 0
 	g.cycleInFrame = 0
 	g.nextLine = 1
-	g.pending = g.pending[:0]
+	g.lineLevel = 0
 }
 
 func (g *GLUE) Advance(cycles uint64) {
@@ -84,27 +45,29 @@ func (g *GLUE) Advance(cycles uint64) {
 	g.cycleInFrame += cycles
 	for g.cycleInFrame >= g.nextLineCycle() {
 		if g.nextLine >= g.scanlines {
-			g.pending = append(g.pending, Interrupt{Level: 4})
+			g.lineLevel = 4
 			g.cycleInFrame -= g.frameCycles
 			g.nextLine = 1
 			continue
 		}
-		g.pending = append(g.pending, Interrupt{Level: 2})
+		if g.lineLevel < 2 {
+			g.lineLevel = 2
+		}
 		g.nextLine++
 	}
 }
 
-// DrainInterrupts returns the interrupts queued since the last call. GLUE emits
-// an HBL pulse every scanline and is drained twice per emulation quantum, so the
-// result is handed back in a reused buffer that stays valid only until the next
-// DrainInterrupts call.
-func (g *GLUE) DrainInterrupts() []Interrupt {
-	if len(g.pending) == 0 {
-		return nil
+// PendingIRQ reports the autovector line GLUE is currently driving (HBL level 2
+// or VBL level 4), or level 0 when idle.
+func (g *GLUE) PendingIRQ() (level, vector uint8) {
+	return g.lineLevel, cpu.AutoVector
+}
+
+// AckIRQ lowers the line once the CPU has accepted the pulse GLUE raised.
+func (g *GLUE) AckIRQ(level uint8) {
+	if g.lineLevel == level {
+		g.lineLevel = 0
 	}
-	g.draining = append(g.draining[:0], g.pending...)
-	g.pending = g.pending[:0]
-	return g.draining
 }
 
 func (g *GLUE) NextEventCycles() (uint64, bool) {
@@ -118,20 +81,13 @@ func (g *GLUE) NextEventCycles() (uint64, bool) {
 	return next - g.cycleInFrame, true
 }
 
-func (g *GLUE) WaitStates(cpu.Size, uint32) uint32 {
-	return 4
-}
-
 func (g *GLUE) configureTiming(cfg *config.Config) {
-	g.frameCycles = cfg.FrameCycles()
-	if g.frameCycles == 0 {
-		return
+	if cfg.FrameCycles() == 0 {
+		return // no usable clock/refresh; GLUE stays idle
 	}
-	if cfg.FrameHz >= 55 {
-		g.scanlines = glueNTSCScanlines
-		return
-	}
-	g.scanlines = gluePALScanlines
+	timing := cfg.Video()
+	g.frameCycles = timing.FrameCycles
+	g.scanlines = timing.Scanlines
 }
 
 func (g *GLUE) nextLineCycle() uint64 {

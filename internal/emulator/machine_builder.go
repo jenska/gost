@@ -72,7 +72,10 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		overlayROM,
 		ram,
 		memoryConfig,
-		glue,
+		// $FF8006 is a system-control address EmuTOS pokes at startup; GoST does
+		// not model it, so a scratch word answers the probe. GLUE itself (below)
+		// is not memory-mapped.
+		devices.NewScratchRegion(0xFF8006, 0xFF8008),
 		shifter,
 		blitter,
 		mfp,
@@ -91,10 +94,14 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 	bus := cpu.NewBus(busDevices...)
 	bus.SetWaitStates(4)
 
-	processor, err := cpu.NewCPU(bus)
+	// WithDeferredReset keeps construction from resetting the CPU against a bus
+	// that is not fully described yet; machine.Reset below is the single reset
+	// path and is also what installs the ROM fast-memory window.
+	processor, err := cpu.NewCPU(bus, cpu.WithDeferredReset())
 	if err != nil {
 		return nil, err
 	}
+	processor.SetIRQSource(machineIRQ{glue: glue, mfp: mfp, fdc: fdc})
 
 	machine := &Machine{
 		cfg:          cfg,
@@ -114,9 +121,12 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		rs232:        rs232,
 		steSound:     steSound,
 		clocked:      clockedDevices(glue, mfp, acia, fdc, psg, steSound),
-		irqSources:   []devices.InterruptSource{glue, mfp, acia, fdc},
 		frameCycles:  frameCycles,
 		traceWriter:  io.Discard,
+	}
+
+	if err := machine.Reset(); err != nil {
+		return nil, err
 	}
 
 	if cfg.Trace == string(TraceModeSimple) {

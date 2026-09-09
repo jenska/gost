@@ -115,10 +115,6 @@ func (a *ACIA) Advance(uint64) {
 	}
 }
 
-func (a *ACIA) DrainInterrupts() []Interrupt {
-	return nil
-}
-
 // pollReceiveChannel loads one pending endpoint byte when that channel's
 // receive register is empty.
 func (a *ACIA) pollReceiveChannel(channel uint32) {

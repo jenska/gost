@@ -68,8 +68,6 @@ func (m *Machine) StepFrame() (bool, error) {
 	m.shifter.BeginFrame()
 	remainingHardwareCycles := m.frameCycles
 	for remainingHardwareCycles > 0 {
-		m.dispatchInterrupts()
-
 		quantum := m.nextStepQuantum(remainingHardwareCycles)
 		cpuQuantum := m.cpuCyclesForHardwareCycles(quantum)
 		if cpuQuantum > 0 {
@@ -79,7 +77,6 @@ func (m *Machine) StepFrame() (bool, error) {
 		}
 		m.advanceDevices(quantum)
 		m.shifter.AdvanceFrame(quantum)
-		m.dispatchInterrupts()
 		remainingHardwareCycles -= quantum
 	}
 
@@ -167,7 +164,6 @@ func (m *Machine) RunUntil(options cpu.RunUntilOptions) (cpu.RunResult, error) {
 		advanced := m.cpu.Cycles() - before
 		if advanced > 0 {
 			m.advanceDevices(advanced)
-			m.dispatchInterrupts()
 		}
 		if err != nil {
 			return total, err
@@ -202,27 +198,50 @@ func (m *Machine) advanceDevices(cycles uint64) {
 	}
 }
 
-func (m *Machine) dispatchInterrupts() {
-	for _, source := range m.irqSources {
-		for _, irq := range source.DrainInterrupts() {
-			if m.maskedAutovectorPulse(irq) {
-				continue
-			}
-			_ = m.cpu.RequestInterrupt(irq.Level, irq.Vector)
-		}
-	}
+// machineIRQ presents the ST's device interrupt lines to the CPU core as a
+// single level-sensitive source. The core samples it at every instruction
+// boundary and drops requests it is currently masking, which replaces the
+// machine's old hand-rolled drain-and-mask loop. Levels are distinct across
+// sources (GLUE 2/4 < FDC 5 < MFP 6), so the highest asserted line wins and
+// AckIRQ routes the acknowledgement back to the source that raised it.
+type machineIRQ struct {
+	glue *devices.GLUE
+	mfp  *devices.MFP
+	fdc  *devices.FDC
 }
 
-// maskedAutovectorPulse reports whether irq is an autovectored HBL/VBL pulse that
-// the current interrupt mask would ignore. GLUE delivers these as edge pulses
-// rather than a held line, so a pulse that arrives while masked is dropped here
-// instead of latching until the mask drops. This matches how the ST's autovector
-// interrupts behave for software that briefly raises IPL during critical
-// sections; vectored (MFP) interrupts are never dropped this way.
-func (m *Machine) maskedAutovectorPulse(irq devices.Interrupt) bool {
-	if irq.Vector != devices.AutoVector {
-		return false
+func (s machineIRQ) PendingIRQ() (level, vector uint8) {
+	if s.mfp != nil {
+		if l, v := s.mfp.PendingIRQ(); l > level {
+			level, vector = l, v
+		}
 	}
-	mask := uint8((m.cpu.Registers().SR >> 8) & 0x7)
-	return irq.Level <= mask
+	if s.fdc != nil {
+		if l, v := s.fdc.PendingIRQ(); l > level {
+			level, vector = l, v
+		}
+	}
+	if s.glue != nil {
+		if l, v := s.glue.PendingIRQ(); l > level {
+			level, vector = l, v
+		}
+	}
+	return level, vector
+}
+
+func (s machineIRQ) AckIRQ(level uint8) {
+	switch {
+	case level >= 6:
+		if s.mfp != nil {
+			s.mfp.AckIRQ(level)
+		}
+	case level == 5:
+		if s.fdc != nil {
+			s.fdc.AckIRQ(level)
+		}
+	default:
+		if s.glue != nil {
+			s.glue.AckIRQ(level)
+		}
+	}
 }

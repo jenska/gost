@@ -463,7 +463,7 @@ func TestDebugPanicWithoutIRQs(t *testing.T) {
 		t.Fatalf("create machine: %v", err)
 	}
 
-	machine.irqSources = nil
+	machine.cpu.SetIRQSource(nil)
 
 	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
@@ -496,14 +496,7 @@ func TestDebugPanicWithoutVBL(t *testing.T) {
 	}
 	machine.clocked = filteredClocked
 
-	filteredIRQs := make([]devices.InterruptSource, 0, len(machine.irqSources))
-	for _, source := range machine.irqSources {
-		if source == machine.glue {
-			continue
-		}
-		filteredIRQs = append(filteredIRQs, source)
-	}
-	machine.irqSources = filteredIRQs
+	keepDeviceIRQ(machine, false, true, true)
 
 	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
@@ -533,14 +526,7 @@ func TestDebugPanicWithoutMFP(t *testing.T) {
 	}
 	machine.clocked = filteredClocked
 
-	filteredIRQs := make([]devices.InterruptSource, 0, len(machine.irqSources))
-	for _, source := range machine.irqSources {
-		if source == machine.mfp {
-			continue
-		}
-		filteredIRQs = append(filteredIRQs, source)
-	}
-	machine.irqSources = filteredIRQs
+	keepDeviceIRQ(machine, true, false, true)
 
 	for frame := range 120 {
 		if _, err := machine.StepFrame(); err != nil {
