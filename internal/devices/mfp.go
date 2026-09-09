@@ -12,11 +12,7 @@ const (
 	// which implies a 2.4576 MHz MFP timer input clock.
 	mfpTimerInputHz = 2_457_600
 
-	mfpPALScanlines     = 313
-	mfpNTSCScanlines    = 263
-	mfpActiveVideoLines = 200
-	mfpDefaultClockHz   = config.DefaultClockHz
-	mfpDefaultFrameHz   = config.DefaultFrameHz
+	mfpDefaultClockHz = config.DefaultClockHz
 
 	mfpGPIP  = 0x01
 	mfpAER   = 0x03
@@ -67,11 +63,14 @@ type mfpTimer struct {
 
 // MFP models the STF's 68901 interrupt controller with timer-backed IRQs.
 type MFP struct {
-	cfg            *config.Config
-	registers      [mfpSize]byte
-	vectorBase     uint8
-	softwareEOI    bool
-	inFlight       [16]bool
+	cfg         *config.Config
+	registers   [mfpSize]byte
+	vectorBase  uint8
+	softwareEOI bool
+	inFlight    [16]bool
+	// ackChannel is the channel PendingIRQ last reported, consumed by AckIRQ.
+	// -1 when there is nothing to acknowledge.
+	ackChannel     int
 	aciaIRQActive  bool
 	printerBusy    bool
 	fdcIRQActive   bool
@@ -113,6 +112,7 @@ func (m *MFP) WaitStates(cpu.Size, uint32) uint32 {
 func (m *MFP) Reset() {
 	clear(m.registers[:])
 	clear(m.inFlight[:])
+	m.ackChannel = -1
 	m.vectorBase = 0x40
 	m.softwareEOI = false
 	// Unmodeled GPIP inputs idle high on a plain ST, which prevents EmuTOS
@@ -198,22 +198,35 @@ func (m *MFP) Advance(cycles uint64) {
 	}
 }
 
-func (m *MFP) DrainInterrupts() []Interrupt {
+// PendingIRQ reports the 68901 interrupt line: level 6 with the vector of the
+// highest-priority channel that is pending, enabled, unmasked, and not blocked
+// by an in-service interrupt. Level 0 means the line is idle.
+func (m *MFP) PendingIRQ() (level, vector uint8) {
 	m.updateGPIPEdges()
 
 	channel, ok := m.nextPendingChannel()
 	if !ok {
-		return nil
+		m.ackChannel = -1
+		return 0, cpu.AutoVector
 	}
+	m.ackChannel = channel
+	return 6, m.vectorBase + uint8(channel)
+}
+
+// AckIRQ clears the pending latch for the channel PendingIRQ last reported and,
+// under software end-of-interrupt, marks that channel in service.
+func (m *MFP) AckIRQ(uint8) {
+	channel := m.ackChannel
+	if channel < 0 {
+		return
+	}
+	m.ackChannel = -1
 
 	m.clearRegisterBit(pendingRegisterForChannel(channel), channelBit(channel))
 	if m.softwareEOI {
 		m.inFlight[channel] = true
 		m.setRegisterBit(serviceRegisterForChannel(channel), channelBit(channel))
 	}
-
-	vector := m.vectorBase + uint8(channel)
-	return []Interrupt{{Level: 6, Vector: vector}}
 }
 
 func (m *MFP) NextEventCycles() (uint64, bool) {
@@ -430,26 +443,10 @@ func (m *MFP) timerCurrentValue(index int) byte {
 }
 
 func (m *MFP) configureEventCountTiming() {
-	clockHz := uint64(mfpDefaultClockHz)
-	frameHz := uint64(mfpDefaultFrameHz)
-	if m.cfg != nil {
-		if m.cfg.ClockHz != 0 {
-			clockHz = m.cfg.ClockHz
-		}
-		if m.cfg.FrameHz != 0 {
-			frameHz = m.cfg.FrameHz
-		}
-	}
-	m.eventCountFrameCycles = clockHz / frameHz
-	if m.eventCountFrameCycles == 0 {
-		m.eventCountFrameCycles = 1
-	}
-	if frameHz >= 55 {
-		m.eventCountScanlines = mfpNTSCScanlines
-	} else {
-		m.eventCountScanlines = mfpPALScanlines
-	}
-	m.eventCountActiveLines = min(mfpActiveVideoLines, m.eventCountScanlines)
+	timing := m.cfg.Video()
+	m.eventCountFrameCycles = timing.FrameCycles
+	m.eventCountScanlines = timing.Scanlines
+	m.eventCountActiveLines = timing.ActiveLines
 }
 
 func (m *MFP) advanceEventCountTimers(cycles uint64) {

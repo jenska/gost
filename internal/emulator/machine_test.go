@@ -130,7 +130,8 @@ func TestSTBusAlignmentAndMapping(t *testing.T) {
 	blitter := devices.NewBlitter(ram)
 	monsterProbe := devices.NewBusErrorRegion(devices.AddressRange{Start: 0xFFFE00, End: 0xFFFE10})
 	openBus := devices.NewOpenBus(devices.AddressRange{Start: 0xFF8000, End: 0x1000000})
-	bus := cpu.NewBus(overlay, ram, memoryConfig, devices.NewGLUE(), blitter, monsterProbe, openBus, rom)
+	scratch := devices.NewScratchRegion(0xFF8006, 0xFF8008)
+	bus := cpu.NewBus(overlay, ram, memoryConfig, scratch, blitter, monsterProbe, openBus, rom)
 	bus.SetWaitStates(4)
 
 	if _, err := bus.Read(cpu.Word, 1); err == nil {
@@ -345,7 +346,7 @@ func TestMachineInterruptHandling(t *testing.T) {
 	machine := mustMachine(t, rom)
 	// Isolate this test to explicit CPU interrupt requests and avoid
 	// unrelated device IRQ traffic (for example frame-driven VBL interrupts).
-	machine.irqSources = nil
+	machine.cpu.SetIRQSource(nil)
 
 	handlerAddress := uint32(0x00001000)
 	vectorOffset := uint32((24 + 6) * 4)
@@ -845,73 +846,43 @@ func TestVBLInterruptRunsHandler(t *testing.T) {
 	}
 }
 
+// testIRQSource is a synthetic CPU interrupt line for exercising the machine's
+// interrupt wiring in isolation from real device timing.
 type testIRQSource struct {
-	pending []devices.Interrupt
+	level  uint8
+	vector uint8
+	acks   int
 }
 
-func (s *testIRQSource) DrainInterrupts() []devices.Interrupt {
-	out := append([]devices.Interrupt(nil), s.pending...)
-	s.pending = nil
-	return out
+func (s *testIRQSource) PendingIRQ() (uint8, uint8) { return s.level, s.vector }
+
+func (s *testIRQSource) AckIRQ(uint8) {
+	s.acks++
+	s.level = 0
 }
 
-func TestMachineDropsMaskedAutovectorPulse(t *testing.T) {
+// TestMachineDefersMaskedInterruptUntilUnmasked covers the IRQ-line contract the
+// machine now delegates to the CPU core: a line asserted while the CPU masks its
+// level is held, not dropped and not delivered, and is taken exactly once as
+// soon as the mask clears.
+func TestMachineDefersMaskedInterruptUntilUnmasked(t *testing.T) {
 	rom := loopROM([]byte{
-		0x46, 0xFC, 0x27, 0x00, // move #$2700,sr
-		0x46, 0xFC, 0x20, 0x00, // move #$2000,sr
+		0x46, 0xFC, 0x27, 0x00, // move #$2700,sr  ; mask all interrupts
+		0x4E, 0x71, // nop
+		0x4E, 0x71, // nop
+		0x46, 0xFC, 0x20, 0x00, // move #$2000,sr  ; unmask
 		0x4E, 0x71, // nop
 		0x60, 0xFE, // bra.s -2
 	})
 	machine := mustMachine(t, rom)
-	machine.irqSources = []devices.InterruptSource{
-		&testIRQSource{pending: []devices.Interrupt{{Level: 4}}},
-	}
+
+	source := &testIRQSource{level: 6, vector: 64}
+	machine.cpu.SetIRQSource(source)
 
 	handlerAddress := uint32(0x00002000)
 	vectorBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(vectorBytes, handlerAddress)
-	if err := machine.LoadIntoRAM(uint32((24+4)*4), vectorBytes); err != nil {
-		t.Fatalf("load vbl vector: %v", err)
-	}
-	if err := machine.LoadIntoRAM(handlerAddress, []byte{
-		0x72, 0x01, // moveq #1,d1
-		0x4E, 0x73, // rte
-	}); err != nil {
-		t.Fatalf("load vbl handler: %v", err)
-	}
-
-	if err := machine.cpu.Step(); err != nil {
-		t.Fatalf("set interrupt mask: %v", err)
-	}
-	machine.dispatchInterrupts()
-	for i := range 3 {
-		if err := machine.cpu.Step(); err != nil {
-			t.Fatalf("step %d: %v", i, err)
-		}
-	}
-
-	if got := machine.Registers().D[1]; got != 0 {
-		t.Fatalf("masked autovector pulse should have been dropped, D1=%08x", uint32(got))
-	}
-}
-
-func TestMachineKeepsMaskedVectoredInterruptPending(t *testing.T) {
-	rom := loopROM([]byte{
-		0x46, 0xFC, 0x27, 0x00, // move #$2700,sr
-		0x46, 0xFC, 0x20, 0x00, // move #$2000,sr
-		0x4E, 0x71, // nop
-		0x60, 0xFE, // bra.s -2
-	})
-	machine := mustMachine(t, rom)
-	vector := uint8(64)
-	machine.irqSources = []devices.InterruptSource{
-		&testIRQSource{pending: []devices.Interrupt{{Level: 6, Vector: vector}}},
-	}
-
-	handlerAddress := uint32(0x00002000)
-	vectorBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(vectorBytes, handlerAddress)
-	if err := machine.LoadIntoRAM(uint32(vector)*4, vectorBytes); err != nil {
+	if err := machine.LoadIntoRAM(uint32(source.vector)*4, vectorBytes); err != nil {
 		t.Fatalf("load interrupt vector: %v", err)
 	}
 	if err := machine.LoadIntoRAM(handlerAddress, []byte{
@@ -921,18 +892,30 @@ func TestMachineKeepsMaskedVectoredInterruptPending(t *testing.T) {
 		t.Fatalf("load interrupt handler: %v", err)
 	}
 
-	if err := machine.cpu.Step(); err != nil {
-		t.Fatalf("set interrupt mask: %v", err)
-	}
-	machine.dispatchInterrupts()
+	// move #$2700,sr followed by two nops: the line is asserted but masked.
 	for i := range 3 {
 		if err := machine.cpu.Step(); err != nil {
-			t.Fatalf("step %d: %v", i, err)
+			t.Fatalf("masked step %d: %v", i, err)
 		}
 	}
+	if got := machine.Registers().D[1]; got != 0 {
+		t.Fatalf("masked interrupt taken early, D1=%08x", uint32(got))
+	}
+	if source.acks != 0 {
+		t.Fatalf("masked interrupt acknowledged: acks=%d", source.acks)
+	}
 
+	// move #$2000,sr: the still-asserted line is taken exactly once.
+	for i := range 4 {
+		if err := machine.cpu.Step(); err != nil {
+			t.Fatalf("unmasked step %d: %v", i, err)
+		}
+	}
 	if got := machine.Registers().D[1]; got != 1 {
-		t.Fatalf("vectored interrupt should remain pending while masked, D1=%08x", uint32(got))
+		t.Fatalf("interrupt not taken after mask cleared, D1=%08x", uint32(got))
+	}
+	if source.acks != 1 {
+		t.Fatalf("expected exactly one acknowledgement, got %d", source.acks)
 	}
 }
 
@@ -1019,6 +1002,22 @@ func writeMachinePSGRegister(t *testing.T, machine *Machine, reg, value byte) {
 	if err := machine.bus.Write(cpu.Byte, 0xFF8802, uint32(value)); err != nil {
 		t.Fatalf("write PSG register %d: %v", reg, err)
 	}
+}
+
+// keepDeviceIRQ rewires the CPU interrupt source to only the devices passed as
+// true, for tests that isolate a fault to a single interrupt path.
+func keepDeviceIRQ(m *Machine, glue, mfp, fdc bool) {
+	var src machineIRQ
+	if glue {
+		src.glue = m.glue
+	}
+	if mfp {
+		src.mfp = m.mfp
+	}
+	if fdc {
+		src.fdc = m.fdc
+	}
+	m.cpu.SetIRQSource(src)
 }
 
 func loopROM(code []byte) []byte {

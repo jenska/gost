@@ -196,6 +196,48 @@ func (cfg *Config) FrameCycles() uint64 {
 	return cfg.ClockHz / cfg.FrameHz
 }
 
+// ST raster line counts. FrameHz at or above 55 is treated as an NTSC machine.
+const (
+	VideoPALScanlines  = 313
+	VideoNTSCScanlines = 263
+	// VideoActiveLines is the number of displayed scanlines per frame.
+	VideoActiveLines = 200
+)
+
+// VideoTiming is the ST raster timing a device derives from the machine clock
+// and refresh rate.
+type VideoTiming struct {
+	FrameCycles uint64 // machine cycles per display frame (>= 1)
+	Scanlines   uint64 // total scanlines per frame
+	ActiveLines uint64 // displayed scanlines per frame (<= Scanlines)
+}
+
+// Video returns the raster timing for this config, substituting the package
+// defaults for a nil receiver or an unset ClockHz/FrameHz.
+func (cfg *Config) Video() VideoTiming {
+	clockHz, frameHz := uint64(DefaultClockHz), uint64(DefaultFrameHz)
+	if cfg != nil {
+		if cfg.ClockHz != 0 {
+			clockHz = cfg.ClockHz
+		}
+		if cfg.FrameHz != 0 {
+			frameHz = cfg.FrameHz
+		}
+	}
+
+	t := VideoTiming{FrameCycles: clockHz / frameHz}
+	if t.FrameCycles == 0 {
+		t.FrameCycles = 1
+	}
+	if frameHz >= 55 {
+		t.Scanlines = VideoNTSCScanlines
+	} else {
+		t.Scanlines = VideoPALScanlines
+	}
+	t.ActiveLines = min(VideoActiveLines, t.Scanlines)
+	return t
+}
+
 func ConfigForPreset(preset Preset) (*Config, error) {
 	normalized, err := normalizePreset(preset)
 	if err != nil {
@@ -337,59 +379,40 @@ func loadConfigPatch(path string) (configPatch, error) {
 	return patch, nil
 }
 
+// jsonFields maps each config key whose JSON value decodes straight into a
+// Config field to that field's address. Keys needing custom parsing (preset
+// selection, addresses, MHz) are handled explicitly in Apply.
+func (cfg *Config) jsonFields() map[string]any {
+	return map[string]any{
+		KeyROM:            &cfg.ROMPath,
+		KeyCartridge:      &cfg.CartridgePath,
+		KeyFloppyA:        &cfg.FloppyA,
+		KeyFloppyB:        &cfg.FloppyB,
+		KeyHardDiskSizeMB: &cfg.HardDiskSizeMB,
+		KeyHardDiskImage:  &cfg.HardDiskImagePath,
+		KeyScale:          &cfg.Scale,
+		KeyFullscreen:     &cfg.Fullscreen,
+		KeyHeadless:       &cfg.Headless,
+		KeyFrames:         &cfg.Frames,
+		KeyDumpFrame:      &cfg.DumpFramePath,
+		KeyTrace:          &cfg.Trace,
+		KeyRAMSize:        &cfg.RAMSize,
+		KeyClockHz:        &cfg.ClockHz,
+		KeyCPUClockHz:     &cfg.CPUClockHz,
+		KeyFrameHz:        &cfg.FrameHz,
+		KeyColorMonitor:   &cfg.ColorMonitor,
+		KeyRTC:            &cfg.RTC,
+		KeyMidResYScale:   &cfg.MidResYScale,
+		KeyModel:          &cfg.Model,
+	}
+}
+
 func (p configPatch) Apply(cfg *Config) error {
+	fields := cfg.jsonFields()
 	for key, raw := range p {
 		switch key {
 		case KeyPreset:
 			// Preset is selected before defaults are built, so ignore it here.
-		case KeyROM:
-			if err := decodeJSON(raw, &cfg.ROMPath); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyCartridge:
-			if err := decodeJSON(raw, &cfg.CartridgePath); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyFloppyA:
-			if err := decodeJSON(raw, &cfg.FloppyA); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyFloppyB:
-			if err := decodeJSON(raw, &cfg.FloppyB); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyHardDiskSizeMB:
-			if err := decodeJSON(raw, &cfg.HardDiskSizeMB); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyHardDiskImage:
-			if err := decodeJSON(raw, &cfg.HardDiskImagePath); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyScale:
-			if err := decodeJSON(raw, &cfg.Scale); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyFullscreen:
-			if err := decodeJSON(raw, &cfg.Fullscreen); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyHeadless:
-			if err := decodeJSON(raw, &cfg.Headless); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyFrames:
-			if err := decodeJSON(raw, &cfg.Frames); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyDumpFrame:
-			if err := decodeJSON(raw, &cfg.DumpFramePath); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyTrace:
-			if err := decodeJSON(raw, &cfg.Trace); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
 		case KeyTraceStart:
 			value, err := decodeAddressJSON(raw)
 			if err != nil {
@@ -402,46 +425,20 @@ func (p configPatch) Apply(cfg *Config) error {
 				return fmt.Errorf("decode %q: %w", key, err)
 			}
 			cfg.TraceEnd = value
-		case KeyRAMSize:
-			if err := decodeJSON(raw, &cfg.RAMSize); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyClockHz:
-			if err := decodeJSON(raw, &cfg.ClockHz); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
 		case KeyCPUMHz:
 			value, err := decodeMHzJSON(raw)
 			if err != nil {
 				return fmt.Errorf("decode %q: %w", key, err)
 			}
 			cfg.CPUClockHz = value
-		case KeyCPUClockHz:
-			if err := decodeJSON(raw, &cfg.CPUClockHz); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyFrameHz:
-			if err := decodeJSON(raw, &cfg.FrameHz); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyColorMonitor:
-			if err := decodeJSON(raw, &cfg.ColorMonitor); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyRTC:
-			if err := decodeJSON(raw, &cfg.RTC); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyMidResYScale:
-			if err := decodeJSON(raw, &cfg.MidResYScale); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-		case KeyModel:
-			if err := decodeJSON(raw, &cfg.Model); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
 		default:
-			return fmt.Errorf("unsupported config key %q", key)
+			target, ok := fields[key]
+			if !ok {
+				return fmt.Errorf("unsupported config key %q", key)
+			}
+			if err := decodeJSON(raw, target); err != nil {
+				return fmt.Errorf("decode %q: %w", key, err)
+			}
 		}
 	}
 	return nil

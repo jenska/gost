@@ -17,6 +17,27 @@
 - The single-range peripherals (ACIA, GLUE, MFP, PSG, FDC, Blitter, STE sound,
   cartridge ROM) expose `AddressRange()` and drop their `Contains` boilerplate;
   the bus page-maps them instead of scanning.
+- Machine construction now builds the CPU with `m68kemu` `WithDeferredReset` and
+  runs `Machine.Reset` once before returning, making it the single reset path.
+- `EnableTrace` disassembly comes from `m68kemu`'s `TraceInfo.Mnemonic` instead
+  of a direct `m68kdasm` decode; output is unchanged.
+- Device interrupts now reach the CPU as a single level-sensitive `m68kemu`
+  `IRQSource` (`machineIRQ` over GLUE/MFP/FDC) that the core samples each
+  instruction, replacing the machine's hand-rolled `dispatchInterrupts` drain
+  loop and `maskedAutovectorPulse` SR inspection. GLUE now drives a held HBL/VBL
+  autovector line instead of queuing pulses, so a blank interrupt the CPU is
+  masking is taken shortly after the mask clears rather than dropped outright.
+- Internal cleanup, no behaviour change: PAL/NTSC raster constants moved to
+  `config.Config.Video()`; GLUE dropped its unused system-control register (now
+  a shared `devices.ScratchRegion` at `$FF8006`) and is no longer bus-mapped;
+  `DrainInterrupts` removed in favour of `PendingIRQ`/`AckIRQ`; the JSON config
+  loader is table-driven; the unused `Machine.cartridge` field is gone.
+
+### Fixed
+
+- The boot-ROM fast-memory window is now installed on the normal construction
+  path. It was only wired into `Machine.Reset`, which the desktop and headless
+  runners never call, so the shipped binary never actually used it.
 
 ### Dependencies
 
@@ -24,6 +45,8 @@
   `SetHooks`/`Hooks`, and `SetFastMemory` APIs, a polished public surface
   (plain-value `RequestInterrupt`, `*Bus` on `NewCPU`, fewer exported
   internals), and optional `Device.Contains`.
+- `github.com/jenska/m68kdasm` is no longer a direct dependency; `m68kemu`
+  still pulls it in for disassembly.
 
 ## v0.4.0 - 2026-09-04
 

@@ -543,13 +543,19 @@ func (f *FDC) Write(size cpu.Size, address uint32, value uint32) error {
 
 func (f *FDC) Advance(uint64) {}
 
-func (f *FDC) DrainInterrupts() []Interrupt {
+// PendingIRQ reports the FDC/DMA interrupt line: level 5 with the configured
+// vector while an operation has completed and not yet been acknowledged. The
+// same event is also delivered through MFP GPIP i5 (see queueInterrupt).
+func (f *FDC) PendingIRQ() (level, vector uint8) {
 	if len(f.pending) == 0 {
-		return nil
+		return 0, cpu.AutoVector
 	}
-	out := append([]Interrupt(nil), f.pending...)
+	return f.pending[0].Level, f.pending[0].Vector
+}
+
+// AckIRQ lowers the line once the CPU has taken the interrupt.
+func (f *FDC) AckIRQ(uint8) {
 	f.pending = f.pending[:0]
-	return out
 }
 
 func (f *FDC) readByte(offset uint32) byte {

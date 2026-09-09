@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/jenska/m68kdasm"
 	cpu "github.com/jenska/m68kemu"
 )
 
@@ -193,11 +192,10 @@ func traceValueString(size cpu.Size, value uint32) string {
 }
 
 func (m *Machine) decodeTraceInstruction(info cpu.TraceInfo) string {
-	if len(info.Bytes) >= 2 {
-		inst, err := m68kdasm.Decode(append([]byte(nil), info.Bytes...), info.PC)
-		if err == nil {
-			return inst.Assembly()
-		}
+	// The core fills Mnemonic from the same decoder path this used to call
+	// directly; DisassembleInstruction is its bus-backed fallback.
+	if info.Mnemonic != "" {
+		return info.Mnemonic
 	}
 	inst, err := cpu.DisassembleInstruction(m.bus, info.PC)
 	if err != nil {

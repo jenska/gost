@@ -26,7 +26,7 @@ func TestMFPTimerQueuesInterrupt(t *testing.T) {
 	}
 
 	mfp.Advance(14)
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt, got %d", len(irqs))
 	}
@@ -58,7 +58,7 @@ func TestMFPTimerCQueuesInterrupt(t *testing.T) {
 	}
 
 	mfp.Advance(14)
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt, got %d", len(irqs))
 	}
@@ -107,7 +107,8 @@ func TestMFPTimerBEventCountModePausesDuringVerticalBlank(t *testing.T) {
 		t.Fatalf("write timer b event-count control: %v", err)
 	}
 
-	activeEnd := mfpActiveVideoLines * cfg.FrameCycles() / mfpPALScanlines
+	timing := cfg.Video()
+	activeEnd := timing.ActiveLines * timing.FrameCycles / timing.Scanlines
 	mfp.Advance(activeEnd + 1_000)
 	blankValue, err := mfp.Read(1, mfpBase+mfpTBDR)
 	if err != nil {
@@ -151,7 +152,7 @@ func TestMFPSoftwareEOIBlocksLowerPriorityInterrupts(t *testing.T) {
 
 	mfp.Advance(14)
 
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt, got %d", len(irqs))
 	}
@@ -167,7 +168,7 @@ func TestMFPSoftwareEOIBlocksLowerPriorityInterrupts(t *testing.T) {
 		t.Fatalf("timer A should be in service, ISRA=%02x", isr)
 	}
 
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected lower priority interrupt to be blocked, got %d", len(irqs))
 	}
 
@@ -175,7 +176,7 @@ func TestMFPSoftwareEOIBlocksLowerPriorityInterrupts(t *testing.T) {
 		t.Fatalf("clear in-service bit: %v", err)
 	}
 
-	irqs = mfp.DrainInterrupts()
+	irqs = drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt after software eoi, got %d", len(irqs))
 	}
@@ -206,7 +207,7 @@ func TestMFPWritingPendingRegisterClearsPendingInterrupt(t *testing.T) {
 		t.Fatalf("clear pending register: %v", err)
 	}
 
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected pending interrupt to be cleared, got %d", len(irqs))
 	}
 }
@@ -231,12 +232,12 @@ func TestMFPTimerAccumulatesFractionalCPUClock(t *testing.T) {
 	}
 
 	mfp.Advance(13)
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected no interrupt before 14 CPU cycles, got %d", len(irqs))
 	}
 
 	mfp.Advance(1)
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected 1 interrupt after 14 CPU cycles, got %d", len(irqs))
 	}
@@ -265,13 +266,13 @@ func TestMFPAutoEOITimerCRepeats(t *testing.T) {
 	}
 
 	mfp.Advance(14)
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected first timer c interrupt, got %d", len(irqs))
 	}
 
 	mfp.Advance(14)
-	irqs = mfp.DrainInterrupts()
+	irqs = drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected recurring timer c interrupt under auto-EOI, got %d", len(irqs))
 	}
@@ -328,13 +329,13 @@ func TestMFPSoftwareEOIPreventsDuplicateTimerDispatchBeforeServiceClear(t *testi
 	}
 
 	mfp.Advance(14)
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected first timer c interrupt, got %d", len(irqs))
 	}
 
 	mfp.Advance(14)
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected duplicate timer c interrupt to stay blocked until service clear, got %d", len(irqs))
 	}
 
@@ -342,7 +343,7 @@ func TestMFPSoftwareEOIPreventsDuplicateTimerDispatchBeforeServiceClear(t *testi
 		t.Fatalf("clear timer c in-service bit: %v", err)
 	}
 
-	irqs = mfp.DrainInterrupts()
+	irqs = drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected pending timer c interrupt after service clear, got %d", len(irqs))
 	}
@@ -516,7 +517,7 @@ func TestMFPGPIPAERDefaultDetectsFallingACIAEdge(t *testing.T) {
 	}
 
 	mfp.SetACIAInterrupt(true)
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected falling ACIA edge interrupt, got %d", len(irqs))
 	}
@@ -525,7 +526,7 @@ func TestMFPGPIPAERDefaultDetectsFallingACIAEdge(t *testing.T) {
 	}
 
 	mfp.SetACIAInterrupt(false)
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected rising ACIA edge to be ignored by default AER, got %d", len(irqs))
 	}
 }
@@ -547,12 +548,12 @@ func TestMFPGPIPAERDetectsRisingACIAEdgeWhenConfigured(t *testing.T) {
 	}
 
 	mfp.SetACIAInterrupt(true)
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected falling ACIA edge to be ignored by rising AER, got %d", len(irqs))
 	}
 
 	mfp.SetACIAInterrupt(false)
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected rising ACIA edge interrupt, got %d", len(irqs))
 	}
@@ -575,14 +576,14 @@ func TestMFPGPIPAERIgnoresEdgesOnDDRConfiguredOutputs(t *testing.T) {
 	}
 
 	mfp.SetACIAInterrupt(true)
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected DDR output ACIA edge to be ignored, got %d", len(irqs))
 	}
 
 	if err := mfp.Write(1, mfpBase+mfpDDR, 0x00); err != nil {
 		t.Fatalf("clear DDR: %v", err)
 	}
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected no latent ACIA edge after returning bit to input, got %d", len(irqs))
 	}
 }
@@ -603,7 +604,7 @@ func TestMFPGPIPAERDetectsFallingRTCEdgeOnGPIP5(t *testing.T) {
 	}
 
 	rtc.HandleCommand(icdRTCCmdBegin)
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected falling RTC edge interrupt, got %d", len(irqs))
 	}
@@ -612,7 +613,7 @@ func TestMFPGPIPAERDetectsFallingRTCEdgeOnGPIP5(t *testing.T) {
 	}
 
 	rtc.HandleCommand(icdRTCCmdEnd)
-	if irqs := mfp.DrainInterrupts(); len(irqs) != 0 {
+	if irqs := drainIRQ(mfp); len(irqs) != 0 {
 		t.Fatalf("expected rising RTC edge to be ignored by default AER, got %d", len(irqs))
 	}
 }
@@ -715,7 +716,7 @@ func TestMFPRS232ReceiveByteSetsStatusAndInterrupt(t *testing.T) {
 		t.Fatalf("expected RSR buffer-full bit, got %02x", byte(status))
 	}
 
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected receive interrupt, got %d", len(irqs))
 	}
@@ -807,7 +808,7 @@ func TestMFPRS232TransmitCapturesOutputAndInterrupts(t *testing.T) {
 		t.Fatalf("expected TSR buffer-empty bit, got %02x", byte(status))
 	}
 
-	irqs := mfp.DrainInterrupts()
+	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
 		t.Fatalf("expected transmit interrupt, got %d", len(irqs))
 	}

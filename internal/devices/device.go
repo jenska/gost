@@ -10,11 +10,12 @@ import (
 // request (vector 24+Level) rather than take a device-supplied vector.
 const AutoVector = cpu.AutoVector
 
-// Interrupt models a pending CPU interrupt from a device to the CPU.
+// Interrupt models a single interrupt a device drives onto the CPU: a priority
+// Level (1-7) and an exception Vector (AutoVector to auto-vector). Devices
+// expose their interrupt line through PendingIRQ/AckIRQ; the machine aggregates
+// those lines into the CPU's IRQ source.
 type Interrupt struct {
-	// Level is the interrupt priority level (1-7).
-	Level uint8
-	// Vector is the exception vector number, or AutoVector to auto-vector.
+	Level  uint8
 	Vector uint8
 }
 
@@ -34,14 +35,6 @@ type EventPredictor interface {
 	// and a boolean indicating whether a prediction is available (true) or
 	// no immediate events are predicted (false).
 	NextEventCycles() (uint64, bool)
-}
-
-// InterruptSource exposes pending interrupts from a device to the CPU via
-// the interrupt controller.
-type InterruptSource interface {
-	// DrainInterrupts returns all pending interrupts and clears the device's
-	// interrupt queue. Interrupts are returned in priority order.
-	DrainInterrupts() []Interrupt
 }
 
 func readUint16BE(buf []byte, offset uint32) uint16 {

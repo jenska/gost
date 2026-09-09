@@ -4,41 +4,9 @@ import (
 	"testing"
 
 	"github.com/jenska/gost/internal/config"
-	"github.com/jenska/m68kemu"
 )
 
-func TestGLUEConfigRegisterDefaultsToZero(t *testing.T) {
-	glue := NewGLUE()
-
-	value, err := glue.Read(m68kemu.Word, glueBase)
-	if err != nil {
-		t.Fatalf("read glue register: %v", err)
-	}
-	if got := uint16(value); got != 0 {
-		t.Fatalf("unexpected default glue value: got %04x want 0000", got)
-	}
-}
-
-func TestGLUEByteWritesUpdateHighAndLowBytes(t *testing.T) {
-	glue := NewGLUE()
-
-	if err := glue.Write(m68kemu.Byte, glueBase, 0x12); err != nil {
-		t.Fatalf("write glue high byte: %v", err)
-	}
-	if err := glue.Write(m68kemu.Byte, glueBase+1, 0x34); err != nil {
-		t.Fatalf("write glue low byte: %v", err)
-	}
-
-	value, err := glue.Read(m68kemu.Word, glueBase)
-	if err != nil {
-		t.Fatalf("read glue word: %v", err)
-	}
-	if got := uint16(value); got != 0x1234 {
-		t.Fatalf("unexpected glue word: got %04x want 1234", got)
-	}
-}
-
-func TestGLUEQueuesHBLAtScanlineBoundary(t *testing.T) {
+func TestGLUEAssertsHBLLineAtScanlineBoundary(t *testing.T) {
 	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
 	glue := NewGLUE(cfg)
 
@@ -50,28 +18,48 @@ func TestGLUEQueuesHBLAtScanlineBoundary(t *testing.T) {
 		t.Fatalf("unexpected first PAL scanline cycles: got %d want 511", cycles)
 	}
 
-	glue.Advance(cycles)
-	irqs := glue.DrainInterrupts()
-	if len(irqs) != 1 {
-		t.Fatalf("expected one HBL interrupt, got %d", len(irqs))
+	if level, _ := glue.PendingIRQ(); level != 0 {
+		t.Fatalf("GLUE line asserted before any scanline edge: level %d", level)
 	}
-	if irqs[0].Level != 2 || irqs[0].Vector != AutoVector {
-		t.Fatalf("unexpected HBL interrupt: %+v", irqs[0])
+
+	glue.Advance(cycles)
+	level, vector := glue.PendingIRQ()
+	if level != 2 || vector != AutoVector {
+		t.Fatalf("expected HBL autovector line, got level %d vector %d", level, vector)
+	}
+
+	glue.AckIRQ(2)
+	if level, _ := glue.PendingIRQ(); level != 0 {
+		t.Fatalf("GLUE line still asserted after AckIRQ: level %d", level)
 	}
 }
 
-func TestGLUEQueuesVBLAtFrameBoundary(t *testing.T) {
+func TestGLUEAssertsVBLLineAtFrameBoundary(t *testing.T) {
 	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
 	glue := NewGLUE(cfg)
 
 	glue.Advance(cfg.FrameCycles())
-	irqs := glue.DrainInterrupts()
-	if len(irqs) == 0 {
-		t.Fatalf("expected GLUE frame interrupts")
+	if level, vector := glue.PendingIRQ(); level != 4 || vector != AutoVector {
+		t.Fatalf("expected VBL autovector line after a full frame, got level %d vector %d", level, vector)
 	}
-	last := irqs[len(irqs)-1]
-	if last.Level != 4 || last.Vector != AutoVector {
-		t.Fatalf("expected final frame interrupt to be VBL autovector, got %+v", last)
+}
+
+// TestGLUEVBLLineOutranksLaterHBLEdges guards the priority guard in Advance: an
+// unacknowledged VBL (level 4) must not be downgraded to an HBL (level 2) by the
+// scanline edges that follow it in the next frame.
+func TestGLUEVBLLineOutranksLaterHBLEdges(t *testing.T) {
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
+	glue := NewGLUE(cfg)
+
+	glue.Advance(cfg.FrameCycles())
+	if level, _ := glue.PendingIRQ(); level != 4 {
+		t.Fatalf("expected VBL line, got level %d", level)
+	}
+
+	// Several more scanlines pass without the CPU taking the VBL.
+	glue.Advance(cfg.FrameCycles() / 100)
+	if level, _ := glue.PendingIRQ(); level != 4 {
+		t.Fatalf("VBL line was lowered by later HBL edges: level %d", level)
 	}
 }
 
