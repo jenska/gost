@@ -112,12 +112,33 @@ JSON config files are also supported. Config keys use the same names as CLI flag
 
 Load order is: preset defaults, then JSON config file, then CLI flags.
 
+### Configuration launcher
+
+Running the desktop build with no arguments (or with `--launcher`) opens a
+configuration screen before the ST boots. It lets you:
+
+- pick an Atari ST model preset (520 ST, 1040 STF, 1040 STE, Mega ST 2/4, Mega STE)
+- choose a colour or monochrome monitor, RAM size, and CPU speed
+- toggle fullscreen and set the window scale
+- select a TOS ROM, floppy A/B images, and a hard-disk image with native file
+  pickers (the hard-disk `New` button opens a save dialog to create a fresh image)
+- save the current setup as a named profile and reload it later
+
+Profiles are stored as JSON in `<user config dir>/gost/profiles` (override the
+location with the `GOST_CONFIG_DIR` environment variable), using the same schema
+as the files in `configs/`. The last configuration used is remembered and
+pre-selected the next time the launcher opens. Passing `--config` or any machine
+flag boots directly and skips the launcher.
+
 Ready-to-use machine profiles are available in `configs/`:
 
+- `configs/atari-520st-color.json`
 - `configs/atari-1040stf-color.json`
 - `configs/atari-1040stf-mono.json`
 - `configs/atari-1040ste-color.json`
 - `configs/atari-1040ste-mono.json`
+- `configs/atari-mega-st4-mono.json`
+- `configs/atari-mega-ste.json`
 
 Use them with `--config`, for example:
 
@@ -128,6 +149,7 @@ go run ./cmd/gost --config configs/atari-1040ste-color.json
 ### CLI Flags
 
 - `--config <path>`: optional JSON config file loaded before CLI overrides
+- `--launcher`: open the desktop configuration launcher before boot (implied when no other arguments are given)
 - `--preset <name>`: machine preset, currently `default`, `stf`, `st`, or `mega-st`
 - `--model <name>`: hardware model, currently `st` or `ste`
 - `--rom <path>`: path to the TOS ROM image; bundled EmuTOS is used when omitted
@@ -153,7 +175,7 @@ go run ./cmd/gost --config configs/atari-1040ste-color.json
 - `--trace-end <addr>`: last PC included in `boot` and `boot-verbose` traces
 - `--dump-frame <path>`: write the last rendered framebuffer to a PNG file; encoding uses the same snapshot-safe frame dump path that can queue multiple PNG jobs in parallel from host-side tooling
 
-During desktop execution, press `F12` to open the GoST overlay. The current overlay provides drive A/B floppy path fields with `Browse`, `Mount`, and `Eject` controls. `Browse` opens the native file selector where supported, while manual path entry remains available on every build. Mounting supports the same disk image formats as `--floppy-a` and `--floppy-b`.
+During desktop execution, press `F12` to open the GoST configuration panel as a HUD over the running ST screen — opening it never resizes or rescales the emulated display; if the panel is taller than the current ST resolution, scroll with the mouse wheel to reach the rest of it. It exposes the same settings as the launcher (model preset, monitor, RAM, CPU, ROM, floppy A/B, hard disk, RTC, fullscreen, scale) plus profile save/load. `Apply & Reboot` rebuilds the machine and cold-boots the emulated ST with the new settings; `Browse` opens the native file selector where supported, with manual path entry available on every build.
 
 ## WebAssembly
 

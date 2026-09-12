@@ -1,0 +1,7 @@
+{
+  "preset": "mega-st",
+  "model": "ste",
+  "ram-size": 4194304,
+  "cpu-clock-hz": 16000000,
+  "color-monitor": false
+}

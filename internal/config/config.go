@@ -67,6 +67,7 @@ const (
 	KeyRTC            = "rtc"
 	KeyMidResYScale   = "midres-y-scale"
 	KeyModel          = "model"
+	KeyLauncher       = "launcher"
 )
 
 // Config holds all configuration parameters for the Atari ST emulation.
@@ -117,6 +118,8 @@ type Config struct {
 	MidResYScale int
 	// Model specifies the machine type: st or ste.
 	Model MachineModel
+	// Launcher forces the desktop configuration launcher to open before boot.
+	Launcher bool
 }
 
 type configPatch map[string]json.RawMessage
@@ -318,6 +321,38 @@ func Load(args []string) (*Config, error) {
 	return cfg, nil
 }
 
+// LoadConfigFile builds a validated Config from a single JSON file, applying the
+// preset it names (if any) before its remaining keys. Unlike Load it consults no
+// CLI arguments, so it is the path used for saved profiles and the last-used
+// config.
+func LoadConfigFile(path string) (*Config, error) {
+	patch, err := loadConfigPatch(path)
+	if err != nil {
+		return nil, err
+	}
+
+	preset := PresetDefault
+	if named, ok, err := patch.Preset(); err != nil {
+		return nil, err
+	} else if ok {
+		if preset, err = normalizePreset(named); err != nil {
+			return nil, err
+		}
+	}
+
+	cfg, err := ConfigForPreset(preset)
+	if err != nil {
+		return nil, err
+	}
+	if err := patch.Apply(cfg); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 func (cfg *Config) Validate() error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
@@ -404,6 +439,7 @@ func (cfg *Config) jsonFields() map[string]any {
 		KeyRTC:            &cfg.RTC,
 		KeyMidResYScale:   &cfg.MidResYScale,
 		KeyModel:          &cfg.Model,
+		KeyLauncher:       &cfg.Launcher,
 	}
 }
 
@@ -501,6 +537,7 @@ func parseFlags(cfg *Config, args []string) error {
 	fs.BoolVar(&cfg.RTC, KeyRTC, cfg.RTC, "enable the ICD-compatible ACSI real-time clock")
 	fs.IntVar(&cfg.MidResYScale, KeyMidResYScale, cfg.MidResYScale, "vertical host scaling for medium resolution (>=1)")
 	fs.StringVar(&model, KeyModel, model, "machine model: st|ste")
+	fs.BoolVar(&cfg.Launcher, KeyLauncher, cfg.Launcher, "open the desktop configuration launcher before boot")
 
 	if err := fs.Parse(args); err != nil {
 		return err

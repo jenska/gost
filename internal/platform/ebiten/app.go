@@ -3,9 +3,13 @@ package ebiten
 import (
 	"errors"
 	"fmt"
+	"os"
+	"reflect"
 	"runtime"
 	"time"
 
+	"github.com/ebitenui/ebitenui"
+	"github.com/ebitenui/ebitenui/widget"
 	ebitenlib "github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -17,73 +21,116 @@ import (
 	"github.com/jenska/ym2149/renderer/audiostream"
 )
 
+type appMode int
+
+const (
+	modeRunning appMode = iota
+	modeLauncher
+)
+
+// fileTarget identifies which configuration path a native file dialog fills in.
+type fileTarget int
+
+const (
+	targetFloppyA fileTarget = iota
+	targetFloppyB
+	targetROM
+	targetHardDiskOpen
+	targetHardDiskNew
+)
+
 type App struct {
-	machine              *emulator.Machine
-	audio                *hostAudioQueue
-	scale                float64
-	texture              *ebitenlib.Image
-	prevKeys             map[ebitenlib.Key]bool
-	hostMouseX           int
-	hostMouseY           int
-	lastButtons          byte
-	mouseReady           bool
-	cursorMode           ebitenlib.CursorModeType
-	overlay              *overlay
+	machine *emulator.Machine
+	session *emulator.Session
+	cfg     config.Config
+
+	audio  *hostAudioQueue
+	player *audio.Player
+
+	scale       float64
+	texture     *ebitenlib.Image
+	prevKeys    map[ebitenlib.Key]bool
+	hostMouseX  int
+	hostMouseY  int
+	lastButtons byte
+	mouseReady  bool
+	cursorMode  ebitenlib.CursorModeType
+
+	mode          appMode
+	launcher      *ebitenui.UI
+	launcherPanel *configPanel
+	overlay       *overlay
+
+	// buildMachine assembles a fresh Session from a config; overridable in tests.
+	buildMachine func(*config.Config) (*emulator.Session, error)
+
 	mountedFloppies      [2]string
 	hostCommands         []hostCommand
 	lastHostCommandError string
-	fileSelector         func() (string, error)
-	fileDialogResults    chan fileDialogResult
-	fileDialogPending    [2]bool
-	selectedFloppyPaths  [2]string
+
+	fileSelector      func() (string, error)
+	fileDialogResults chan fileDialogResult
+	fileDialogPending map[fileTarget]bool
+	selectedPaths     map[fileTarget]string
 }
 
 const (
 	audioBufferSize    = 75 * time.Millisecond
 	audioQueueDuration = 250 * time.Millisecond
+
+	// configWindowWidth/Height size the window while the configuration panel is
+	// on screen (launcher, or the F12 overlay during a session).
+	configWindowWidth  = 700
+	configWindowHeight = 540
 )
+
+var launcherBackgroundColor = panelRowBackgroundColor
 
 type hostCommandKind int
 
 const (
 	hostCommandMountFloppy hostCommandKind = iota
 	hostCommandEjectFloppy
+	hostCommandReboot
 )
 
 type hostCommand struct {
 	kind  hostCommandKind
 	drive int
 	path  string
+	cfg   *config.Config
 }
 
 type fileDialogResult struct {
-	drive int
-	path  string
-	err   error
+	target fileTarget
+	path   string
+	err    error
 }
 
-func Run(machine *emulator.Machine, cfg config.Config) error {
+// Run drives the desktop frontend for the machine already assembled in session.
+// It owns the machine lifecycle from here: an "Apply & Reboot" rebuilds it, and
+// the hard-disk image and last-used config are persisted on exit.
+func Run(session *emulator.Session, cfg config.Config, startInLauncher bool) error {
 	app := &App{
-		machine: machine,
-		scale:   cfg.Scale,
-		mountedFloppies: [2]string{
-			cfg.FloppyA,
-			cfg.FloppyB,
-		},
-		prevKeys: make(map[ebitenlib.Key]bool),
+		machine:           session.Machine,
+		session:           session,
+		cfg:               cfg,
+		scale:             cfg.Scale,
+		mountedFloppies:   [2]string{cfg.FloppyA, cfg.FloppyB},
+		prevKeys:          make(map[ebitenlib.Key]bool),
+		buildMachine:      emulator.BuildMachine,
+		fileDialogPending: map[fileTarget]bool{},
+		selectedPaths:     map[fileTarget]string{},
 	}
 
-	width, height := machine.DisplayDimensions()
-	if app.scale <= 0 {
-		app.scale = 2
-	}
+	width, height := app.machine.DisplayDimensions()
+	app.scale = clampScale(app.scale)
 	app.texture = ebitenlib.NewImage(width, height)
 	app.resetMouseTracking()
-	source := atarist.New(machine.AudioSource(), atarist.Config{})
+	source := atarist.New(app.machine.AudioSource(), atarist.Config{})
 	app.audio = newHostAudioQueue(source, audioQueueDuration)
 
 	ebitenlib.SetWindowTitle("GoST Emulator")
-	ebitenlib.SetWindowSize(scaledWindowSize(width, height, app.scale))
 	ebitenlib.SetWindowResizingMode(ebitenlib.WindowResizingModeEnabled)
 	ebitenlib.SetTPS(int(cfg.FrameHz))
 	ebitenlib.SetFullscreen(cfg.Fullscreen)
@@ -93,14 +140,119 @@ func Run(machine *emulator.Machine, cfg config.Config) error {
 		return err
 	}
 	defer player.Close()
+	app.player = player
 	player.Play()
 
-	return ebitenlib.RunGame(app)
+	if startInLauncher {
+		app.enterLauncher()
+	} else {
+		app.applyRunningWindow()
+	}
+
+	runErr := ebitenlib.RunGame(app)
+
+	if saveErr := app.session.PersistHardDisk(); saveErr != nil && runErr == nil {
+		runErr = saveErr
+	}
+	if runErr == nil && app.cfg.DumpFramePath != "" {
+		if dumpErr := app.machine.DumpFramePNG(app.cfg.DumpFramePath); dumpErr != nil {
+			runErr = dumpErr
+		}
+	}
+	if runErr == nil {
+		if err := config.SaveLastConfig(&app.cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "save last config: %v\n", err)
+		}
+	}
+	return runErr
+}
+
+func (a *App) enterLauncher() {
+	a.mode = modeLauncher
+	root := widget.NewContainer(widget.ContainerOpts.Layout(widget.NewAnchorLayout()))
+	panel := newConfigPanel(a, configModeLauncher, a.cfg)
+	root.AddChild(panel.container)
+	a.launcher = &ebitenui.UI{Container: root}
+	a.launcherPanel = panel
+	ebitenlib.SetWindowSize(configWindowWidth, configWindowHeight)
+}
+
+func (a *App) applyRunningWindow() {
+	a.mode = modeRunning
+	a.launcher = nil
+	a.launcherPanel = nil
+	a.setRunningWindowSize()
+}
+
+func (a *App) setRunningWindowSize() {
+	if width, height := a.machine.DisplayDimensions(); width > 0 && height > 0 {
+		ebitenlib.SetWindowSize(scaledWindowSize(width, height, a.scale))
+	}
+}
+
+// applyDisplayConfig applies the scale and fullscreen settings from a.cfg to the
+// host window. These are host-only settings and never require a reboot.
+func (a *App) applyDisplayConfig() {
+	a.scale = clampScale(a.cfg.Scale)
+	ebitenlib.SetFullscreen(a.cfg.Fullscreen)
+	a.setRunningWindowSize()
+}
+
+// applyConfig is the callback the configPanel invokes on Start / Apply & Reboot.
+func (a *App) applyConfig(newCfg config.Config) {
+	if !a.machineConfigChanged(newCfg) {
+		a.cfg = newCfg
+		if a.mode == modeLauncher {
+			a.applyRunningWindow()
+		} else {
+			a.setOverlayVisible(false)
+		}
+		a.applyDisplayConfig()
+		return
+	}
+	stored := newCfg
+	a.hostCommands = append(a.hostCommands, hostCommand{kind: hostCommandReboot, cfg: &stored})
+	a.setOverlayVisible(false)
+}
+
+// machineConfigChanged reports whether newCfg differs from the active config in a
+// way that requires rebuilding the machine. Host-only display settings (scale,
+// fullscreen) are ignored.
+func (a *App) machineConfigChanged(newCfg config.Config) bool {
+	old, cur := a.cfg, newCfg
+	old.Scale, cur.Scale = 0, 0
+	old.Fullscreen, cur.Fullscreen = false, false
+	return !reflect.DeepEqual(old.ToPatch(), cur.ToPatch())
+}
+
+// clampScale is a runtime sanity bound on the window scale, independent of the
+// configuration panel's slider range (1-4): CLI/JSON configs may still request
+// a larger window.
+func clampScale(scale float64) float64 {
+	if scale < 1 {
+		return 1
+	}
+	if scale > 8 {
+		return 8
+	}
+	return scale
 }
 
 func (a *App) Update() error {
 	a.applyFileDialogResults()
 	a.applyHostCommands()
+
+	if a.mode == modeLauncher {
+		a.setHostCursorMode(ebitenlib.CursorModeVisible)
+		if a.launcherPanel != nil {
+			a.launcherPanel.Refresh()
+		}
+		if a.launcher != nil {
+			a.launcher.Update()
+		}
+		return nil
+	}
+
 	a.handleOverlayToggle()
 	if a.overlayVisible() {
 		a.setHostCursorMode(ebitenlib.CursorModeVisible)
@@ -123,6 +275,40 @@ func (a *App) Update() error {
 			a.resetMouseTracking()
 		}
 		a.texture.WritePixels(a.machine.DisplayFrameBuffer())
+	}
+	return nil
+}
+
+// reboot rebuilds the machine from newCfg, cold-booting the emulated ST while
+// keeping the same window, audio player, and Ebiten game loop.
+func (a *App) reboot(newCfg config.Config) error {
+	if err := a.session.PersistHardDisk(); err != nil {
+		return fmt.Errorf("save hard disk image: %w", err)
+	}
+	session, err := a.buildMachine(&newCfg)
+	if err != nil {
+		return err
+	}
+
+	a.session = session
+	a.machine = session.Machine
+	a.cfg = newCfg
+	a.mountedFloppies = [2]string{newCfg.FloppyA, newCfg.FloppyB}
+	a.selectedPaths = map[fileTarget]string{}
+	a.audio.setSource(atarist.New(a.machine.AudioSource(), atarist.Config{}))
+	if newCfg.Trace != "" {
+		a.machine.EnableTrace(newCfg.Trace, os.Stdout)
+	}
+
+	if width, height := a.machine.DisplayDimensions(); width > 0 && height > 0 {
+		a.texture = ebitenlib.NewImage(width, height)
+	}
+	a.resetMouseTracking()
+	a.scale = clampScale(newCfg.Scale)
+	ebitenlib.SetFullscreen(newCfg.Fullscreen)
+	a.applyRunningWindow()
+	if newCfg.FrameHz > 0 {
+		ebitenlib.SetTPS(int(newCfg.FrameHz))
 	}
 	return nil
 }
@@ -153,47 +339,82 @@ func (a *App) LastHostCommandError() string {
 	return a.lastHostCommandError
 }
 
-func (a *App) QueueBrowseFloppy(drive int) {
-	if drive < 0 || drive >= len(a.fileDialogPending) {
-		a.lastHostCommandError = fmt.Sprintf("unsupported floppy drive %d", drive)
-		return
+// QueueBrowse opens a native file dialog for the given configuration target on a
+// background goroutine; the result is picked up in applyFileDialogResults.
+func (a *App) QueueBrowse(target fileTarget) {
+	if a.fileDialogPending == nil {
+		a.fileDialogPending = map[fileTarget]bool{}
 	}
-	if a.fileDialogPending[drive] {
-		a.lastHostCommandError = fmt.Sprintf("drive %c file selector already open", 'A'+drive)
+	if a.selectedPaths == nil {
+		a.selectedPaths = map[fileTarget]string{}
+	}
+	if a.fileDialogPending[target] {
+		a.lastHostCommandError = "file selector already open"
 		return
 	}
 	if a.fileDialogResults == nil {
-		a.fileDialogResults = make(chan fileDialogResult, len(a.fileDialogPending))
+		a.fileDialogResults = make(chan fileDialogResult, 8)
 	}
-	a.fileDialogPending[drive] = true
-	a.lastHostCommandError = fmt.Sprintf("Opening drive %c file selector...", 'A'+drive)
+	a.fileDialogPending[target] = true
+	a.lastHostCommandError = "Opening file selector..."
 	results := a.fileDialogResults
-	selector := a.selectFloppyDiskImage
+	selector := a.selectorFor(target)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "file dialog panic: %v\n", r)
+				results <- fileDialogResult{target: target, err: fmt.Errorf("file dialog failed: %v", r)}
+			}
+		}()
 		path, err := selector()
-		results <- fileDialogResult{drive: drive, path: path, err: err}
+		results <- fileDialogResult{target: target, path: path, err: err}
 	}()
 }
 
-func (a *App) SelectedFloppyPath(drive int) string {
-	if drive < 0 || drive >= len(a.selectedFloppyPaths) {
+func (a *App) selectorFor(target fileTarget) func() (string, error) {
+	if a.fileSelector != nil {
+		return a.fileSelector
+	}
+	switch target {
+	case targetFloppyA, targetFloppyB:
+		return host.SelectFloppyDiskImage
+	case targetROM:
+		return func() (string, error) {
+			return host.OpenFile(host.FileDialogSpec{
+				Title:      "Select a TOS ROM image",
+				Extensions: []string{"img", "rom", "bin"},
+			})
+		}
+	case targetHardDiskOpen:
+		return func() (string, error) {
+			return host.OpenFile(host.FileDialogSpec{
+				Title:      "Select a hard disk image",
+				Extensions: []string{"img", "hdi", "hd", "raw"},
+			})
+		}
+	case targetHardDiskNew:
+		return func() (string, error) {
+			return host.SaveFile(host.FileDialogSpec{
+				Title:      "Create a hard disk image",
+				Extensions: []string{"img", "hdi"},
+			})
+		}
+	default:
+		return func() (string, error) { return "", host.ErrFileDialogUnsupported }
+	}
+}
+
+func (a *App) SelectedPath(target fileTarget) string {
+	if a.selectedPaths == nil {
 		return ""
 	}
-	return a.selectedFloppyPaths[drive]
+	return a.selectedPaths[target]
 }
 
-func (a *App) ClearSelectedFloppyPath(drive int) {
-	if drive < 0 || drive >= len(a.selectedFloppyPaths) {
-		return
+func (a *App) ClearSelectedPath(target fileTarget) {
+	if a.selectedPaths != nil {
+		delete(a.selectedPaths, target)
 	}
-	a.selectedFloppyPaths[drive] = ""
-}
-
-func (a *App) selectFloppyDiskImage() (string, error) {
-	if a.fileSelector != nil {
-		return a.fileSelector()
-	}
-	return host.SelectFloppyDiskImage()
 }
 
 func (a *App) applyFileDialogResults() {
@@ -208,11 +429,9 @@ func (a *App) applyFileDialogResults() {
 }
 
 func (a *App) applyFileDialogResult(result fileDialogResult) {
-	if result.drive < 0 || result.drive >= len(a.fileDialogPending) {
-		a.lastHostCommandError = fmt.Sprintf("unsupported floppy drive %d", result.drive)
-		return
+	if a.fileDialogPending != nil {
+		a.fileDialogPending[result.target] = false
 	}
-	a.fileDialogPending[result.drive] = false
 	if result.err != nil {
 		if errors.Is(result.err, host.ErrFileDialogCanceled) {
 			a.lastHostCommandError = ""
@@ -221,7 +440,10 @@ func (a *App) applyFileDialogResult(result fileDialogResult) {
 		a.lastHostCommandError = result.err.Error()
 		return
 	}
-	a.selectedFloppyPaths[result.drive] = result.path
+	if a.selectedPaths == nil {
+		a.selectedPaths = map[fileTarget]string{}
+	}
+	a.selectedPaths[result.target] = result.path
 	a.lastHostCommandError = ""
 }
 
@@ -243,6 +465,11 @@ func (a *App) applyHostCommand(command hostCommand) error {
 		return a.mountFloppy(command.drive, command.path)
 	case hostCommandEjectFloppy:
 		return a.ejectFloppy(command.drive)
+	case hostCommandReboot:
+		if command.cfg == nil {
+			return fmt.Errorf("reboot command missing config")
+		}
+		return a.reboot(*command.cfg)
 	default:
 		return fmt.Errorf("unsupported host command %d", command.kind)
 	}
@@ -275,6 +502,13 @@ func (a *App) ejectFloppy(drive int) error {
 }
 
 func (a *App) Draw(screen *ebitenlib.Image) {
+	if a.mode == modeLauncher {
+		screen.Fill(launcherBackgroundColor)
+		if a.launcher != nil {
+			a.launcher.Draw(screen)
+		}
+		return
+	}
 	if a.texture == nil {
 		return
 	}
@@ -285,6 +519,13 @@ func (a *App) Draw(screen *ebitenlib.Image) {
 }
 
 func (a *App) Layout(int, int) (int, int) {
+	if a.mode == modeLauncher {
+		return configWindowWidth, configWindowHeight
+	}
+	// The F12 overlay is a HUD drawn on top of the emulated screen: it never
+	// changes the display's logical size, so the ST picture never rescales or
+	// repositions when it opens. If the panel is taller or wider than the
+	// current ST resolution, it scrolls instead (see overlay.go).
 	return a.machine.DisplayDimensions()
 }
 
@@ -416,12 +657,16 @@ func (a *App) overlayVisible() bool {
 }
 
 func (a *App) setOverlayVisible(visible bool) {
-	if a.overlay == nil {
-		a.overlay = newOverlay(a)
-	}
-	a.overlay.SetVisible(visible)
 	if visible {
+		// Rebuild each time so the panel reflects the current configuration.
+		// The OS window is left as-is; Layout grows the logical canvas instead.
+		a.overlay = newOverlay(a)
+		a.overlay.SetVisible(true)
 		a.resetMouseTracking()
+		return
+	}
+	if a.overlay != nil {
+		a.overlay.SetVisible(false)
 	}
 }
 

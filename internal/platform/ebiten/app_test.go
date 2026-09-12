@@ -1,25 +1,31 @@
 package ebiten
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/jenska/gost/internal/assets"
 	"github.com/jenska/gost/internal/config"
 	"github.com/jenska/gost/internal/emulator"
-	"github.com/jenska/gost/internal/platform/host"
+	"github.com/jenska/ym2149/renderer/atarist"
 )
 
 func newTestApp(t *testing.T) *App {
 	t.Helper()
-	machine, err := emulator.NewMachine(config.DefaultConfig(), assets.DefaultROM())
+	session, err := emulator.BuildMachine(config.DefaultConfig())
 	if err != nil {
-		t.Fatalf("create machine: %v", err)
+		t.Fatalf("build machine: %v", err)
 	}
-	return &App{machine: machine}
+	return &App{
+		machine:           session.Machine,
+		session:           session,
+		cfg:               *config.DefaultConfig(),
+		scale:             2,
+		buildMachine:      emulator.BuildMachine,
+		fileDialogPending: map[fileTarget]bool{},
+		selectedPaths:     map[fileTarget]string{},
+	}
 }
 
 func TestAppAppliesQueuedFloppyMountAndEject(t *testing.T) {
@@ -59,7 +65,8 @@ func TestAppRecordsQueuedFloppyMountErrors(t *testing.T) {
 }
 
 func TestAppOverlayVisibility(t *testing.T) {
-	app := &App{}
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
 
 	if app.overlayVisible() {
 		t.Fatalf("overlay should be hidden initially")
@@ -77,116 +84,211 @@ func TestAppOverlayVisibility(t *testing.T) {
 	}
 }
 
-func TestFloppyPanelRefreshesMountedPathsAndErrors(t *testing.T) {
-	app := &App{
-		mountedFloppies: [2]string{
-			"/tmp/disk-a.stx",
-			"",
-		},
-		lastHostCommandError: "load drive A disk: missing",
+func TestAppLayoutStaysFixedWhileOverlayIsOpen(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	if _, err := app.machine.StepFrame(); err != nil {
+		t.Fatalf("step frame: %v", err)
 	}
-	panel := newFloppyPanel(app)
+	beforeW, beforeH := app.Layout(0, 0)
+	if beforeW == 0 || beforeH == 0 {
+		t.Fatalf("expected a non-zero display size after stepping a frame, got %dx%d", beforeW, beforeH)
+	}
 
-	panel.Refresh()
+	app.setOverlayVisible(true)
+	if openW, openH := app.Layout(0, 0); openW != beforeW || openH != beforeH {
+		t.Fatalf("F12 overlay changed the display size: got %dx%d, want %dx%d (the ST screen must not rescale)", openW, openH, beforeW, beforeH)
+	}
 
-	if got := panel.pathInputs[0].GetText(); got != "/tmp/disk-a.stx" {
-		t.Fatalf("drive A input text = %q, want mounted path", got)
-	}
-	if got := panel.mounted[0].Label; got != "Mounted: disk-a.stx" {
-		t.Fatalf("drive A mounted label = %q", got)
-	}
-	if got := panel.mounted[1].Label; got != "No disk mounted" {
-		t.Fatalf("drive B mounted label = %q", got)
-	}
-	if got := panel.status.Label; got != app.lastHostCommandError {
-		t.Fatalf("status label = %q, want %q", got, app.lastHostCommandError)
+	app.setOverlayVisible(false)
+	if closedW, closedH := app.Layout(0, 0); closedW != beforeW || closedH != beforeH {
+		t.Fatalf("closing the overlay changed the display size: got %dx%d, want %dx%d", closedW, closedH, beforeW, beforeH)
 	}
 }
 
-func TestFloppyPanelQueuesMountAndEject(t *testing.T) {
-	app := &App{}
-	panel := newFloppyPanel(app)
-	panel.pathInputs[0].SetText("/tmp/disk-a.st")
-	panel.pathInputs[1].SetText("/tmp/disk-b.stx")
+func TestOverlayWrapsPanelInScrollContainer(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
 
-	panel.QueueMount(0)
-	panel.QueueEject(1)
-
-	if len(app.hostCommands) != 2 {
-		t.Fatalf("queued command count = %d, want 2", len(app.hostCommands))
-	}
-	if command := app.hostCommands[0]; command.kind != hostCommandMountFloppy || command.drive != 0 || command.path != "/tmp/disk-a.st" {
-		t.Fatalf("unexpected mount command: %+v", command)
-	}
-	if command := app.hostCommands[1]; command.kind != hostCommandEjectFloppy || command.drive != 1 {
-		t.Fatalf("unexpected eject command: %+v", command)
-	}
-	if got := panel.pathInputs[1].GetText(); got != "" {
-		t.Fatalf("drive B input after eject = %q, want empty", got)
+	o := newOverlay(app)
+	if o.scroll == nil {
+		t.Fatalf("overlay should host the config panel in a scroll container")
 	}
 }
 
-func TestFloppyPanelBrowseSetsPathInput(t *testing.T) {
-	app := &App{
-		fileSelector: func() (string, error) {
-			return "/tmp/selected.stx", nil
-		},
-	}
-	panel := newFloppyPanel(app)
+func TestAppRebuildSwapsMachineAndAudioSource(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	source := atarist.New(app.machine.AudioSource(), atarist.Config{})
+	app.audio = newHostAudioQueue(source, audioQueueDuration)
+	before := app.machine
 
-	panel.QueueBrowse(0)
+	newCfg := app.cfg
+	newCfg.RAMSize = 2 * 1024 * 1024
+	newCfg.ColorMonitor = !newCfg.ColorMonitor
+
+	if err := app.reboot(newCfg); err != nil {
+		t.Fatalf("reboot: %v", err)
+	}
+	if app.machine == before {
+		t.Fatalf("reboot did not replace the machine")
+	}
+	if app.cfg.RAMSize != newCfg.RAMSize {
+		t.Fatalf("app config RAM = %d, want %d", app.cfg.RAMSize, newCfg.RAMSize)
+	}
+	if same := app.audio.currentSource(); same == emulator.AudioSource(source) {
+		t.Fatalf("reboot did not swap the audio source")
+	}
+}
+
+func TestAppApplyConfigFromLauncherQueuesReboot(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	app.mode = modeLauncher
+
+	changed := app.cfg
+	changed.RAMSize = 2 * 1024 * 1024
+	app.applyConfig(changed)
+
+	if len(app.hostCommands) != 1 || app.hostCommands[0].kind != hostCommandReboot {
+		t.Fatalf("expected a queued reboot command, got %+v", app.hostCommands)
+	}
+}
+
+func TestAppApplyConfigFromLauncherWithoutChangesJustStarts(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	app.mode = modeLauncher
+
+	app.applyConfig(app.cfg)
+
+	if len(app.hostCommands) != 0 {
+		t.Fatalf("expected no reboot command, got %+v", app.hostCommands)
+	}
+	if app.mode != modeRunning {
+		t.Fatalf("expected app to switch to running mode")
+	}
+}
+
+func TestConfigPanelBrowseFillsPathInput(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	app.fileSelector = func() (string, error) { return "/tmp/selected.stx", nil }
+	panel := newConfigPanel(app, configModeOverlay, app.cfg)
+
+	panel.app.QueueBrowse(targetFloppyA)
 	waitForFileDialogResult(t, app)
 	panel.Refresh()
 
-	if got := panel.pathInputs[0].GetText(); got != "/tmp/selected.stx" {
-		t.Fatalf("drive A input text = %q, want selected path", got)
-	}
-	if got := app.LastHostCommandError(); got != "" {
-		t.Fatalf("unexpected browse error: %s", got)
-	}
-	if got := len(app.hostCommands); got != 0 {
-		t.Fatalf("browse queued %d host commands, want none", got)
+	if got := panel.pathInputs[targetFloppyA].GetText(); got != "/tmp/selected.stx" {
+		t.Fatalf("floppy A input = %q, want selected path", got)
 	}
 }
 
-func TestFloppyPanelBrowseRecordsDialogErrors(t *testing.T) {
-	app := &App{
-		fileSelector: func() (string, error) {
-			return "", errors.New("dialog unavailable")
-		},
-	}
-	panel := newFloppyPanel(app)
+func TestConfigPanelApplyReadsPathInputsAndValidates(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	app.mode = modeLauncher
+	panel := newConfigPanel(app, configModeLauncher, app.cfg)
 
-	panel.QueueBrowse(1)
-	waitForFileDialogResult(t, app)
-	panel.Refresh()
+	panel.pathInputs[targetFloppyB].SetText("/tmp/game.stx")
+	panel.cycleMonitor()
+	panel.apply()
 
-	if got := app.LastHostCommandError(); got != "dialog unavailable" {
-		t.Fatalf("host command error = %q, want dialog error", got)
+	if len(app.hostCommands) != 1 || app.hostCommands[0].kind != hostCommandReboot {
+		t.Fatalf("expected queued reboot, got %+v", app.hostCommands)
 	}
-	if got := panel.status.Label; got != "dialog unavailable" {
-		t.Fatalf("status label = %q, want dialog error", got)
+	if got := app.hostCommands[0].cfg.FloppyB; got != "/tmp/game.stx" {
+		t.Fatalf("applied FloppyB = %q, want /tmp/game.stx", got)
 	}
 }
 
-func TestFloppyPanelBrowseCancelClearsErrors(t *testing.T) {
-	app := &App{
-		lastHostCommandError: "old error",
-		fileSelector: func() (string, error) {
-			return "", host.ErrFileDialogCanceled
-		},
-	}
-	panel := newFloppyPanel(app)
+func TestConfigPanelCyclePresetUpdatesMachineFields(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	panel := newConfigPanel(app, configModeLauncher, app.cfg)
 
-	panel.QueueBrowse(0)
-	waitForFileDialogResult(t, app)
-	panel.Refresh()
-
-	if got := app.LastHostCommandError(); got != "" {
-		t.Fatalf("host command error after cancel = %q, want empty", got)
+	seen := map[string]bool{}
+	for range len(config.MachinePresets) + 1 {
+		panel.cyclePreset()
+		seen[config.MatchPreset(&panel.work)] = true
 	}
-	if got := panel.status.Label; got != "F12 closes this panel." {
-		t.Fatalf("status label after cancel = %q", got)
+	if len(seen) < 2 {
+		t.Fatalf("cycling presets did not change configuration: %v", seen)
+	}
+}
+
+func TestConfigPanelProfileSaveLoadRoundTrip(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	panel := newConfigPanel(app, configModeLauncher, app.cfg)
+
+	panel.cycleRAM()
+	wantRAM := panel.work.RAMSize
+	panel.profileName.SetText("test-profile")
+	panel.saveProfile()
+
+	other := newConfigPanel(app, configModeLauncher, app.cfg)
+	other.profileName.SetText("test-profile")
+	other.loadProfile()
+	if other.work.RAMSize != wantRAM {
+		t.Fatalf("loaded RAM = %d, want %d", other.work.RAMSize, wantRAM)
+	}
+}
+
+func TestConfigPanelDisplayChangesApplyWithoutReboot(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	app.mode = modeLauncher
+	panel := newConfigPanel(app, configModeLauncher, app.cfg)
+
+	panel.work.Scale = 3
+	panel.work.Fullscreen = true
+	panel.apply()
+
+	if len(app.hostCommands) != 0 {
+		t.Fatalf("display-only change queued a reboot: %+v", app.hostCommands)
+	}
+	if app.mode != modeRunning {
+		t.Fatalf("expected running mode after Start")
+	}
+	if app.cfg.Scale != 3 || !app.cfg.Fullscreen {
+		t.Fatalf("applied cfg scale=%v fullscreen=%v, want 3/true", app.cfg.Scale, app.cfg.Fullscreen)
+	}
+	if app.scale != 3 {
+		t.Fatalf("app.scale = %v, want 3", app.scale)
+	}
+}
+
+func TestConfigPanelScaleAndFullscreenRoundTripInProfile(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	panel := newConfigPanel(app, configModeLauncher, app.cfg)
+	panel.work.Scale = 4
+	panel.work.Fullscreen = true
+	panel.profileName.SetText("big")
+	panel.saveProfile()
+
+	other := newConfigPanel(app, configModeLauncher, app.cfg)
+	other.profileName.SetText("big")
+	other.loadProfile()
+	if other.work.Scale != 4 || !other.work.Fullscreen {
+		t.Fatalf("loaded scale=%v fullscreen=%v, want 4/true", other.work.Scale, other.work.Fullscreen)
+	}
+}
+
+func TestConfigPanelFitsConfigWindow(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	for _, mode := range []configMode{configModeLauncher, configModeOverlay} {
+		panel := newConfigPanel(app, mode, app.cfg)
+		w, h := panel.container.PreferredSize()
+		if w > configWindowWidth {
+			t.Errorf("mode %d: panel width %d exceeds window width %d", mode, w, configWindowWidth)
+		}
+		if h > configWindowHeight {
+			t.Errorf("mode %d: panel height %d exceeds window height %d", mode, h, configWindowHeight)
+		}
 	}
 }
 
@@ -195,7 +297,11 @@ func waitForFileDialogResult(t *testing.T, app *App) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		app.applyFileDialogResults()
-		if !app.fileDialogPending[0] && !app.fileDialogPending[1] {
+		pending := false
+		for _, p := range app.fileDialogPending {
+			pending = pending || p
+		}
+		if !pending {
 			return
 		}
 		time.Sleep(time.Millisecond)

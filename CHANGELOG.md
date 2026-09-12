@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- Desktop configuration launcher: a bare `go run ./cmd/gost` (or `--launcher`)
+  now opens a full configuration screen before boot. It offers Atari ST model
+  presets (520 ST, 1040 STF, 1040 STE, Mega ST 2/4, Mega STE), colour/monochrome
+  monitor, RAM size, CPU speed, TOS ROM, floppy A/B, and a hard-disk image with
+  native file pickers (including a save dialog to create a new image), plus a
+  fullscreen checkbox and a window-scale slider. The same panel is reachable
+  in-session via `F12`; applying machine changes there cold-reboots the emulated
+  ST while floppy mount/eject and the display settings apply live. `F12` renders
+  as a HUD over the running screen rather than resizing it: the ST picture never
+  rescales or repositions when the panel opens, and the panel scrolls (mouse
+  wheel) if it is taller or wider than the current ST resolution.
+- Named configuration profiles saved locally as JSON under
+  `<user config dir>/gost/profiles`, with Save / Load / Delete in the panel. The
+  last configuration used is remembered and pre-selected the next time the
+  launcher opens (`GOST_CONFIG_DIR` overrides the storage location).
+- `config.MachinePresets` catalogue and `emulator.BuildMachine` / `emulator.Session`,
+  the single machine-assembly path now shared by `cmd/gost` and the UI reboot.
+- Generic `host.OpenFile` / `host.SaveFile` native file dialogs (macOS), replacing
+  the floppy-only selector. They are driven through AppleScript (`osascript`)
+  rather than a CGo `NSOpenPanel`, so the picker can be opened safely from the
+  Ebiten game loop without a main-thread AppKit call.
+
 ### Changed
 
 - Fetches and TOS-vector reads from the boot ROM now bypass the bus via a

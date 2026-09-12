@@ -1,75 +1,76 @@
-//go:build darwin && cgo
+//go:build darwin
 
 package host
-
-/*
-#cgo CFLAGS: -x objective-c -fblocks
-#cgo LDFLAGS: -framework AppKit -framework Foundation -framework UniformTypeIdentifiers
-
-#import <AppKit/AppKit.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-#include <stdlib.h>
-
-static char* gostSelectFloppyDiskImage(void) {
-	@autoreleasepool {
-		NSApplication *app = [NSApplication sharedApplication];
-		[app activateIgnoringOtherApps:YES];
-
-		NSOpenPanel *panel = [NSOpenPanel openPanel];
-		[panel setTitle:@"Select a floppy disk image"];
-		[panel setPrompt:@"Select"];
-		[panel setCanChooseFiles:YES];
-		[panel setCanChooseDirectories:NO];
-		[panel setAllowsMultipleSelection:NO];
-		NSMutableArray<UTType *> *contentTypes = [NSMutableArray arrayWithCapacity:5];
-		for (NSString *extension in @[@"st", @"msa", @"stx", @"dim", @"adi"]) {
-			UTType *type = [UTType typeWithFilenameExtension:extension];
-			if (type != nil) {
-				[contentTypes addObject:type];
-			}
-		}
-		[panel setAllowedContentTypes:contentTypes];
-		[panel setAllowsOtherFileTypes:NO];
-		[panel setLevel:NSModalPanelWindowLevel];
-		[panel makeKeyAndOrderFront:nil];
-
-		if ([panel runModal] == NSModalResponseOK) {
-			NSURL *url = [panel URL];
-			NSString *path = [url path];
-			if (path != nil) {
-				return strdup([path UTF8String]);
-			}
-		}
-	}
-	return NULL;
-}
-*/
-import "C"
 
 import (
 	"errors"
 	"fmt"
-	"runtime"
+	"os/exec"
 	"strings"
-	"unsafe"
 )
 
-func SelectFloppyDiskImage() (string, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+// selectFile shows a native file dialog via osascript. AppKit's NSOpenPanel must
+// run on the process main thread, which the Ebiten game loop does not own, so
+// GoST drives the dialog through AppleScript instead; osascript runs it in its
+// own process and can safely be invoked from any goroutine.
+func selectFile(spec FileDialogSpec) (string, error) {
+	prompt := spec.Title
+	if prompt == "" {
+		if spec.ForSave {
+			prompt = "Save file"
+		} else {
+			prompt = "Select a file"
+		}
+	}
 
-	selected := C.gostSelectFloppyDiskImage()
-	if selected == nil {
+	var script string
+	if spec.ForSave {
+		script = fmt.Sprintf(
+			"try\nset theFile to choose file name with prompt %q\nPOSIX path of theFile\non error number -128\nreturn \"\"\nend try",
+			prompt,
+		)
+	} else {
+		typeClause := ""
+		if exts := appleScriptTypeList(spec.Extensions); exts != "" {
+			typeClause = " of type " + exts
+		}
+		script = fmt.Sprintf(
+			"try\nset theFile to choose file with prompt %q%s\nPOSIX path of theFile\non error number -128\nreturn \"\"\nend try",
+			prompt, typeClause,
+		)
+	}
+
+	out, err := exec.Command("osascript", "-e", script).Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			msg := strings.TrimSpace(string(exitErr.Stderr))
+			if msg == "" {
+				msg = "osascript failed"
+			}
+			return "", fmt.Errorf("file dialog: %s", msg)
+		}
+		return "", fmt.Errorf("file dialog: %w", err)
+	}
+
+	path := strings.TrimRight(string(out), "\r\n")
+	if strings.TrimSpace(path) == "" {
 		return "", ErrFileDialogCanceled
 	}
-	defer C.free(unsafe.Pointer(selected))
-
-	path := strings.TrimSpace(C.GoString(selected))
-	if err := ValidateFloppyDiskImagePath(path); err != nil {
-		if errors.Is(err, ErrFileDialogCanceled) {
-			return "", err
-		}
-		return "", fmt.Errorf("%w; supported extensions are .st, .msa, .stx, .dim, and .adi", err)
-	}
 	return path, nil
+}
+
+func appleScriptTypeList(extensions []string) string {
+	quoted := make([]string, 0, len(extensions))
+	for _, ext := range extensions {
+		ext = strings.TrimSpace(strings.TrimPrefix(ext, "."))
+		if ext == "" {
+			continue
+		}
+		quoted = append(quoted, fmt.Sprintf("%q", ext))
+	}
+	if len(quoted) == 0 {
+		return ""
+	}
+	return "{" + strings.Join(quoted, ", ") + "}"
 }

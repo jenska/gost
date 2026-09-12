@@ -10,7 +10,8 @@ import (
 const hostAudioPumpChunk = 2048
 
 type hostAudioQueue struct {
-	source emulator.AudioSource
+	sourceMu sync.Mutex
+	source   emulator.AudioSource
 
 	mu      sync.Mutex
 	buffer  []float32
@@ -30,8 +31,9 @@ func newHostAudioQueue(source emulator.AudioSource, capacity time.Duration) *hos
 }
 
 func (q *hostAudioQueue) Pump() {
+	source := q.currentSource()
 	for {
-		n := q.source.DrainMonoF32(q.scratch)
+		n := source.DrainMonoF32(q.scratch)
 		if n <= 0 {
 			return
 		}
@@ -40,6 +42,21 @@ func (q *hostAudioQueue) Pump() {
 			return
 		}
 	}
+}
+
+func (q *hostAudioQueue) currentSource() emulator.AudioSource {
+	q.sourceMu.Lock()
+	defer q.sourceMu.Unlock()
+	return q.source
+}
+
+// setSource swaps the upstream audio source, e.g. after the machine is rebuilt
+// by an "Apply & Reboot". The output sample rate must match the original source;
+// buffered samples from the previous source are left to drain.
+func (q *hostAudioQueue) setSource(source emulator.AudioSource) {
+	q.sourceMu.Lock()
+	q.source = source
+	q.sourceMu.Unlock()
 }
 
 func (q *hostAudioQueue) DrainMonoF32(dst []float32) int {
@@ -52,7 +69,7 @@ func (q *hostAudioQueue) DrainMonoF32(dst []float32) int {
 }
 
 func (q *hostAudioQueue) OutputSampleRate() int {
-	return q.source.OutputSampleRate()
+	return q.currentSource().OutputSampleRate()
 }
 
 func (q *hostAudioQueue) push(samples []float32) {

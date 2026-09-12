@@ -1,0 +1,6 @@
+{
+  "preset": "st",
+  "model": "st",
+  "ram-size": 524288,
+  "color-monitor": true
+}

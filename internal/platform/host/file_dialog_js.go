@@ -2,6 +2,6 @@
 
 package host
 
-func SelectFloppyDiskImage() (string, error) {
+func selectFile(FileDialogSpec) (string, error) {
 	return "", ErrFileDialogUnsupported
 }
