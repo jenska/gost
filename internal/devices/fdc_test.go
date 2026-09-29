@@ -1157,6 +1157,51 @@ func setupFloppyDMA(t *testing.T, fdc *FDC, address uint32, sectorCount uint16, 
 	}
 }
 
+func TestFDCAcsiReadHonoursCommandCountOverLargerDMACount(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	fdc := NewFDC(ram, nil)
+
+	image := make([]byte, 4*fdcSectorSize)
+	for i := range image {
+		image[i] = 0xAA
+	}
+	if err := fdc.SetHardDiskImage(image); err != nil {
+		t.Fatalf("set hard disk image: %v", err)
+	}
+	const dmaAddr = 0x1000
+	if err := ram.LoadAt(dmaAddr+fdcSectorSize, []byte{0x55}); err != nil {
+		t.Fatalf("seed sentinel: %v", err)
+	}
+	for _, w := range []struct {
+		offset uint32
+		value  uint32
+	}{{fdcOffsetAddrHigh, 0x00}, {fdcOffsetAddrMed, 0x10}, {fdcOffsetAddrLow, 0x00}} {
+		if err := fdc.Write(cpu.Byte, fdcBase+w.offset, w.value); err != nil {
+			t.Fatalf("write DMA address: %v", err)
+		}
+	}
+	// TOS 2.06 loads 255 into the DMA sector count before a one-block read.
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaSCReg); err != nil {
+		t.Fatalf("select sector-count register: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, 255); err != nil {
+		t.Fatalf("write sector count: %v", err)
+	}
+
+	if status := sendACSICommand(t, fdc, []byte{0x08, 0x00, 0x00, 0x00, 0x01, 0x00}); status != acsiStatusGood {
+		t.Fatalf("READ(6) status = %02x, want 00", status)
+	}
+	if got, _ := ram.Read(cpu.Byte, dmaAddr); got != 0xAA {
+		t.Fatalf("requested block not read: got %02x want aa", got)
+	}
+	if got, _ := ram.Read(cpu.Byte, dmaAddr+fdcSectorSize); got != 0x55 {
+		t.Fatalf("READ(6) of one block overran into the next sector: got %02x want 55", got)
+	}
+	if fdc.sectorCount != 254 {
+		t.Fatalf("DMA sector count after one block = %d, want 254", fdc.sectorCount)
+	}
+}
+
 func sendACSICommand(t *testing.T, fdc *FDC, cmd []byte) byte {
 	t.Helper()
 	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaCSACSI); err != nil {

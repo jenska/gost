@@ -1450,6 +1450,17 @@ func (f *FDC) execACSIModeSense(cmd []byte) error {
 	return nil
 }
 
+// dmaSectors caps a hard-disk transfer at the DMA sector count. The drive
+// sends the blocks its command asked for; the DMA only stops early when its
+// count runs out, so a count larger than the command (TOS 2.06 loads 255)
+// must not transfer extra sectors. A zero count is left unlimited.
+func (f *FDC) dmaSectors(requested uint32) uint32 {
+	if f.sectorCount != 0 && uint32(f.sectorCount) < requested {
+		return uint32(f.sectorCount)
+	}
+	return requested
+}
+
 func (f *FDC) execACSIReadWrite(cmd []byte, write bool) error {
 	if !f.hasHardDisk0() {
 		f.finishACSI(acsiStatusCheckCondition, acsiSenseNotReady, true)
@@ -1465,9 +1476,7 @@ func (f *FDC) execACSIReadWrite(cmd []byte, write bool) error {
 	if count == 0 {
 		count = 256
 	}
-	if f.sectorCount != 0 {
-		count = uint32(f.sectorCount)
-	}
+	count = f.dmaSectors(count)
 	totalSectors := uint64(len(f.hardDisk0) / fdcSectorSize)
 	if uint64(lba)+uint64(count) > totalSectors {
 		f.finishACSI(acsiStatusCheckCondition, acsiSenseIllegalReq, true)
@@ -1496,7 +1505,7 @@ func (f *FDC) execACSIReadWrite(cmd []byte, write bool) error {
 	}
 
 	f.dmaAddr += uint32(end - start)
-	f.sectorCount = 0
+	f.sectorCount -= uint16(min(count, uint32(f.sectorCount)))
 	f.finishACSI(acsiStatusGood, acsiSenseNone, false)
 	return nil
 }
@@ -1550,9 +1559,7 @@ func (f *FDC) execACSIReadWrite10(cdb []byte, write bool) error {
 	if count == 0 {
 		count = 65536
 	}
-	if f.sectorCount != 0 {
-		count = uint32(f.sectorCount)
-	}
+	count = f.dmaSectors(count)
 	if count == 0 {
 		f.finishACSI(acsiStatusCheckCondition, acsiSenseIllegalReq, true)
 		return nil
@@ -1586,7 +1593,7 @@ func (f *FDC) execACSIReadWrite10(cdb []byte, write bool) error {
 	}
 
 	f.dmaAddr += uint32(end - start)
-	f.sectorCount = 0
+	f.sectorCount -= uint16(min(count, uint32(f.sectorCount)))
 	f.finishACSI(acsiStatusGood, acsiSenseNone, false)
 	return nil
 }
