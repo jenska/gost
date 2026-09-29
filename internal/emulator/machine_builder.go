@@ -33,6 +33,7 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 	}
 	overlayROM := devices.NewOverlayROM(rom, ram)
 	memoryConfig := devices.NewMemoryConfig(overlayROM, cfg.RAMSize)
+	memoryConfig.SetLinearBankTranslation(cfg.Model == config.MachineModelSTE)
 	ram.SetMemoryConfig(memoryConfig)
 
 	// Model-specific video hardware is the first real fork in machine setup.

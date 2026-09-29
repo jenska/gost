@@ -76,6 +76,39 @@ func TestRAMTranslatesBankedMMUAddresses(t *testing.T) {
 	}
 }
 
+func TestSTEFoldsOversizedBankLinearly(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	overlay := NewOverlayROM(NewROM(make([]byte, 16), 0xFC0000), ram)
+	config := NewMemoryConfig(overlay, ram.Size())
+	config.SetLinearBankTranslation(true)
+	ram.SetMemoryConfig(config)
+
+	if err := ram.LoadAt(0x040000, []byte{0x12, 0x34}); err != nil {
+		t.Fatalf("seed bank0: %v", err)
+	}
+	if err := config.Write(m68kemu.Byte, memoryConfigBase+1, 0x0A); err != nil {
+		t.Fatalf("write mmu config: %v", err)
+	}
+
+	// The STF row/column split would fetch this from 0x020000.
+	value, err := ram.Read(m68kemu.Word, 0x040000)
+	if err != nil {
+		t.Fatalf("read in-bank address: %v", err)
+	}
+	if value != 0x1234 {
+		t.Fatalf("in-bank address remapped: got %04x want 1234", value)
+	}
+
+	// Past the installed 512K the bank repeats.
+	value, err = ram.Read(m68kemu.Word, 0x0C0000)
+	if err != nil {
+		t.Fatalf("read aliased address: %v", err)
+	}
+	if value != 0x1234 {
+		t.Fatalf("oversized bank did not wrap: got %04x want 1234", value)
+	}
+}
+
 func TestRAMTwoMegLayoutAllowsAccessAboveOneMeg(t *testing.T) {
 	ram := NewRAM(0, 2*1024*1024)
 	overlay := NewOverlayROM(NewROM(make([]byte, 16), 0xFC0000), ram)

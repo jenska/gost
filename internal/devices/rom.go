@@ -190,6 +190,14 @@ type MemoryConfig struct {
 	ramBank1Size uint32
 	mmuBank0Size uint32
 	mmuBank1Size uint32
+	linearBanks  bool
+}
+
+// SetLinearBankTranslation selects the STE GST MCU's bank folding: when the
+// configured bank is larger than the installed one, the chip simply sees the
+// logical address modulo its size, instead of the STF MMU's row/column split.
+func (m *MemoryConfig) SetLinearBankTranslation(linear bool) {
+	m.linearBanks = linear
 }
 
 type MemoryAddressState uint8
@@ -284,6 +292,9 @@ func (m *MemoryConfig) ResolveAddress(address uint32) (uint32, MemoryAddressStat
 		return 0, memoryAddressAbsent
 	}
 
+	if m.linearBanks {
+		return bankStart + address&(ramBankSize-1), memoryAddressPresent
+	}
 	translated := translateSTBank(address, ramBankSize, mmuBankSize)
 	return bankStart + translated, memoryAddressPresent
 }
