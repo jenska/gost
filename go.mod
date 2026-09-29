@@ -3,6 +3,7 @@ module github.com/jenska/gost
 go 1.27
 
 require (
+	github.com/ebitengine/purego v0.11.0
 	github.com/ebitenui/ebitenui v0.7.3
 	github.com/hajimehoshi/ebiten/v2 v2.9.11
 	github.com/jenska/m68kemu v1.5.1
@@ -14,7 +15,6 @@ require (
 	github.com/ebitengine/gomobile v0.0.0-20260820040257-d11f821a26a6 // indirect
 	github.com/ebitengine/hideconsole v1.0.0 // indirect
 	github.com/ebitengine/oto/v3 v3.4.1 // indirect
-	github.com/ebitengine/purego v0.11.0 // indirect
 	github.com/frustra/bbcode v0.0.0-20201127003707-6ef347fbe1c8 // indirect
 	github.com/go-text/typesetting v0.3.4 // indirect
 	github.com/jenska/m68kdasm v1.3.0 // indirect

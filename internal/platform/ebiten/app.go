@@ -131,6 +131,7 @@ func Run(session *emulator.Session, cfg config.Config, startInLauncher bool) err
 	app.audio = newHostAudioQueue(source, audioQueueDuration)
 
 	ebitenlib.SetWindowTitle("GoST Emulator")
+	applyAppIcon()
 	ebitenlib.SetWindowResizingMode(ebitenlib.WindowResizingModeEnabled)
 	ebitenlib.SetTPS(int(cfg.FrameHz))
 	ebitenlib.SetFullscreen(cfg.Fullscreen)
