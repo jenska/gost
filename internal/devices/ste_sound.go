@@ -30,13 +30,21 @@ const (
 
 	steSoundOutputSampleRate = 48_000
 	steSoundOutputGain       = 0.5
+
+	// steSoundMicrowireShiftCycles is how long a 16-bit microwire transfer
+	// takes to shift out before the data/mask registers read back as zero.
+	// TOS boot code writes the LMC1992 mixer word and polls the data
+	// register until it clears; real hardware shifts it out in on the
+	// order of a few microseconds, so any small nonzero delay is enough.
+	steSoundMicrowireShiftCycles = 128
 )
 
 var steSoundDMASampleRates = [4]uint64{6258, 12517, 25033, 50066}
 
 // STESound models the STE 8-bit PCM DMA sound registers and a mono host audio
-// stream. It intentionally keeps MICROWIRE as register storage only; DAC volume
-// and tone-control effects can be layered on later without changing callers.
+// stream. MICROWIRE is modeled only enough to clear the data/mask registers
+// after a transfer so boot-time polling unblocks; the LMC1992 mixer itself
+// (DAC volume, tone controls) is not emulated and its writes are discarded.
 type STESound struct {
 	ram     *RAM
 	clockHz uint64
@@ -48,8 +56,9 @@ type STESound struct {
 	frameEnd   uint32
 	current    uint32
 
-	microwireData uint16
-	microwireMask uint16
+	microwireData       uint16
+	microwireMask       uint16
+	microwireBusyCycles uint64
 
 	outputPhase uint64
 	dmaPhase    uint64
@@ -122,6 +131,7 @@ func (s *STESound) Reset() {
 	s.current = 0
 	s.microwireData = 0
 	s.microwireMask = 0
+	s.microwireBusyCycles = 0
 	s.outputPhase = 0
 	s.dmaPhase = 0
 	s.lastSample = 0
@@ -129,7 +139,11 @@ func (s *STESound) Reset() {
 }
 
 func (s *STESound) Advance(cycles uint64) {
-	if cycles == 0 || s.clockHz == 0 {
+	if cycles == 0 {
+		return
+	}
+	s.advanceMicrowire(cycles)
+	if s.clockHz == 0 {
 		return
 	}
 	s.outputPhase += cycles * steSoundOutputSampleRate
@@ -257,13 +271,33 @@ func (s *STESound) writeMicrowireByte(address uint32, value byte) {
 	switch address {
 	case 0xFF8922:
 		s.microwireData = (s.microwireData & 0x00FF) | uint16(value)<<8
+		s.microwireBusyCycles = steSoundMicrowireShiftCycles
 	case 0xFF8923:
 		s.microwireData = (s.microwireData & 0xFF00) | uint16(value)
+		s.microwireBusyCycles = steSoundMicrowireShiftCycles
 	case 0xFF8924:
 		s.microwireMask = (s.microwireMask & 0x00FF) | uint16(value)<<8
 	case 0xFF8925:
 		s.microwireMask = (s.microwireMask & 0xFF00) | uint16(value)
 	}
+}
+
+// advanceMicrowire counts down a pending microwire transfer, clearing the
+// data register to zero once it completes so TOS's boot-time poll loop
+// (which writes a command word to the data register, using a mask register
+// set once up front, then waits for the data register to read back as zero)
+// unblocks. The mask register is left untouched since real hardware does not
+// clear it and TOS reuses it across multiple transfers.
+func (s *STESound) advanceMicrowire(cycles uint64) {
+	if s.microwireBusyCycles == 0 {
+		return
+	}
+	if cycles >= s.microwireBusyCycles {
+		s.microwireBusyCycles = 0
+		s.microwireData = 0
+		return
+	}
+	s.microwireBusyCycles -= cycles
 }
 
 func (s *STESound) advanceDMASample() {
