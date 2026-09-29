@@ -394,7 +394,7 @@ type PSG struct {
 | **TOS 1.62** | OS | ✅ Boots to desktop | STE, 512K-4MB, color; needs `--model ste` |
 | **TOS 2.06** | OS | ✅ Boots to desktop | STE, 1MB, color; the cold-boot memory test holds for 80 s (by design) unless a key is pressed |
 
-Real TOS results are from manual headless runs with local ROM images (not in the repo); there is no automated TOS regression test yet.
+Real TOS results are covered by `TestRealTOSBootsToDesktop`, which runs against local ROM images (not in the repo) and is skipped when none are present.
 | **1st Word Plus 2.02** | Word processor | ✅ Runs | Verified with local Atarimania `.stx` disk 1/2 images on the 1040STE monochrome profile |
 
 ### 3.2 Known Failing / Untested Software
@@ -478,7 +478,7 @@ internal/emulator/
 | **Serial Communication** | No UART tests | Can't verify real serial protocols |
 | **Multi-Format Disks** | ST/MSA/DIM-compatible ADI/HDI tested | D64/IMD/raw bad-sector formats unsupported |
 | **Track-Level FDC** | No raw-track fidelity tests | Copy protection and low-level tools remain unverifiable |
-| **Real TOS Images** | Manual boot checks only | TOS 1.00/1.04/1.06/1.62/2.06 verified by hand; no automated suite, TOS 1.02/2.05 still failing |
+| **Real TOS Images** | Automated, ROM-optional | TOS 1.00/1.04/1.06/1.62/2.06 boot and About-dialog tests (needs local ROMs); TOS 1.02/2.05 still failing |
 | **Graphics Effects** | No demo tests | Scrolling, mid-frame effects untested |
 | **Hard Disk Utils** | Core ACSI works, utility coverage incomplete | Sense/page quirks and vendor expectations still missing |
 | **Timing Precision** | No cycle-count tests | Contention not verified |
@@ -535,10 +535,11 @@ internal/emulator/
   - Tests: Falling and rising ACIA edges, DDR output suppression, and ICD RTC GPIP5 edge routing
 
 #### 1.4 Documentation & Testing
-- Create test suite for real TOS images (TOS 1.00, 1.02, 1.04, 1.06, 1.62, 2.06)
-  - Effort: 2-3 days
-  - Impact: Regressions caught early
-  - Note: TOS images cannot ship in the repo, so tests must skip when the ROM is absent. TOS 1.00/1.04/1.06/1.62/2.06 currently boot and can serve as the baseline.
+- ✅ **Real TOS regression suite landed**
+  - Files: [internal/emulator/tos_rom_test.go](internal/emulator/tos_rom_test.go)
+  - Delivered: boots each TOS 1.00/1.04/1.06/1.62/2.06 image (1.02 and 2.05 are listed as known failures) found in `TOS/` (or `$GOST_TOS_DIR`, identified by ROM header version) in color and mono, checks the desktop is drawn, opens the About dialog, and compares blitter against software rendering pixel for pixel; skipped without images or with `-short`
+  - Verified to catch each of the MMU, MICROWIRE, ACSI DMA, blitter and m68kemu CCR/MOVEM regressions when reintroduced
+  - Follow-up: m68kemu keeps effective-address state in package-level tables, so machines cannot run on parallel goroutines; the subtests run serially (~30 s)
 
 - **Investigate remaining real-TOS boot failures**
   - TOS 1.02: crashes early with a wild PC

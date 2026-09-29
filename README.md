@@ -236,6 +236,12 @@ make test
 go test ./...
 ```
 
+Real TOS regression tests boot every supported TOS image found in the git-ignored `TOS/` folder (or `$GOST_TOS_DIR`) in color and mono, check that the GEM desktop is drawn, open the About dialog, and require blitter and software rendering of it to match pixel for pixel. Images are identified by the version in their ROM header, so any file name works; without images the tests are skipped. They add about 30 seconds and are skipped with `-short`:
+
+```bash
+go test ./internal/emulator -run TestRealTOSBootsToDesktop -v
+```
+
 Debug-oriented emulator probes are kept behind a build tag so the default suite stays fast:
 
 ```bash
@@ -296,7 +302,7 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 
 ## Known Gaps
 
-- TOS 1.02 and 2.05 do not reach the desktop yet, and real-TOS boots are only verified by hand (ROMs cannot ship in the repo)
+- TOS 1.02 and 2.05 do not reach the desktop yet
 - Cycle-exact GLUE/shifter timing is still incomplete
 - Shifter timing and register coverage are partial
 - IKBD protocol coverage is incomplete
@@ -304,7 +310,7 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 
 ## Next Steps
 
-- Get TOS 1.02 and 2.05 to the desktop, and add a ROM-optional TOS boot regression suite
+- Get TOS 1.02 and 2.05 to the desktop
 - Improve cycle-exact shifter/GLUE behavior for broader software compatibility
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
