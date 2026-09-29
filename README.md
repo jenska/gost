@@ -15,6 +15,7 @@ Major milestone:
 GoST has moved beyond early bring-up and now provides a usable Atari ST desktop baseline:
 
 - The bundled EmuTOS image boots to the GEM desktop in both monochrome and color-monitor modes.
+- Real Atari TOS 1.00, 1.04, 1.06, 1.62, and 2.06 ROMs boot to a fully rendered, interactive desktop (ST and STE models, 512K-4MB).
 - The desktop frontend runs in an Ebitengine window with working keyboard, mouse, and audio paths.
 - Headless execution, asynchronous PNG frame dumping, CPU/boot tracing, and browser builds are available for development and debugging.
 - The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, MIDI/RS232 byte I/O, floppy DMA/FDC, YM2149-backed PSG audio, and basic STE DMA sound.
@@ -37,13 +38,14 @@ Known working software includes 1st Word Plus 2.02 from Atarimania `.stx` floppy
 
 - Motorola 68000 emulation via [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu)
 - Atari ST machine model with a 24-bit bus, ROM overlay boot, and 1 MiB RAM default profile
-- GEM desktop boot with the bundled EmuTOS ROM
+- GEM desktop boot with the bundled EmuTOS ROM, or with real TOS 1.00, 1.04, 1.06, 1.62, and 2.06 images
 - Monochrome and color-monitor boot modes
+- MMU memory configuration with ST and STE bank translation, so TOS RAM detection sees the configured 512K-4MB
 - Low, medium, and high resolution Shifter framebuffer rendering
 - Working desktop input path for keyboard and mouse through IKBD/ACIA
 - YM2149-backed PSG sound with live audio playback in the desktop frontend
 - Basic STE DMA sound playback in STE model mode
-- Atari ST Blitter register model exercised by live GEM/VDI boot
+- Atari ST Blitter model that reads sources across the whole bus, so TOS 1.02+ can blit its fonts and icons from ROM
 - MFP timer delivery plus GLUE-backed VBL/HBL autovector timing
 - Basic MIDI and RS232 byte I/O paths for ACIA/MFP register-level testing
 - Optional read-only cartridge ROM mapping at `$FA0000-$FBFFFF`
@@ -89,7 +91,26 @@ make run
 go run ./cmd/gost
 ```
 
-The repository ignores `TOS/`, so personal ROM images can be kept there for local testing without adding them to Git. The Makefile also provides convenience targets such as `make headless`, `make run-rom`, `make headless-rom`, `make run-mega-tos102`, `make test`, `make build`, and `make help`.
+The repository ignores `TOS/`, so personal ROM images can be kept there for local testing without adding them to Git. The Makefile also provides convenience targets such as `make headless`, `make run-rom`, `make headless-rom`, `make test`, `make build`, and `make help`.
+
+Boot a real TOS image with `--rom`. STE TOS versions (1.06, 1.62, 2.06) need the STE model. On a cold boot TOS 2.06 holds its memory-test screen for 80 seconds (by design, to let hard disks spin up); press any key to skip it.
+
+```bash
+go run ./cmd/gost --rom TOS/TOS104GE.IMG --color-monitor
+go run ./cmd/gost --model ste --rom TOS/TOS162DE.IMG --color-monitor
+go run ./cmd/gost --preset mega-st --model ste --ram-size 4194304 --color-monitor --scale 2 --rom TOS/TOS162DE.IMG
+```
+
+| TOS | Model | Status |
+| --- | ----- | ------ |
+| EmuTOS 1.4 (bundled) | ST, STE | Boots to desktop |
+| 1.00 | ST | Boots to desktop |
+| 1.04 | ST | Boots to desktop (color and mono) |
+| 1.06 | STE | Boots to desktop |
+| 1.62 | STE | Boots to desktop |
+| 2.06 | STE | Boots to desktop |
+| 1.02 | ST | Crashes early in boot |
+| 2.05 | STE | Blank screen |
 
 CLI flags can be passed through `ARGS` when using Make targets, or directly after `go run ./cmd/gost`.
 
@@ -270,18 +291,21 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 - A virtual ACSI hard disk is attached by default with 30 MiB capacity.
 - Use `--hd-image` to persist hard-disk contents across emulator restarts; `.hdi` files are stored with an Anex86-compatible header.
 - Use `--rtc` to attach the ICD-compatible ACSI real-time clock backed by the host system clock.
+- On the STE model, an MMU bank configured larger than the installed RAM repeats modulo its real size; the ST model keeps the STF row/column aliasing. This is what lets STE TOS detect 512K-bank memory.
+- STE MICROWIRE writes complete like a real transfer (the data register clears), but the LMC1992 volume/tone mixer is not emulated.
 
 ## Known Gaps
 
-- Real TOS boot coverage beyond the bundled EmuTOS image is not complete yet
-- MMU behavior and cycle-exact GLUE/shifter timing are still incomplete
+- TOS 1.02 and 2.05 do not reach the desktop yet, and real-TOS boots are only verified by hand (ROMs cannot ship in the repo)
+- Cycle-exact GLUE/shifter timing is still incomplete
 - Shifter timing and register coverage are partial
 - IKBD protocol coverage is incomplete
 - Host MIDI backend/timing and copy-protected disk format support are still missing
 
 ## Next Steps
 
-- Improve MMU and cycle-exact shifter/GLUE behavior for broader TOS compatibility
+- Get TOS 1.02 and 2.05 to the desktop, and add a ROM-optional TOS boot regression suite
+- Improve cycle-exact shifter/GLUE behavior for broader software compatibility
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
 - Improve ACSI hard-disk command coverage and real-software compatibility

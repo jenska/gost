@@ -1,28 +1,30 @@
 # GoST Emulator Compatibility Roadmap
 
-**Analysis Date:** May 12, 2026  
+**Analysis Date:** September 29, 2026  
 **Target:** Full Atari 1040STF Compatibility  
-**Current Status:** EmuTOS Desktop Boot (Partial Hardware Implementation)
+**Current Status:** EmuTOS and real TOS 1.00/1.04/1.06/1.62/2.06 boot to a working desktop (Partial Hardware Implementation)
 
 ---
 
 ## Executive Summary
 
-GoST has reached a milestone with EmuTOS desktop boot capability, but significant hardware and software compatibility work remains for a true 1040STF emulator. Current implementation covers:
+GoST boots EmuTOS and the real Atari TOS 1.00, 1.04, 1.06, 1.62 and 2.06 ROMs to a fully rendered, interactive GEM desktop on ST and STE models. Significant hardware and software compatibility work remains for a true 1040STF emulator. Current implementation covers:
 
 ✅ **Working:**
-- 68000 CPU core (via m68kemu)
+- 68000 CPU core (via m68kemu v1.5.2)
 - Basic Shifter (ST & STE models)
 - MFP timers and interrupt delivery
 - IKBD/ACIA keyboard & mouse
 - Optional ICD-compatible RTC over ACSI/GPIP
-- Blitter (immediate execution model)
+- Blitter (immediate execution model; reads sources across the whole bus, including ROM)
 - PSG/YM2149 audio (YM2149 library)
 - Floppy DMA/FDC (sector-image abstraction with WD1772 type I/II/III/IV coverage)
 - Virtual ACSI hard disk (FAT16, core command coverage)
 - VBL interrupts
 - ROM overlay boot
+- MMU memory configuration with ST row/column and STE linear bank translation (512K-4MB)
 - EmuTOS 1.4 boot to desktop
+- Real TOS 1.00, 1.04 (color and mono), 1.06, 1.62 and 2.06 boot to desktop
 
 ⚠️ **Partially Working:**
 - STE Shifter (screen base addressing improvements added but incomplete)
@@ -33,12 +35,10 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 ❌ **Missing/Incomplete:**
 - True hardware-cycle accurate bus contention
 - Multiple disk formats (D64, IMD, raw ST images with bad sectors)
-- Printer port (Parallel / Centronics)
-- MIDI port
-- Modem/RS-232 device path via MFP UART
-- STE DMA sound timing, MICROWIRE mixer behavior, and DMA-active/MFP edge signaling
-- STE/Mega ST extended hardware
-- Cartridge ROM support
+- Modem/RS-232 timing via MFP UART (byte path exists)
+- STE DMA sound timing, LMC1992 mixer (volume/tone) effects, and DMA-active/MFP edge signaling
+- Mega ST extended hardware
+- TOS 1.02 and TOS 2.05 boot
 - Network/Ethernet
 - Precise timing of various hardware subsystems
 
@@ -50,12 +50,13 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 
 | Device | Status | Location | Notes |
 |--------|--------|----------|-------|
-| M68000 CPU | ✅ Complete | m68kemu (external) | Via github.com/jenska/m68kemu |
-| RAM | ✅ Complete | internal/devices/ram.go | 512K-2MB support |
+| M68000 CPU | ✅ Complete | m68kemu (external) | Via github.com/jenska/m68kemu v1.5.2 |
+| RAM | ✅ Complete | internal/devices/ram.go | 512K-4MB support |
+| MMU memory config | ✅ Functional | internal/devices/rom.go | $FF8001 bank codes; STF row/column aliasing, STE linear (modulo) folding of oversized banks for TOS RAM detection |
 | ROM | ✅ Complete | internal/devices/rom.go | 256K/512K images |
 | Shifter (ST) | ⚠️ Partial | internal/devices/shifter_st.go | Low/Medium/High res, palette, partial contention/blanking model |
 | Shifter (STE) | ⚠️ Partial | internal/devices/shifter_ste.go | Line offset, fine scroll, and STE palette coverage exist; timing and dynamic edge cases remain |
-| Blitter | ✅ Functional | internal/devices/blitter.go | Immediate execution, no cycle timing |
+| Blitter | ✅ Functional | internal/devices/blitter.go | Immediate execution, no cycle timing; bus-master source reads (ROM fonts/icons), address/increment bit 0 ignored as on hardware |
 | MFP 68901 | ⚠️ Partial | internal/devices/mfp.go | Timers, GPIP edge interrupts, basic USART byte path |
 | ACIA | ✅ Basic | internal/devices/acia.go | Keyboard/IKBD path active; MIDI byte path on channel 1 |
 | IKBD | ✅ Basic | internal/devices/ikbd.go | Keyboard, mouse, clock queries |
@@ -67,7 +68,7 @@ GoST has reached a milestone with EmuTOS desktop boot capability, but significan
 | MIDI Port | ✅ Basic | internal/devices/midi.go | ACIA channel 1 byte buffers with receive IRQ; no baud/timing/host backend |
 | Cartridge ROM | ✅ Basic | internal/devices/cartridge_rom.go | Optional read-only 128 KiB slot at $FA0000-$FBFFFF |
 | GLUE | ✅ Basic | internal/devices/glue.go | System-control probe register, PAL/NTSC HBL timing, VBL/HBL autovectors |
-| STE Sound | ✅ Basic | internal/devices/ste_sound.go | STE-only DMA register window, signed 8-bit PCM playback, mono/stereo decode, repeat mode; MICROWIRE is register storage only |
+| STE Sound | ✅ Basic | internal/devices/ste_sound.go | STE-only DMA register window, signed 8-bit PCM playback, mono/stereo decode, repeat mode; MICROWIRE transfers complete (data register clears) but the LMC1992 mixer is not emulated |
 
 ### 1.2 Missing Hardware Devices
 
@@ -242,6 +243,7 @@ type FDC struct {
 
 - ⚠️ **ACSI Hard Disk Compatibility**
   - Current: TEST UNIT READY, REQUEST SENSE, INQUIRY, MODE SENSE(6), READ/WRITE(6), START/STOP UNIT, READ CAPACITY(10), and READ/WRITE(10) are implemented
+  - Transfers move the block count the command requested, capped by the DMA sector count (TOS 2.06 loads 255 for single-block reads)
   - Missing: Broader SCSI/utility compatibility details such as richer sense/page behavior, unit-attention-style flows, and vendor-specific expectations
   - Impact: Some TOS versions and disk utilities still fail
   - Complexity: MEDIUM-HIGH
@@ -321,9 +323,14 @@ type ACIA struct {
 // blitter.go - Immediate register execution
 type Blitter struct {
     ram   *RAM
+    bus   BlitterBus         // Bus-master reads outside RAM (ROM fonts/icons)
     regs  [blitterSize]byte  // Register window
 }
 ```
+
+**Recently fixed:**
+- ✅ Source words outside RAM are fetched through the system bus. TOS 1.02+ blits its system font and desktop icons straight from ROM; before, these read as zero and menus, dialogs and icons were blank.
+- ✅ Address and increment registers ignore bit 0, as on hardware. TOS computes odd byte offsets for glyphs and relies on the rounding; before, text was garbled.
 
 **Missing/Incomplete:**
 - ⚠️ **Cycle-Accurate Execution**
@@ -379,17 +386,23 @@ type PSG struct {
 |----------|------|--------|-------|
 | **EmuTOS 1.4** | OS | ✅ Boots to desktop | Bundled, tested extensively |
 | **GEM Desktop** | UI | ✅ Interactive | Keyboard, mouse, menu functions work |
-| **GEM VDI** | Graphics | ✅ Partial | Blitter exercised during boot |
-| **TOS 1.0x** | OS | ⚠️ Manual/local boot testing | External-ROM workflow exists, but direct automated coverage is still limited |
-| **TOS 1.02** | OS | ⚠️ Manual/local boot testing | External-ROM workflow exists, but direct automated coverage is still limited |
-| **TOS 1.04** | OS | ⚠️ Manual/local boot testing | External-ROM workflow exists, but direct automated coverage is still limited |
+| **GEM VDI** | Graphics | ✅ Functional | Software and blitter text, fill and raster paths render under EmuTOS and TOS 1.04/1.62 |
 | **EmuTOS 1.4 (Color)** | OS | ✅ Boots | Color desktop mode |
+| **TOS 1.00** | OS | ✅ Boots to desktop | ST, 512K and 1MB, color; verified manually (headless frame dump) |
+| **TOS 1.04** | OS | ✅ Boots to desktop | ST, 1MB, color and mono; menus, dialogs and icons render (blitter path) |
+| **TOS 1.06** | OS | ✅ Boots to desktop | STE, 1MB, color |
+| **TOS 1.62** | OS | ✅ Boots to desktop | STE, 512K-4MB, color; needs `--model ste` |
+| **TOS 2.06** | OS | ✅ Boots to desktop | STE, 1MB, color; the cold-boot memory test holds for 80 s (by design) unless a key is pressed |
+
+Real TOS results are from manual headless runs with local ROM images (not in the repo); there is no automated TOS regression test yet.
 | **1st Word Plus 2.02** | Word processor | ✅ Runs | Verified with local Atarimania `.stx` disk 1/2 images on the 1040STE monochrome profile |
 
 ### 3.2 Known Failing / Untested Software
 
 | Category | Examples | Issue |
 |----------|----------|-------|
+| **TOS 1.02** | Mega ST ROM | Crashes early in boot (wild PC, striped screen); not yet investigated |
+| **TOS 2.05** | Mega STE ROM | Blank screen; not yet investigated |
 | **Copy-Protected Games** | Mainly 1980s-90s releases | Raw-track fidelity, bad-sector patterns, and timing behavior still missing |
 | **Low-Level Disk Tools** | HDCopy, Kyroflop, FastCopy | Raw track I/O fidelity and special FDC timing remain incomplete |
 | **3D Graphics** | Falcon 030 features | Not implemented (different CPU) |
@@ -465,7 +478,7 @@ internal/emulator/
 | **Serial Communication** | No UART tests | Can't verify real serial protocols |
 | **Multi-Format Disks** | ST/MSA/DIM-compatible ADI/HDI tested | D64/IMD/raw bad-sector formats unsupported |
 | **Track-Level FDC** | No raw-track fidelity tests | Copy protection and low-level tools remain unverifiable |
-| **Real TOS Images** | Limited testing | TOS 1.0x boot not verified |
+| **Real TOS Images** | Manual boot checks only | TOS 1.00/1.04/1.06/1.62/2.06 verified by hand; no automated suite, TOS 1.02/2.05 still failing |
 | **Graphics Effects** | No demo tests | Scrolling, mid-frame effects untested |
 | **Hard Disk Utils** | Core ACSI works, utility coverage incomplete | Sense/page quirks and vendor expectations still missing |
 | **Timing Precision** | No cycle-count tests | Contention not verified |
@@ -522,9 +535,15 @@ internal/emulator/
   - Tests: Falling and rising ACIA edges, DDR output suppression, and ICD RTC GPIP5 edge routing
 
 #### 1.4 Documentation & Testing
-- Create test suite for real TOS images (TOS 1.0, 1.02, 1.04)
+- Create test suite for real TOS images (TOS 1.00, 1.02, 1.04, 1.06, 1.62, 2.06)
   - Effort: 2-3 days
   - Impact: Regressions caught early
+  - Note: TOS images cannot ship in the repo, so tests must skip when the ROM is absent. TOS 1.00/1.04/1.06/1.62/2.06 currently boot and can serve as the baseline.
+
+- **Investigate remaining real-TOS boot failures**
+  - TOS 1.02: crashes early with a wild PC
+  - TOS 2.05: blank screen
+  - Effort: unknown; each needs its own trace-driven diagnosis
 
 - Document real-world software compatibility
   - Effort: 1-2 days
@@ -586,6 +605,11 @@ internal/emulator/
   - Tests: Baud rate accuracy, data integrity
 
 #### 2.5 STE Hardware Support
+- ✅ **STE TOS boot landed**
+  - Delivered: MICROWIRE transfers complete so the TOS LMC1992 init no longer hangs; STE-specific linear MMU bank folding so TOS 1.06/1.62 detect 512K-bank RAM correctly
+  - Files: [internal/devices/ste_sound.go](internal/devices/ste_sound.go), [internal/devices/rom.go](internal/devices/rom.go), [internal/emulator/machine_builder.go](internal/emulator/machine_builder.go)
+  - Tests: [internal/devices/mmu_test.go](internal/devices/mmu_test.go)
+
 - **Improve STE Shifter timing and dynamic raster behavior**
   - Impact: STE boot and demos work
   - Complexity: MEDIUM
@@ -735,6 +759,8 @@ EmuTOS Desktop (✅ Done)
     └── STE DMA Sound (Phase 2)
 
 Real TOS Compatibility (Phase 2)
+├── TOS 1.00/1.04/1.06/1.62/2.06 desktop boot (✅ Done)
+├── TOS 1.02 and 2.05 boot (open)
 ├── Serial/modem I/O via MFP UART (Phase 2)
 ├── Date/time utility compatibility tracking (Phase 2)
 ├── Printer port (Phase 2)
@@ -757,7 +783,7 @@ Advanced Software (Phase 3)
 - [x] ST/MSA/DIM-compatible ADI/HDI disk formats supported
 - [x] GPIP DDR/AER edge detection functional
 - [ ] Shifter contention affecting CPU timing
-- [ ] 5 different TOS versions boot successfully
+- [x] 5 different TOS versions boot successfully (verified manually: 1.00, 1.04, 1.06, 1.62, 2.06)
 - [ ] Test coverage at 85%+
 
 ### Phase 2 Completion
@@ -858,5 +884,5 @@ Advanced Software (Phase 3)
 
 ---
 
-**Last Updated:** May 12, 2026  
-**Document Version:** 1.1
+**Last Updated:** September 29, 2026  
+**Document Version:** 1.2
