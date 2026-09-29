@@ -15,6 +15,17 @@ func NewMachine(cfg *config.Config, romImage []byte) (*Machine, error) {
 }
 
 func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage []byte) (*Machine, error) {
+	return newMachine(cfg, romImage, cartridgeImage, machineOptions{})
+}
+
+// machineOptions holds construction switches that are not user configuration.
+type machineOptions struct {
+	// noBlitter leaves the blitter off the bus, so TOS falls back to its
+	// software blit routines.
+	noBlitter bool
+}
+
+func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts machineOptions) (*Machine, error) {
 	if len(romImage) == 0 {
 		return nil, fmt.Errorf("ROM image is required")
 	}
@@ -78,7 +89,7 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		// is not memory-mapped.
 		devices.NewScratchRegion(0xFF8006, 0xFF8008),
 		shifter,
-		blitter,
+		blitterDevice(blitter, opts),
 		mfp,
 		acia,
 		fdc,
@@ -204,4 +215,13 @@ func newOpenBusRegion(romImage []byte) *devices.OpenBus {
 		devices.AddressRange{Start: secondaryROMAlias + uint32(len(romImage)), End: defaultROMHighAlias},
 		devices.AddressRange{Start: 0xFF8000, End: 0x1000000},
 	)
+}
+
+// blitterDevice is the blitter, or a bus-error window at its registers when
+// opts.noBlitter is set; the bus error is how TOS detects a missing blitter.
+func blitterDevice(blitter *devices.Blitter, opts machineOptions) cpu.Device {
+	if opts.noBlitter {
+		return devices.NewBusErrorRegion(devices.AddressRange{Start: 0xFF8A00, End: 0xFF8A40})
+	}
+	return blitter
 }
