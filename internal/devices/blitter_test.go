@@ -222,6 +222,55 @@ func TestBlitterCopiesReverseDirectionForOverlap(t *testing.T) {
 	}
 }
 
+// setupSingleWordCopy programs a one-word, one-line source-only copy.
+func setupSingleWordCopy(t *testing.T, blitter *Blitter, src, dst uint32) {
+	t.Helper()
+	mustWriteBlitter(t, blitter, 0x20, cpu.Word, 2)
+	mustWriteBlitter(t, blitter, 0x22, cpu.Word, 2)
+	mustWriteBlitter(t, blitter, 0x24, cpu.Long, src)
+	mustWriteBlitter(t, blitter, 0x28, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2A, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2C, cpu.Word, 0xFFFF)
+	mustWriteBlitter(t, blitter, 0x2E, cpu.Word, 2)
+	mustWriteBlitter(t, blitter, 0x30, cpu.Word, 2)
+	mustWriteBlitter(t, blitter, 0x32, cpu.Long, dst)
+	mustWriteBlitter(t, blitter, 0x36, cpu.Word, 1)
+	mustWriteBlitter(t, blitter, 0x38, cpu.Word, 1)
+	mustWriteBlitter(t, blitter, 0x3A, cpu.Byte, 2)
+	mustWriteBlitter(t, blitter, 0x3B, cpu.Byte, 3)
+	mustWriteBlitter(t, blitter, 0x3D, cpu.Byte, 0)
+}
+
+func TestBlitterReadsSourceFromROMThroughBus(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	rom := NewROM([]byte{0x12, 0x34, 0xBE, 0xEF}, 0xFC0000)
+	blitter := NewBlitter(ram)
+	blitter.SetBus(cpu.NewBus(ram, rom))
+
+	setupSingleWordCopy(t, blitter, 0xFC0002, 0x000200)
+	mustWriteBlitter(t, blitter, 0x3C, cpu.Byte, blitterBusy)
+
+	if got, _ := ram.Read(cpu.Word, 0x000200); got != 0xBEEF {
+		t.Fatalf("ROM source not copied: got %04x want beef", got)
+	}
+}
+
+func TestBlitterIgnoresAddressBitZero(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	blitter := NewBlitter(ram)
+	if err := ram.Write(cpu.Word, 0x000100, 0xA55A); err != nil {
+		t.Fatalf("write source word: %v", err)
+	}
+
+	// TOS computes odd byte offsets for glyphs; the chip has no address bit 0.
+	setupSingleWordCopy(t, blitter, 0x000101, 0x000201)
+	mustWriteBlitter(t, blitter, 0x3C, cpu.Byte, blitterBusy)
+
+	if got, _ := ram.Read(cpu.Word, 0x000200); got != 0xA55A {
+		t.Fatalf("odd addresses not rounded to word: got %04x want a55a", got)
+	}
+}
+
 func mustWriteBlitter(t *testing.T, blitter *Blitter, offset uint32, size cpu.Size, value uint32) {
 	t.Helper()
 	if err := blitter.Write(size, blitterBase+offset, value); err != nil {

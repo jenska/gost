@@ -15,6 +15,10 @@ const (
 	blitterSmudge = 0x20
 	blitterLineNo = 0x0F
 
+	// Address and increment registers have no bit 0; TOS relies on odd
+	// values it computes for glyph offsets being rounded down to a word.
+	blitterAddrMask = 0xFFFFFE
+
 	blitterFXSR = 0x80
 	blitterNFSR = 0x40
 	blitterSkew = 0x0F
@@ -24,7 +28,21 @@ const (
 // executed immediately in software when BUSY is written.
 type Blitter struct {
 	ram  *RAM
+	bus  BlitterBus
 	regs [blitterSize]byte
+}
+
+// BlitterBus is the side-effect-free view of the system bus the blitter uses
+// to fetch source words outside RAM.
+type BlitterBus interface {
+	Peek(cpu.Size, uint32) (uint32, error)
+}
+
+// SetBus lets the blitter read sources from the whole address space. It is a
+// bus master: TOS 1.02+ blits its system font and desktop icons straight out
+// of ROM.
+func (b *Blitter) SetBus(bus BlitterBus) {
+	b.bus = bus
 }
 
 func NewBlitter(ram *RAM) *Blitter {
@@ -329,7 +347,12 @@ func (b *Blitter) readWordSafe(address uint32) (uint16, error) {
 	}
 	value, err := b.ram.Read(cpu.Word, address)
 	if err != nil {
-		return 0, err
+		if b.bus == nil {
+			return 0, err
+		}
+		if value, err = b.bus.Peek(cpu.Word, address); err != nil {
+			return 0, err
+		}
 	}
 	return uint16(value), nil
 }
@@ -347,15 +370,15 @@ func (b *Blitter) halftoneWord(line byte) uint16 {
 }
 
 func (b *Blitter) srcXInc() int16 {
-	return int16(readUint16BE(b.regs[:], 0x20))
+	return int16(readUint16BE(b.regs[:], 0x20) &^ 1)
 }
 
 func (b *Blitter) srcYInc() int16 {
-	return int16(readUint16BE(b.regs[:], 0x22))
+	return int16(readUint16BE(b.regs[:], 0x22) &^ 1)
 }
 
 func (b *Blitter) srcAddr() uint32 {
-	return readUint32BE(b.regs[:], 0x24)
+	return readUint32BE(b.regs[:], 0x24) & blitterAddrMask
 }
 
 func (b *Blitter) endMask1() uint16 {
@@ -371,15 +394,15 @@ func (b *Blitter) endMask3() uint16 {
 }
 
 func (b *Blitter) dstXInc() int16 {
-	return int16(readUint16BE(b.regs[:], 0x2E))
+	return int16(readUint16BE(b.regs[:], 0x2E) &^ 1)
 }
 
 func (b *Blitter) dstYInc() int16 {
-	return int16(readUint16BE(b.regs[:], 0x30))
+	return int16(readUint16BE(b.regs[:], 0x30) &^ 1)
 }
 
 func (b *Blitter) dstAddr() uint32 {
-	return readUint32BE(b.regs[:], 0x32)
+	return readUint32BE(b.regs[:], 0x32) & blitterAddrMask
 }
 
 func (b *Blitter) xCount() uint16 {

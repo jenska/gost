@@ -93,6 +93,7 @@ func NewMachineWithCartridge(cfg *config.Config, romImage []byte, cartridgeImage
 		rom,
 	)
 	bus := cpu.NewBus(busDevices...)
+	blitter.SetBus(bus)
 	bus.SetWaitStates(4)
 
 	// WithDeferredReset keeps construction from resetting the CPU against a bus
