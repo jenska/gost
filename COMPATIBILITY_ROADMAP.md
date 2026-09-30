@@ -2,13 +2,13 @@
 
 **Analysis Date:** September 29, 2026  
 **Target:** Full Atari 1040STF Compatibility  
-**Current Status:** EmuTOS and real TOS 1.00/1.04/1.06/1.62/2.06 boot to a working desktop (Partial Hardware Implementation)
+**Current Status:** EmuTOS and real TOS 1.00/1.02/1.04/1.06/1.62/2.06 boot to a working desktop (Partial Hardware Implementation)
 
 ---
 
 ## Executive Summary
 
-GoST boots EmuTOS and the real Atari TOS 1.00, 1.04, 1.06, 1.62 and 2.06 ROMs to a fully rendered, interactive GEM desktop on ST and STE models. Significant hardware and software compatibility work remains for a true 1040STF emulator. Current implementation covers:
+GoST boots EmuTOS and the real Atari TOS 1.00, 1.02, 1.04, 1.06, 1.62 and 2.06 ROMs to a fully rendered, interactive GEM desktop on ST and STE models. Significant hardware and software compatibility work remains for a true 1040STF emulator. Current implementation covers:
 
 ✅ **Working:**
 - 68000 CPU core (via m68kemu v1.5.2)
@@ -24,7 +24,7 @@ GoST boots EmuTOS and the real Atari TOS 1.00, 1.04, 1.06, 1.62 and 2.06 ROMs to
 - ROM overlay boot
 - MMU memory configuration with ST row/column and STE linear bank translation (512K-4MB)
 - EmuTOS 1.4 boot to desktop
-- Real TOS 1.00, 1.04 (color and mono), 1.06, 1.62 and 2.06 boot to desktop
+- Real TOS 1.00, 1.02, 1.04, 1.06, 1.62 and 2.06 boot to desktop (color and mono)
 
 ⚠️ **Partially Working:**
 - STE Shifter (screen base addressing improvements added but incomplete)
@@ -38,7 +38,7 @@ GoST boots EmuTOS and the real Atari TOS 1.00, 1.04, 1.06, 1.62 and 2.06 ROMs to
 - Modem/RS-232 timing via MFP UART (byte path exists)
 - STE DMA sound timing, LMC1992 mixer (volume/tone) effects, and DMA-active/MFP edge signaling
 - Mega ST extended hardware
-- TOS 1.02 and TOS 2.05 boot
+- TOS 2.05 boot
 - Network/Ethernet
 - Precise timing of various hardware subsystems
 
@@ -389,6 +389,7 @@ type PSG struct {
 | **GEM VDI** | Graphics | ✅ Functional | Software and blitter text, fill and raster paths render under EmuTOS and TOS 1.04/1.62 |
 | **EmuTOS 1.4 (Color)** | OS | ✅ Boots | Color desktop mode |
 | **TOS 1.00** | OS | ✅ Boots to desktop | ST, 512K and 1MB, color; verified manually (headless frame dump) |
+| **TOS 1.02** | OS | ✅ Boots to desktop | ST, 1MB, color and mono; needs a complete 196,608-byte image (a common 1-byte-short dump loses the desktop start address) |
 | **TOS 1.04** | OS | ✅ Boots to desktop | ST, 1MB, color and mono; menus, dialogs and icons render (blitter path) |
 | **TOS 1.06** | OS | ✅ Boots to desktop | STE, 1MB, color |
 | **TOS 1.62** | OS | ✅ Boots to desktop | STE, 512K-4MB, color; needs `--model ste` |
@@ -401,7 +402,6 @@ Real TOS results are covered by `TestRealTOSBootsToDesktop`, which runs against 
 
 | Category | Examples | Issue |
 |----------|----------|-------|
-| **TOS 1.02** | Mega ST ROM | Crashes early in boot (wild PC, striped screen); not yet investigated |
 | **TOS 2.05** | Mega STE ROM | Blank screen; not yet investigated |
 | **Copy-Protected Games** | Mainly 1980s-90s releases | Raw-track fidelity, bad-sector patterns, and timing behavior still missing |
 | **Low-Level Disk Tools** | HDCopy, Kyroflop, FastCopy | Raw track I/O fidelity and special FDC timing remain incomplete |
@@ -478,7 +478,7 @@ internal/emulator/
 | **Serial Communication** | No UART tests | Can't verify real serial protocols |
 | **Multi-Format Disks** | ST/MSA/DIM-compatible ADI/HDI tested | D64/IMD/raw bad-sector formats unsupported |
 | **Track-Level FDC** | No raw-track fidelity tests | Copy protection and low-level tools remain unverifiable |
-| **Real TOS Images** | Automated, ROM-optional | TOS 1.00/1.04/1.06/1.62/2.06 boot and About-dialog tests (needs local ROMs); TOS 1.02/2.05 still failing |
+| **Real TOS Images** | Automated, ROM-optional | TOS 1.00/1.02/1.04/1.06/1.62/2.06 boot and About-dialog tests (needs local ROMs); TOS 2.05 still failing |
 | **Graphics Effects** | No demo tests | Scrolling, mid-frame effects untested |
 | **Hard Disk Utils** | Core ACSI works, utility coverage incomplete | Sense/page quirks and vendor expectations still missing |
 | **Timing Precision** | No cycle-count tests | Contention not verified |
@@ -537,12 +537,11 @@ internal/emulator/
 #### 1.4 Documentation & Testing
 - ✅ **Real TOS regression suite landed**
   - Files: [internal/emulator/tos_rom_test.go](internal/emulator/tos_rom_test.go)
-  - Delivered: boots each TOS 1.00/1.04/1.06/1.62/2.06 image (1.02 and 2.05 are listed as known failures) found in `TOS/` (or `$GOST_TOS_DIR`, identified by ROM header version) in color and mono, checks the desktop is drawn, opens the About dialog, and compares blitter against software rendering pixel for pixel; skipped without images or with `-short`
+  - Delivered: boots each TOS 1.00/1.02/1.04/1.06/1.62/2.06 image (2.05 is listed as a known failure) found in `TOS/` (or `$GOST_TOS_DIR`, identified by ROM header version) in color and mono, checks the desktop is drawn, opens the About dialog, and compares blitter against software rendering pixel for pixel; skipped without images or with `-short`
   - Verified to catch each of the MMU, MICROWIRE, ACSI DMA, blitter and m68kemu CCR/MOVEM regressions when reintroduced
   - Follow-up: m68kemu keeps effective-address state in package-level tables, so machines cannot run on parallel goroutines; the subtests run serially (~30 s)
 
 - **Investigate remaining real-TOS boot failures**
-  - TOS 1.02: crashes early with a wild PC
   - TOS 2.05: blank screen
   - Effort: unknown; each needs its own trace-driven diagnosis
 
@@ -760,8 +759,8 @@ EmuTOS Desktop (✅ Done)
     └── STE DMA Sound (Phase 2)
 
 Real TOS Compatibility (Phase 2)
-├── TOS 1.00/1.04/1.06/1.62/2.06 desktop boot (✅ Done)
-├── TOS 1.02 and 2.05 boot (open)
+├── TOS 1.00/1.02/1.04/1.06/1.62/2.06 desktop boot (✅ Done)
+├── TOS 2.05 boot (open)
 ├── Serial/modem I/O via MFP UART (Phase 2)
 ├── Date/time utility compatibility tracking (Phase 2)
 ├── Printer port (Phase 2)
@@ -784,7 +783,7 @@ Advanced Software (Phase 3)
 - [x] ST/MSA/DIM-compatible ADI/HDI disk formats supported
 - [x] GPIP DDR/AER edge detection functional
 - [ ] Shifter contention affecting CPU timing
-- [x] 5 different TOS versions boot successfully (verified manually: 1.00, 1.04, 1.06, 1.62, 2.06)
+- [x] 5 different TOS versions boot successfully (6, covered by the regression suite: 1.00, 1.02, 1.04, 1.06, 1.62, 2.06)
 - [ ] Test coverage at 85%+
 
 ### Phase 2 Completion

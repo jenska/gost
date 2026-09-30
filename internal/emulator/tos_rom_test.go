@@ -24,7 +24,7 @@ type tosTarget struct {
 // tosTargets maps the version word in the ROM header to the machine it runs on.
 var tosTargets = map[uint16]tosTarget{
 	0x0100: {name: "TOS 1.00", model: config.MachineModelST},
-	0x0102: {name: "TOS 1.02", model: config.MachineModelST, knownFailure: "TOS 1.02 crashes early in boot"},
+	0x0102: {name: "TOS 1.02", model: config.MachineModelST},
 	0x0104: {name: "TOS 1.04", model: config.MachineModelST},
 	0x0106: {name: "TOS 1.06", model: config.MachineModelSTE},
 	0x0162: {name: "TOS 1.62", model: config.MachineModelSTE},

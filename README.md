@@ -15,7 +15,7 @@ Major milestone:
 GoST has moved beyond early bring-up and now provides a usable Atari ST desktop baseline:
 
 - The bundled EmuTOS image boots to the GEM desktop in both monochrome and color-monitor modes.
-- Real Atari TOS 1.00, 1.04, 1.06, 1.62, and 2.06 ROMs boot to a fully rendered, interactive desktop (ST and STE models, 512K-4MB).
+- Real Atari TOS 1.00, 1.02, 1.04, 1.06, 1.62, and 2.06 ROMs boot to a fully rendered, interactive desktop (ST and STE models, 512K-4MB).
 - The desktop frontend runs in an Ebitengine window with working keyboard, mouse, and audio paths.
 - Headless execution, asynchronous PNG frame dumping, CPU/boot tracing, and browser builds are available for development and debugging.
 - The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, MIDI/RS232 byte I/O, floppy DMA/FDC, YM2149-backed PSG audio, and basic STE DMA sound.
@@ -38,7 +38,7 @@ Known working software includes 1st Word Plus 2.02 from Atarimania `.stx` floppy
 
 - Motorola 68000 emulation via [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu)
 - Atari ST machine model with a 24-bit bus, ROM overlay boot, and 1 MiB RAM default profile
-- GEM desktop boot with the bundled EmuTOS ROM, or with real TOS 1.00, 1.04, 1.06, 1.62, and 2.06 images
+- GEM desktop boot with the bundled EmuTOS ROM, or with real TOS 1.00, 1.02, 1.04, 1.06, 1.62, and 2.06 images
 - Monochrome and color-monitor boot modes
 - MMU memory configuration with ST and STE bank translation, so TOS RAM detection sees the configured 512K-4MB
 - Low, medium, and high resolution Shifter framebuffer rendering
@@ -105,11 +105,11 @@ go run ./cmd/gost --preset mega-st --model ste --ram-size 4194304 --color-monito
 | --- | ----- | ------ |
 | EmuTOS 1.4 (bundled) | ST, STE | Boots to desktop |
 | 1.00 | ST | Boots to desktop |
+| 1.02 | ST | Boots to desktop |
 | 1.04 | ST | Boots to desktop (color and mono) |
 | 1.06 | STE | Boots to desktop |
 | 1.62 | STE | Boots to desktop |
 | 2.06 | STE | Boots to desktop |
-| 1.02 | ST | Crashes early in boot |
 | 2.05 | STE | Blank screen |
 
 CLI flags can be passed through `ARGS` when using Make targets, or directly after `go run ./cmd/gost`.
@@ -298,11 +298,12 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 - Use `--hd-image` to persist hard-disk contents across emulator restarts; `.hdi` files are stored with an Anex86-compatible header.
 - Use `--rtc` to attach the ICD-compatible ACSI real-time clock backed by the host system clock.
 - On the STE model, an MMU bank configured larger than the installed RAM repeats modulo its real size; the ST model keeps the STF row/column aliasing. This is what lets STE TOS detect 512K-bank memory.
+- A TOS image that is exactly one byte short of 192, 256, or 512 KiB is loaded with a warning: such dumps are usually truncated, and the missing last byte can hold a pointer TOS needs (a 196,607-byte TOS 1.02 image loses its desktop start address and crashes).
 - STE MICROWIRE writes complete like a real transfer (the data register clears), but the LMC1992 volume/tone mixer is not emulated.
 
 ## Known Gaps
 
-- TOS 1.02 and 2.05 do not reach the desktop yet
+- TOS 2.05 does not reach the desktop yet
 - Cycle-exact GLUE/shifter timing is still incomplete
 - Shifter timing and register coverage are partial
 - IKBD protocol coverage is incomplete
@@ -310,7 +311,7 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 
 ## Next Steps
 
-- Get TOS 1.02 and 2.05 to the desktop
+- Get TOS 2.05 to the desktop
 - Improve cycle-exact shifter/GLUE behavior for broader software compatibility
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
