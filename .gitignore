@@ -7,7 +7,7 @@ wasm/wasm_exec.js
 wasm/.nojekyll
 TOS/
 FLOPPIES/
-gost
+/gost
 .vscode/
 .tmp/
 go.work
