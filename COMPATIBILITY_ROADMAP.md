@@ -2,13 +2,13 @@
 
 **Analysis Date:** September 29, 2026  
 **Target:** Full Atari 1040STF Compatibility  
-**Current Status:** EmuTOS and real TOS 1.00/1.02/1.04/1.06/1.62/2.06 boot to a working desktop (Partial Hardware Implementation)
+**Current Status:** EmuTOS and real TOS 1.00/1.02/1.04/1.06/1.62/2.05/2.06 boot to a working desktop (Partial Hardware Implementation)
 
 ---
 
 ## Executive Summary
 
-GoST boots EmuTOS and the real Atari TOS 1.00, 1.02, 1.04, 1.06, 1.62 and 2.06 ROMs to a fully rendered, interactive GEM desktop on ST and STE models. Significant hardware and software compatibility work remains for a true 1040STF emulator. Current implementation covers:
+GoST boots EmuTOS and the real Atari TOS 1.00, 1.02, 1.04, 1.06, 1.62, 2.05 and 2.06 ROMs to a fully rendered, interactive GEM desktop on ST and STE models. Significant hardware and software compatibility work remains for a true 1040STF emulator. Current implementation covers:
 
 ✅ **Working:**
 - 68000 CPU core (via m68kemu v1.5.2)
@@ -24,7 +24,7 @@ GoST boots EmuTOS and the real Atari TOS 1.00, 1.02, 1.04, 1.06, 1.62 and 2.06 R
 - ROM overlay boot
 - MMU memory configuration with ST row/column and STE linear bank translation (512K-4MB)
 - EmuTOS 1.4 boot to desktop
-- Real TOS 1.00, 1.02, 1.04, 1.06, 1.62 and 2.06 boot to desktop (color and mono)
+- Real TOS 1.00, 1.02, 1.04, 1.06, 1.62, 2.05 and 2.06 boot to desktop (color and mono; 2.05 with a disk in drive A:)
 
 ⚠️ **Partially Working:**
 - STE Shifter (screen base addressing improvements added but incomplete)
@@ -38,7 +38,7 @@ GoST boots EmuTOS and the real Atari TOS 1.00, 1.02, 1.04, 1.06, 1.62 and 2.06 R
 - Modem/RS-232 timing via MFP UART (byte path exists)
 - STE DMA sound timing, LMC1992 mixer (volume/tone) effects, and DMA-active/MFP edge signaling
 - Mega ST extended hardware
-- TOS 2.05 boot
+- Realistic empty floppy drive (reads fail instantly instead of timing out, so TOS gets the wrong error code)
 - Network/Ethernet
 - Precise timing of various hardware subsystems
 
@@ -402,7 +402,7 @@ Real TOS results are covered by `TestRealTOSBootsToDesktop`, which runs against 
 
 | Category | Examples | Issue |
 |----------|----------|-------|
-| **TOS 2.05** | Mega STE ROM | Blank screen; not yet investigated |
+| **TOS 2.05 without a disk** | Mega STE ROM | Boots, but its desktop looks for `A:\DESKICON.RSC`; on an empty drive the wrong error code makes the AES show a misleading "output device" alert |
 | **Copy-Protected Games** | Mainly 1980s-90s releases | Raw-track fidelity, bad-sector patterns, and timing behavior still missing |
 | **Low-Level Disk Tools** | HDCopy, Kyroflop, FastCopy | Raw track I/O fidelity and special FDC timing remain incomplete |
 | **3D Graphics** | Falcon 030 features | Not implemented (different CPU) |
@@ -478,7 +478,7 @@ internal/emulator/
 | **Serial Communication** | No UART tests | Can't verify real serial protocols |
 | **Multi-Format Disks** | ST/MSA/DIM-compatible ADI/HDI tested | D64/IMD/raw bad-sector formats unsupported |
 | **Track-Level FDC** | No raw-track fidelity tests | Copy protection and low-level tools remain unverifiable |
-| **Real TOS Images** | Automated, ROM-optional | TOS 1.00/1.02/1.04/1.06/1.62/2.06 boot and About-dialog tests (needs local ROMs); TOS 2.05 still failing |
+| **Real TOS Images** | Automated, ROM-optional | TOS 1.00/1.02/1.04/1.06/1.62/2.05/2.06 boot and About-dialog tests (needs local ROMs) |
 | **Graphics Effects** | No demo tests | Scrolling, mid-frame effects untested |
 | **Hard Disk Utils** | Core ACSI works, utility coverage incomplete | Sense/page quirks and vendor expectations still missing |
 | **Timing Precision** | No cycle-count tests | Contention not verified |
@@ -537,13 +537,15 @@ internal/emulator/
 #### 1.4 Documentation & Testing
 - ✅ **Real TOS regression suite landed**
   - Files: [internal/emulator/tos_rom_test.go](internal/emulator/tos_rom_test.go)
-  - Delivered: boots each TOS 1.00/1.02/1.04/1.06/1.62/2.06 image (2.05 is listed as a known failure) found in `TOS/` (or `$GOST_TOS_DIR`, identified by ROM header version) in color and mono, checks the desktop is drawn, opens the About dialog, and compares blitter against software rendering pixel for pixel; skipped without images or with `-short`
+  - Delivered: boots each TOS 1.00/1.02/1.04/1.06/1.62/2.05/2.06 image (2.05 with a blank floppy in A:) found in `TOS/` (or `$GOST_TOS_DIR`, identified by ROM header version) in color and mono, checks the desktop is drawn, opens the About dialog, and compares blitter against software rendering pixel for pixel; skipped without images or with `-short`
   - Verified to catch each of the MMU, MICROWIRE, ACSI DMA, blitter and m68kemu CCR/MOVEM regressions when reintroduced
   - Follow-up: m68kemu keeps effective-address state in package-level tables, so machines cannot run on parallel goroutines; the subtests run serially (~30 s)
 
-- **Investigate remaining real-TOS boot failures**
-  - TOS 2.05: blank screen
-  - Effort: unknown; each needs its own trace-driven diagnosis
+- **Emulate an empty floppy drive realistically**
+  - Current: a read on an empty drive fails at once with Record Not Found, which TOS turns into error -1; TOS 2.05's desktop then shows a misleading "output device" alert
+  - Real hardware: the command never finds a sector and TOS times out with -2 ("drive not ready")
+  - A naive "never complete" model gets the right error code but adds 20-40 s of TOS retries to every boot without a disk (and breaks TOS 1.00), so drive-level behaviour (index pulses without media, the TOS timeout path) needs research first
+  - Files: [internal/devices/fdc.go](internal/devices/fdc.go)
 
 - Document real-world software compatibility
   - Effort: 1-2 days
@@ -760,7 +762,8 @@ EmuTOS Desktop (✅ Done)
 
 Real TOS Compatibility (Phase 2)
 ├── TOS 1.00/1.02/1.04/1.06/1.62/2.06 desktop boot (✅ Done)
-├── TOS 2.05 boot (open)
+├── TOS 2.05 desktop boot (✅ Done, needs a disk in A:)
+├── Realistic empty floppy drive (open)
 ├── Serial/modem I/O via MFP UART (Phase 2)
 ├── Date/time utility compatibility tracking (Phase 2)
 ├── Printer port (Phase 2)

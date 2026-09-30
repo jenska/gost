@@ -19,6 +19,11 @@ type tosTarget struct {
 	model config.MachineModel
 	// knownFailure, when set, skips the image with this reason.
 	knownFailure string
+	// bootFloppy inserts a blank formatted disk in drive A:. TOS 2.05's
+	// desktop looks for A:\DESKICON.RSC after the AES is up; an empty drive
+	// fails there with an error the AES reports as a critical-error alert,
+	// because GoST does not yet emulate an empty drive's timeout.
+	bootFloppy bool
 }
 
 // tosTargets maps the version word in the ROM header to the machine it runs on.
@@ -28,7 +33,7 @@ var tosTargets = map[uint16]tosTarget{
 	0x0104: {name: "TOS 1.04", model: config.MachineModelST},
 	0x0106: {name: "TOS 1.06", model: config.MachineModelSTE},
 	0x0162: {name: "TOS 1.62", model: config.MachineModelSTE},
-	0x0205: {name: "TOS 2.05", model: config.MachineModelSTE, knownFailure: "TOS 2.05 does not reach the desktop yet"},
+	0x0205: {name: "TOS 2.05", model: config.MachineModelSTE, bootFloppy: true},
 	0x0206: {name: "TOS 2.06", model: config.MachineModelSTE},
 }
 
@@ -152,6 +157,11 @@ func bootToDesktopAndOpenAbout(t *testing.T, img tosImage, color bool, opts mach
 	if err != nil {
 		t.Fatalf("create machine: %v", err)
 	}
+	if img.target.bootFloppy {
+		if err := m.InsertFloppy(0, blankFloppy()); err != nil {
+			t.Fatalf("insert floppy: %v", err)
+		}
+	}
 	step := func(n int) {
 		t.Helper()
 		for i := 0; i < n; i++ {
@@ -209,6 +219,28 @@ func bootToDesktopAndOpenAbout(t *testing.T, img tosImage, color bool, opts mach
 		fail("About dialog not shown: screen centre %.3f dark, want a white box with text", c)
 	}
 	return m
+}
+
+// blankFloppy returns a freshly formatted 720 KB double-sided FAT12 disk.
+func blankFloppy() *DiskImage {
+	const sectorSize, sectors, fatSectors = 512, 1440, 3
+	img := make([]byte, sectors*sectorSize)
+	boot := img[:sectorSize]
+	boot[0], boot[1], boot[2] = 0xEB, 0x34, 0x90
+	binary.LittleEndian.PutUint16(boot[11:], sectorSize) // bytes per sector
+	boot[13] = 2                                         // sectors per cluster
+	binary.LittleEndian.PutUint16(boot[14:], 1)          // reserved sectors
+	boot[16] = 2                                         // FAT copies
+	binary.LittleEndian.PutUint16(boot[17:], 112)        // root directory entries
+	binary.LittleEndian.PutUint16(boot[19:], sectors)
+	boot[21] = 0xF9 // media descriptor
+	binary.LittleEndian.PutUint16(boot[22:], fatSectors)
+	binary.LittleEndian.PutUint16(boot[24:], 9) // sectors per track
+	binary.LittleEndian.PutUint16(boot[26:], 2) // sides
+	for fat := 0; fat < 2; fat++ {
+		copy(img[(1+fat*fatSectors)*sectorSize:], []byte{0xF9, 0xFF, 0xFF})
+	}
+	return NewDiskImage(img)
 }
 
 // frameDiff counts the pixels that differ between two machines' displays.

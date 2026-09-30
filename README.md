@@ -15,7 +15,7 @@ Major milestone:
 GoST has moved beyond early bring-up and now provides a usable Atari ST desktop baseline:
 
 - The bundled EmuTOS image boots to the GEM desktop in both monochrome and color-monitor modes.
-- Real Atari TOS 1.00, 1.02, 1.04, 1.06, 1.62, and 2.06 ROMs boot to a fully rendered, interactive desktop (ST and STE models, 512K-4MB).
+- Real Atari TOS 1.00, 1.02, 1.04, 1.06, 1.62, 2.05, and 2.06 ROMs boot to a fully rendered, interactive desktop (ST and STE models, 512K-4MB).
 - The desktop frontend runs in an Ebitengine window with working keyboard, mouse, and audio paths.
 - Headless execution, asynchronous PNG frame dumping, CPU/boot tracing, and browser builds are available for development and debugging.
 - The machine model now includes RAM, ROM, Shifter, Blitter, MFP, IKBD/ACIA, MIDI/RS232 byte I/O, floppy DMA/FDC, YM2149-backed PSG audio, and basic STE DMA sound.
@@ -38,7 +38,7 @@ Known working software includes 1st Word Plus 2.02 from Atarimania `.stx` floppy
 
 - Motorola 68000 emulation via [`github.com/jenska/m68kemu`](https://github.com/jenska/m68kemu)
 - Atari ST machine model with a 24-bit bus, ROM overlay boot, and 1 MiB RAM default profile
-- GEM desktop boot with the bundled EmuTOS ROM, or with real TOS 1.00, 1.02, 1.04, 1.06, 1.62, and 2.06 images
+- GEM desktop boot with the bundled EmuTOS ROM, or with real TOS 1.00, 1.02, 1.04, 1.06, 1.62, 2.05, and 2.06 images
 - Monochrome and color-monitor boot modes
 - MMU memory configuration with ST and STE bank translation, so TOS RAM detection sees the configured 512K-4MB
 - Low, medium, and high resolution Shifter framebuffer rendering
@@ -93,7 +93,7 @@ go run ./cmd/gost
 
 The repository ignores `TOS/`, so personal ROM images can be kept there for local testing without adding them to Git. The Makefile also provides convenience targets such as `make headless`, `make run-rom`, `make headless-rom`, `make test`, `make build`, and `make help`.
 
-Boot a real TOS image with `--rom`. STE TOS versions (1.06, 1.62, 2.06) need the STE model. On a cold boot TOS 2.06 holds its memory-test screen for 80 seconds (by design, to let hard disks spin up); press any key to skip it.
+Boot a real TOS image with `--rom`. STE TOS versions (1.06, 1.62, 2.05, 2.06) need the STE model. On a cold boot TOS 2.05 and 2.06 wait 80-90 seconds for hard disks to spin up (2.05 on a blank screen, 2.06 on its memory-test screen); press any key to skip it. TOS 2.05 also needs a disk in drive A: (`--floppy-a`), otherwise its desktop shows a misleading "output device" alert when it looks for `A:\DESKICON.RSC`.
 
 ```bash
 go run ./cmd/gost --rom TOS/TOS104GE.IMG --color-monitor
@@ -110,7 +110,7 @@ go run ./cmd/gost --preset mega-st --model ste --ram-size 4194304 --color-monito
 | 1.06 | STE | Boots to desktop |
 | 1.62 | STE | Boots to desktop |
 | 2.06 | STE | Boots to desktop |
-| 2.05 | STE | Blank screen |
+| 2.05 | STE | Boots to desktop (with a disk in drive A:) |
 
 CLI flags can be passed through `ARGS` when using Make targets, or directly after `go run ./cmd/gost`.
 
@@ -303,7 +303,7 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 
 ## Known Gaps
 
-- TOS 2.05 does not reach the desktop yet
+- An empty floppy drive fails reads immediately instead of timing out like real hardware, so TOS gets the wrong error code (visible as TOS 2.05's "output device" alert without a disk in A:)
 - Cycle-exact GLUE/shifter timing is still incomplete
 - Shifter timing and register coverage are partial
 - IKBD protocol coverage is incomplete
@@ -311,7 +311,7 @@ The shifter render path now parallelizes scanline conversion within the frame bo
 
 ## Next Steps
 
-- Get TOS 2.05 to the desktop
+- Emulate empty floppy drives realistically (TOS timeout and "drive not ready" error)
 - Improve cycle-exact shifter/GLUE behavior for broader software compatibility
 - Expand MFP coverage and timing accuracy
 - Flesh out IKBD and ACIA behavior to match TOS expectations
