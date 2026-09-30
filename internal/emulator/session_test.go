@@ -26,6 +26,35 @@ func TestBuildMachineWithBundledROM(t *testing.T) {
 	}
 }
 
+func TestBuildMachineWarnsAboutTruncatedTOSImage(t *testing.T) {
+	for _, tc := range []struct {
+		size int
+		warn bool
+	}{
+		{192*1024 - 1, true},
+		{192 * 1024, false},
+		{256*1024 - 1, true},
+		{256 * 1024, false},
+	} {
+		rom := make([]byte, tc.size)
+		copy(rom, loopROM(nil))
+		path := filepath.Join(t.TempDir(), "tos.img")
+		if err := os.WriteFile(path, rom, 0o644); err != nil {
+			t.Fatalf("write ROM: %v", err)
+		}
+		cfg := config.DefaultConfig()
+		cfg.ROMPath = path
+
+		session, err := BuildMachine(cfg)
+		if err != nil {
+			t.Fatalf("build machine with %d-byte ROM: %v", tc.size, err)
+		}
+		if got := session.ROMWarning != ""; got != tc.warn {
+			t.Fatalf("%d-byte ROM: warning %q, want warning=%v", tc.size, session.ROMWarning, tc.warn)
+		}
+	}
+}
+
 func TestBuildMachineCreatesAndPersistsHardDiskImage(t *testing.T) {
 	imagePath := filepath.Join(t.TempDir(), "hd.img")
 	cfg := config.DefaultConfig()

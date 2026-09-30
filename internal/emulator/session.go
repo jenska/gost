@@ -2,6 +2,7 @@ package emulator
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/jenska/gost/internal/assets"
 	"github.com/jenska/gost/internal/config"
@@ -14,6 +15,9 @@ type Session struct {
 	Machine *Machine
 	// ROMName is a human-readable label for the loaded TOS image.
 	ROMName string
+	// ROMWarning describes a likely problem with the TOS image file, such as a
+	// truncated dump, or is empty.
+	ROMWarning string
 	// HardDiskCreated reports whether BuildMachine created a new hard-disk image
 	// file (as opposed to loading an existing one).
 	HardDiskCreated bool
@@ -31,7 +35,7 @@ func BuildMachine(cfg *config.Config) (*Session, error) {
 		return nil, fmt.Errorf("config is required")
 	}
 
-	romImage, romName, err := loadTOSROM(cfg.ROMPath)
+	romImage, romName, romWarning, err := loadTOSROM(cfg.ROMPath)
 	if err != nil {
 		return nil, err
 	}
@@ -52,6 +56,7 @@ func BuildMachine(cfg *config.Config) (*Session, error) {
 	session := &Session{
 		Machine:      machine,
 		ROMName:      romName,
+		ROMWarning:   romWarning,
 		hardDiskPath: cfg.HardDiskImagePath,
 	}
 
@@ -100,13 +105,20 @@ func (s *Session) HardDiskImagePath() string {
 	return s.hardDiskPath
 }
 
-func loadTOSROM(path string) (image []byte, name string, err error) {
+func loadTOSROM(path string) (image []byte, name, warning string, err error) {
 	if path == "" {
-		return assets.DefaultROM(), assets.DefaultOSName, nil
+		return assets.DefaultROM(), assets.DefaultOSName, "", nil
 	}
 	image, err = config.LoadROM(path)
 	if err != nil {
-		return nil, "", fmt.Errorf("load ROM: %w", err)
+		return nil, "", "", fmt.Errorf("load ROM: %w", err)
 	}
-	return image, path, nil
+	// LoadROM pads odd sizes, so check the size on disk.
+	if info, statErr := os.Stat(path); statErr == nil {
+		if want, truncated := config.TruncatedTOSImage(int(info.Size())); truncated {
+			warning = fmt.Sprintf("ROM image %s is %d bytes, one byte short of a %d KiB TOS image; "+
+				"it is probably a truncated dump and may not boot", path, info.Size(), want/1024)
+		}
+	}
+	return image, path, warning, nil
 }

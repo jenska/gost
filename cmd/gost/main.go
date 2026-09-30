@@ -38,6 +38,9 @@ func main() {
 	if cfg.ROMPath == "" {
 		fmt.Fprintf(os.Stderr, "using bundled default OS: %s\n", session.ROMName)
 	}
+	if session.ROMWarning != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", session.ROMWarning)
+	}
 	if cfg.CartridgePath != "" {
 		fmt.Fprintf(os.Stderr, "using cartridge ROM: %s\n", cfg.CartridgePath)
 	}

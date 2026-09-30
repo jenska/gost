@@ -290,6 +290,9 @@ func (a *App) reboot(newCfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	if session.ROMWarning != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", session.ROMWarning)
+	}
 
 	a.session = session
 	a.machine = session.Machine

@@ -689,6 +689,22 @@ func mhzToHz(mhz float64) (uint64, error) {
 // --rom or --cartridge).
 const romImageMaxBytes = 1024 * 1024
 
+// tosImageSizes are the sizes real TOS ROM images come in (192, 256, 512 KiB).
+var tosImageSizes = []int{192 * 1024, 256 * 1024, 512 * 1024}
+
+// TruncatedTOSImage reports the standard TOS image size that size falls one
+// byte short of. Dumps are sometimes truncated that way; LoadROM pads the
+// missing byte with $FF, which can silently corrupt a pointer stored at the
+// very end of the ROM (TOS 1.02 keeps its desktop start address there).
+func TruncatedTOSImage(size int) (want int, truncated bool) {
+	for _, s := range tosImageSizes {
+		if size == s-1 {
+			return s, true
+		}
+	}
+	return 0, false
+}
+
 func LoadROM(path string) ([]byte, error) {
 	image, err := os.ReadFile(path)
 	if err != nil {
