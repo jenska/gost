@@ -41,6 +41,7 @@ const (
 	fdcCmdFlagMultiSector = 0x10
 	fdcCmdFlagUpdateTrack = 0x10
 	fdcCmdFlagVerify      = 0x04
+	fdcCmdFlagNoSpinUp    = 0x08
 
 	fdcStatusBusy         = 0x01
 	fdcStatusDataRQ       = 0x02
@@ -120,6 +121,16 @@ type FDC struct {
 	data   byte
 	typeI  bool
 
+	// noIndexWait is set while a command that needs the disk surface is stuck
+	// on a drive without media. Without index pulses the WD1772 never finishes
+	// such a command; it stays busy until a Force Interrupt, which TOS issues
+	// after its timeout and reports as "drive not responding".
+	noIndexWait bool
+	// emptyMotorOn records that the motor was started on an empty drive. The
+	// WD1772 stops it after 9 idle index pulses, which never arrive, so later
+	// commands skip the spin-up and only those reading the disk get stuck.
+	emptyMotorOn bool
+
 	// track/head state
 	headTrack         int
 	lastStepDirection int // +1=in, -1=out
@@ -168,6 +179,8 @@ func (f *FDC) Reset() {
 	f.sector = 1
 	f.data = 0
 	f.typeI = true
+	f.noIndexWait = false
+	f.emptyMotorOn = false
 	f.headTrack = 0
 	f.lastStepDirection = -1
 	f.selectedDrive = 0
@@ -230,6 +243,7 @@ func (f *FDC) InsertDiskIntoDriveWithGeometry(drive int, image []byte, sectorsPe
 	f.drives[drive].sides = sides
 	f.drives[drive].tracks = tracks
 	clear(f.drives[drive].errors)
+	f.emptyMotorOn = false
 	f.status = f.baseStatus()
 	return nil
 }
@@ -785,8 +799,18 @@ func (f *FDC) dmaStatusWord() uint16 {
 
 func (f *FDC) execute(cmd byte) error {
 	f.dmaOK = true
+	f.noIndexWait = false
 	if f.irq != nil {
 		f.irq(false)
+	}
+	if cmd&0xF0 != fdcCmdForceI && !f.diskPresent() {
+		// Spin-up waits for 6 index pulses unless the motor already runs.
+		spinUp := cmd&fdcCmdFlagNoSpinUp == 0 && !f.emptyMotorOn
+		f.emptyMotorOn = true
+		if spinUp {
+			f.typeI = cmd&0x80 == 0
+			return f.waitForIndexPulse()
+		}
 	}
 
 	switch {
@@ -822,6 +846,7 @@ func (f *FDC) execute(cmd byte) error {
 
 func (f *FDC) execForceInterrupt() error {
 	f.typeI = true
+	f.noIndexWait = false
 	f.status = f.baseStatus()
 	f.queueInterrupt()
 	return nil
@@ -831,6 +856,9 @@ func (f *FDC) execRestore(cmd byte) error {
 	f.typeI = true
 	f.headTrack = 0
 	f.track = 0
+	if cmd&fdcCmdFlagVerify != 0 && !f.diskPresent() {
+		return f.waitForIndexPulse()
+	}
 
 	extra := byte(0)
 	if cmd&fdcCmdFlagVerify != 0 && !f.trackInRange(0) {
@@ -852,6 +880,9 @@ func (f *FDC) execSeek(cmd byte) error {
 		f.lastStepDirection = +1
 	} else if target < f.headTrack {
 		f.lastStepDirection = -1
+	}
+	if cmd&fdcCmdFlagVerify != 0 && !f.diskPresent() {
+		return f.waitForIndexPulse()
 	}
 
 	extra := byte(0)
@@ -890,6 +921,9 @@ func (f *FDC) execRelativeStep(direction int, cmd byte) error {
 	if cmd&fdcCmdFlagUpdateTrack != 0 {
 		f.track = byte(f.headTrack)
 	}
+	if cmd&fdcCmdFlagVerify != 0 && !f.diskPresent() {
+		return f.waitForIndexPulse()
+	}
 
 	extra := byte(0)
 	if cmd&fdcCmdFlagVerify != 0 && !inRange {
@@ -904,8 +938,8 @@ func (f *FDC) execRelativeStep(direction int, cmd byte) error {
 func (f *FDC) execReadSectors(cmd byte) error {
 	f.typeI = false
 	disk := f.selectedDisk()
-	if disk == nil || len(disk.image) == 0 {
-		return f.failTypeIIStatus(fdcStatusRNF)
+	if !f.diskPresent() {
+		return f.waitForIndexPulse()
 	}
 
 	count, multi := f.commandSectorCount(cmd)
@@ -943,8 +977,8 @@ func (f *FDC) execReadSectors(cmd byte) error {
 func (f *FDC) execWriteSectors(cmd byte) error {
 	f.typeI = false
 	disk := f.selectedDisk()
-	if disk == nil || len(disk.image) == 0 {
-		return f.failTypeIIStatus(fdcStatusRNF)
+	if !f.diskPresent() {
+		return f.waitForIndexPulse()
 	}
 	if disk.writeProtected {
 		return f.failTypeIIStatus(fdcStatusWriteProtect)
@@ -986,8 +1020,8 @@ func (f *FDC) execWriteSectors(cmd byte) error {
 func (f *FDC) execReadAddress() error {
 	f.typeI = false
 	disk := f.selectedDisk()
-	if disk == nil || len(disk.image) == 0 {
-		return f.failTypeIIStatus(fdcStatusRNF)
+	if !f.diskPresent() {
+		return f.waitForIndexPulse()
 	}
 
 	sector := int(f.sector)
@@ -1022,8 +1056,8 @@ func (f *FDC) execReadAddress() error {
 func (f *FDC) execReadTrack() error {
 	f.typeI = false
 	disk := f.selectedDisk()
-	if disk == nil || len(disk.image) == 0 {
-		return f.failTypeIIStatus(fdcStatusRNF)
+	if !f.diskPresent() {
+		return f.waitForIndexPulse()
 	}
 
 	trackData := make([]byte, 0, disk.sectorsPerTrack*fdcSectorSize)
@@ -1052,8 +1086,8 @@ func (f *FDC) execReadTrack() error {
 func (f *FDC) execWriteTrack() error {
 	f.typeI = false
 	disk := f.selectedDisk()
-	if disk == nil || len(disk.image) == 0 {
-		return f.failTypeIIStatus(fdcStatusRNF)
+	if !f.diskPresent() {
+		return f.waitForIndexPulse()
 	}
 	if disk.writeProtected {
 		return f.failTypeIIStatus(fdcStatusWriteProtect)
@@ -1081,6 +1115,19 @@ func (f *FDC) execWriteTrack() error {
 	f.status = f.baseStatus()
 	f.queueInterrupt()
 	return nil
+}
+
+// waitForIndexPulse leaves the current command busy with no interrupt, as the
+// WD1772 does when the selected drive has no disk to deliver index pulses.
+func (f *FDC) waitForIndexPulse() error {
+	f.noIndexWait = true
+	f.status = f.baseStatus()
+	return nil
+}
+
+func (f *FDC) diskPresent() bool {
+	disk := f.selectedDisk()
+	return disk != nil && len(disk.image) != 0
 }
 
 func (f *FDC) failTypeIIStatus(extra byte) error {
@@ -1122,6 +1169,12 @@ func (f *FDC) baseStatus() byte {
 	}
 	if disk != nil && disk.writeProtected {
 		status |= fdcStatusWriteProtect
+	}
+	if f.emptyMotorOn {
+		status |= fdcStatusMotorOn
+	}
+	if f.noIndexWait {
+		status |= fdcStatusBusy
 	}
 	return status
 }

@@ -123,6 +123,9 @@ func TestFDCDMAReadAdvancesAddress(t *testing.T) {
 func TestFDCSeekCommandUpdatesTrackRegister(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	fdc := NewFDC(ram, nil)
+	if err := fdc.InsertDisk(make([]byte, fdcSectorSize*fdcSectorsTrack*80)); err != nil {
+		t.Fatalf("insert disk: %v", err)
+	}
 
 	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaDRQFloppy|dmaA1|dmaA0); err != nil {
 		t.Fatalf("select data register: %v", err)
@@ -352,7 +355,7 @@ func TestFDCWriteSectorUsesSelectedDriveB(t *testing.T) {
 	}
 }
 
-func TestFDCSelectedDriveBWithoutDiskReturnsRecordNotFound(t *testing.T) {
+func TestFDCSelectedDriveBWithoutDiskStaysBusyUntilForceInterrupt(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	fdc := NewFDC(ram, nil)
 
@@ -362,16 +365,91 @@ func TestFDCSelectedDriveBWithoutDiskReturnsRecordNotFound(t *testing.T) {
 
 	fdc.SetDriveControl(0x03) // drive B selected, side 0
 	setupFloppyDMA(t, fdc, 0x0900, 1, 1, false)
-	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRead); err != nil {
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRead|fdcCmdFlagNoSpinUp); err != nil {
 		t.Fatalf("execute drive B read without disk: %v", err)
 	}
+	if level, _ := fdc.PendingIRQ(); level != 0 {
+		t.Fatalf("read without disk should not complete, got IRQ level %d", level)
+	}
 
+	// TOS's flopvbl reselects drives while waiting; that must not end the command.
+	fdc.SetDriveControl(0x03)
 	status, err := fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
 	if err != nil {
 		t.Fatalf("read status: %v", err)
 	}
-	if byte(status)&fdcStatusRNF == 0 {
-		t.Fatalf("expected RNF for empty drive B, got %02x", byte(status))
+	if byte(status)&fdcStatusBusy == 0 || byte(status)&fdcStatusRNF != 0 {
+		t.Fatalf("expected busy without RNF for empty drive B, got %02x", byte(status))
+	}
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdForceI); err != nil {
+		t.Fatalf("force interrupt: %v", err)
+	}
+	status, err = fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
+	if err != nil {
+		t.Fatalf("read status after force interrupt: %v", err)
+	}
+	// No index pulses ever arrive to time the motor out, so it keeps running.
+	if byte(status)&fdcStatusBusy != 0 || byte(status)&fdcStatusMotorOn == 0 {
+		t.Fatalf("expected idle FDC with motor on after force interrupt, got %02x", byte(status))
+	}
+}
+
+func TestFDCSpinUpWithoutDiskStaysBusy(t *testing.T) {
+	fdc := NewFDC(NewRAM(0, 1024*1024), nil)
+	fdc.SetDriveControl(0x05) // drive A selected, no disk
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaDRQFloppy); err != nil {
+		t.Fatalf("select command register: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRestore); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if level, _ := fdc.PendingIRQ(); level != 0 {
+		t.Fatal("spin-up should wait for index pulses that never come")
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdForceI); err != nil {
+		t.Fatalf("force interrupt: %v", err)
+	}
+	fdc.AckIRQ(0)
+
+	// The motor is running now, so a restore without verify needs no index.
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRestore); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if level, _ := fdc.PendingIRQ(); level == 0 {
+		t.Fatal("restore without verify should complete once the motor runs")
+	}
+	fdc.AckIRQ(0)
+}
+
+func TestFDCSeekVerifyWithoutDiskStaysBusy(t *testing.T) {
+	fdc := NewFDC(NewRAM(0, 1024*1024), nil)
+	fdc.SetDriveControl(0x05) // drive A selected, no disk
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, dmaDRQFloppy); err != nil {
+		t.Fatalf("select command register: %v", err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdRestore|fdcCmdFlagNoSpinUp); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if level, _ := fdc.PendingIRQ(); level == 0 {
+		t.Fatal("restore without spin-up or verify should complete without a disk")
+	}
+	fdc.AckIRQ(0)
+
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, fdcCmdSeek|fdcCmdFlagVerify); err != nil {
+		t.Fatalf("seek with verify: %v", err)
+	}
+	if level, _ := fdc.PendingIRQ(); level != 0 {
+		t.Fatalf("seek with verify should not complete without a disk, got IRQ level %d", level)
+	}
+	status, err := fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if byte(status)&fdcStatusBusy == 0 {
+		t.Fatalf("expected busy status, got %02x", byte(status))
 	}
 }
 
