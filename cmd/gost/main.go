@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/jenska/gost/internal/config"
 	"github.com/jenska/gost/internal/emulator"
@@ -21,7 +22,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	showLauncher := !cfg.Headless && (cfg.Launcher || config.ShouldShowLauncher(os.Args[1:]))
+	// The browser build has no config panel: it always boots straight into the
+	// emulator with the configuration it was built with.
+	showLauncher := runtime.GOOS != "js" && !cfg.Headless &&
+		(cfg.Launcher || config.ShouldShowLauncher(os.Args[1:]))
 	if showLauncher {
 		if last, ok := config.LoadLastConfig(); ok {
 			cfg = last

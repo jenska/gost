@@ -651,6 +651,10 @@ func (a *App) resetMouseTracking() {
 }
 
 func (a *App) handleOverlayToggle() {
+	// The browser build has no config panel.
+	if runtime.GOOS == "js" {
+		return
+	}
 	if inpututil.IsKeyJustPressed(ebitenlib.KeyF12) {
 		a.setOverlayVisible(!a.overlayVisible())
 	}
