@@ -83,8 +83,8 @@ func newConfigPanel(app *App, mode configMode, initial config.Config) *configPan
 		widget.ContainerOpts.BackgroundImage(euiimage.NewNineSliceColor(panelBackgroundColor)),
 		widget.ContainerOpts.Layout(widget.NewRowLayout(
 			widget.RowLayoutOpts.Direction(widget.DirectionVertical),
-			widget.RowLayoutOpts.Padding(&widget.Insets{Top: 8, Bottom: 8, Left: 12, Right: 12}),
-			widget.RowLayoutOpts.Spacing(4),
+			widget.RowLayoutOpts.Padding(&widget.Insets{Top: 4, Bottom: 4, Left: 6, Right: 6}),
+			widget.RowLayoutOpts.Spacing(2),
 		)),
 	)
 

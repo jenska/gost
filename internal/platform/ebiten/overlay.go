@@ -29,7 +29,7 @@ func newOverlay(app *App) *overlay {
 
 	scroll := widget.NewScrollContainer(
 		widget.ScrollContainerOpts.Content(panel.container),
-		widget.ScrollContainerOpts.Padding(&widget.Insets{Top: 10, Bottom: 10, Left: 10, Right: 10}),
+		widget.ScrollContainerOpts.Padding(&widget.Insets{Top: 5, Bottom: 5, Left: 5, Right: 5}),
 		widget.ScrollContainerOpts.Image(&widget.ScrollContainerImage{
 			Idle: euiimage.NewNineSliceColor(color.Transparent),
 			Mask: euiimage.NewNineSliceColor(color.NRGBA{A: 0xff}),
