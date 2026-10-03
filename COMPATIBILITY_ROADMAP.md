@@ -102,10 +102,13 @@ type Shifter struct {
 ```
 
 **Missing/Incomplete:**
-- ❌ Bus contention modeling (shifter steals cycles from CPU)
-  - Current: Coarse wait-state and fetch-window model exists
-  - Required: More accurate DMA slot timing per scanline
-  - Impact: Graphics glitches in software with tight timing
+- ⚠️ CPU bus timing
+  - Current: RAM/ROM run at the plain 68000 bus cycle (the ST interleaves CPU
+    and video accesses, so the shifter steals no CPU cycles); I/O registers add
+    the STF wait states measured for Hatari (MFP/YM/DMA +4, ACIA +6)
+  - Missing: rounding of each instruction to 4-cycle bus slots, ACIA E-clock
+    synchronisation, YM wait states charged once per instruction
+  - Impact: Code with tight raster or timer timing can drift by a few cycles
   
 - ❌ Line-to-line / dynamically-updated screen base changes
   - Current: Per-frame base handling is covered and STE low-address support exists
@@ -135,7 +138,7 @@ type Shifter struct {
 - ✅ Palette manipulation
 - ✅ Screen base changes per frame
 - ✅ Mid-frame palette/blanking behaviors
-- ✅ RAM-contention wait-state coverage
+- ✅ STF wait-state coverage (RAM/ROM zero-wait, I/O delays)
 - ❌ Mid-frame base changes
 - ❌ Cycle-precise contention/timing validation
 
@@ -657,10 +660,10 @@ internal/emulator/
   - Impact: Hard disk utilities work
 
 #### 3.2 Hardware Refinement
-- **Cycle-accurate bus contention**
-  - Precise CPU/shifter/blitter timing
-  - DMA slot allocation
-  - Wait state insertion
+- **Cycle-accurate bus timing**
+  - 4-cycle bus slot alignment of CPU accesses
+  - CPU/blitter bus sharing
+  - ACIA E-clock synchronisation
   - Effort: 4-6 weeks
   - Complexity: VERY HIGH
   - Impact: Timing-critical software works

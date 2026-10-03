@@ -8,13 +8,12 @@ import (
 )
 
 type shifterBenchmarkCase struct {
-	name             string
-	resolution       byte
-	colorBorder      bool
-	midResYScale     int
-	syncMode         byte
-	debug            bool
-	enableContention bool
+	name         string
+	resolution   byte
+	colorBorder  bool
+	midResYScale int
+	syncMode     byte
+	debug        bool
 }
 
 func BenchmarkShifterRender(b *testing.B) {
@@ -63,27 +62,6 @@ func BenchmarkShifterFrameLifecycle(b *testing.B) {
 	})
 }
 
-func BenchmarkShifterRAMContention(b *testing.B) {
-	shifter, ram, _ := newBenchmarkShifter(b, shifterBenchmarkCase{
-		enableContention: true,
-	})
-
-	shifter.BeginFrame()
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	for i := range b.N {
-		_ = ram.WaitStates(cpu.Word, 0x000100)
-		shifter.AdvanceFrame(8)
-		if shifter.frameCyclePos >= shifter.frameCycles() {
-			if !shifter.EndFrame() {
-				b.Fatalf("expected completed frame at iteration %d", i)
-			}
-			shifter.BeginFrame()
-		}
-	}
-}
-
 func newBenchmarkShifter(b *testing.B, tc shifterBenchmarkCase) (*Shifter, *RAM, int64) {
 	b.Helper()
 
@@ -96,9 +74,6 @@ func newBenchmarkShifter(b *testing.B, tc shifterBenchmarkCase) (*Shifter, *RAM,
 	}
 	shifter := NewSTShifter(cfg, ram)
 	shifter.SetDebug(tc.debug)
-	if tc.enableContention {
-		ram.SetContentionSource(shifter)
-	}
 
 	if err := shifter.Write(cpu.Byte, shifterRegResolution, uint32(tc.resolution)); err != nil {
 		b.Fatalf("write resolution: %v", err)

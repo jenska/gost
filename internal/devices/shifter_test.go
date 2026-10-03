@@ -493,81 +493,6 @@ func TestShifterMidFrameScreenBaseChangeAffectsSubsequentScanlines(t *testing.T)
 	}
 }
 
-func TestShifterRAMContentionAddsWaitStatesDuringActiveFetchWindow(t *testing.T) {
-	ram := NewRAM(0, 1024*1024)
-	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
-	ram.SetContentionSource(shifter)
-
-	shifter.BeginFrame()
-	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
-		t.Fatalf("expected non-zero wait states at frame start during shifter fetch window")
-	}
-
-	shifter.AdvanceFrame(shifter.frameCycles() / 2)
-	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
-		t.Fatalf("expected non-zero wait states while frame is active")
-	}
-
-	if !shifter.EndFrame() {
-		t.Fatalf("expected frame finalization")
-	}
-	if got := ram.WaitStates(cpu.Word, 0x000100); got != 0 {
-		t.Fatalf("expected no wait states after frame ends, got %d", got)
-	}
-}
-
-func TestShifterRAMContentionOnlyHitsVideoDMASlots(t *testing.T) {
-	ram := NewRAM(0, 1024*1024)
-	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
-	ram.SetContentionSource(shifter)
-
-	shifter.BeginFrame()
-	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
-		t.Fatalf("expected contention at the first video DMA slot")
-	}
-
-	shifter.AdvanceFrame(1)
-	if got := ram.WaitStates(cpu.Word, 0x000100); got != 0 {
-		t.Fatalf("expected no contention between video DMA slots, got %d", got)
-	}
-
-	shifter.AdvanceFrame(shifterDMASlotCycles - 1)
-	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
-		t.Fatalf("expected contention at the next video DMA slot")
-	}
-}
-
-func TestShifterRAMContentionDropsOutsideFetchWindow(t *testing.T) {
-	ram := NewRAM(0, 1024*1024)
-	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
-	ram.SetContentionSource(shifter)
-
-	shifter.BeginFrame()
-	lineCycles := shifter.frameCycles() / 200
-	if lineCycles == 0 {
-		lineCycles = 1
-	}
-	shifter.AdvanceFrame((lineCycles * 9) / 10)
-
-	if got := ram.WaitStates(cpu.Word, 0x000100); got != 0 {
-		t.Fatalf("expected no wait states near end of scanline fetch period, got %d", got)
-	}
-}
-
-func TestShifterRAMContentionDropsAfterLineFetchBudget(t *testing.T) {
-	ram := NewRAM(0, 1024*1024)
-	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
-	ram.SetContentionSource(shifter)
-
-	shifter.BeginFrame()
-	lineCycles := shifter.frameCycles() / 200
-	shifter.AdvanceFrame(shifter.videoDMAFetchCycles(lineCycles) + shifterDMASlotCycles)
-
-	if got := ram.WaitStates(cpu.Word, 0x000100); got != 0 {
-		t.Fatalf("expected no wait states after visible-line DMA fetches, got %d", got)
-	}
-}
-
 func TestShifterMidFrameBlankSegmentsCreateHorizontalBorderBand(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	shifter := NewSTShifter(testShifterConfig(16000), ram)
@@ -712,7 +637,6 @@ func TestShifterDebugStatsCaptureFrameMetrics(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
 	shifter := NewSTShifter(testShifterConfig(16000), ram)
 	shifter.SetDebug(true)
-	ram.SetContentionSource(shifter)
 
 	if err := shifter.Write(cpu.Word, paletteBase, 0x0000); err != nil {
 		t.Fatalf("write border palette: %v", err)
@@ -725,9 +649,6 @@ func TestShifterDebugStatsCaptureFrameMetrics(t *testing.T) {
 	}
 
 	shifter.BeginFrame()
-	if got := ram.WaitStates(cpu.Word, 0x000100); got == 0 {
-		t.Fatalf("expected contention wait states while frame is active")
-	}
 	shifter.AdvanceFrame(shifter.frameCycles())
 	if !shifter.EndFrame() {
 		t.Fatalf("expected completed frame")
@@ -742,9 +663,6 @@ func TestShifterDebugStatsCaptureFrameMetrics(t *testing.T) {
 	}
 	if stats.LastVideoWords == 0 {
 		t.Fatalf("expected non-zero video word reads in debug stats")
-	}
-	if stats.LastWaitHits == 0 {
-		t.Fatalf("expected non-zero wait-state hits in debug stats")
 	}
 	if stats.TotalPixelsDrawn < stats.LastPixelsDrawn {
 		t.Fatalf("expected total pixel count to include last frame")

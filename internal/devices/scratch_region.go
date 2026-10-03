@@ -21,10 +21,6 @@ func (r *ScratchRegion) AddressRange() (uint32, uint32) {
 	return r.start, r.end - 1
 }
 
-func (r *ScratchRegion) WaitStates(cpu.Size, uint32) uint32 {
-	return 4
-}
-
 func (r *ScratchRegion) Read(size cpu.Size, address uint32) (uint32, error) {
 	if size == cpu.Byte {
 		if address&1 == 0 {

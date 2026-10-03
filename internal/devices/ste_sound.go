@@ -83,10 +83,6 @@ func (s *STESound) AddressRange() (uint32, uint32) {
 	return steSoundBase, steSoundBase + steSoundSize - 1
 }
 
-func (s *STESound) WaitStates(cpu.Size, uint32) uint32 {
-	return 4
-}
-
 func (s *STESound) Read(size cpu.Size, address uint32) (uint32, error) {
 	count, err := steSoundAccessSize(size)
 	if err != nil {

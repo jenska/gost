@@ -29,10 +29,6 @@ func (r *ROM) Contains(address uint32) bool {
 	return false
 }
 
-func (r *ROM) WaitStates(cpu.Size, uint32) uint32 {
-	return 4
-}
-
 func (r *ROM) offset(address uint32, size cpu.Size) (uint32, error) {
 	for _, base := range r.aliases {
 		if address < base {

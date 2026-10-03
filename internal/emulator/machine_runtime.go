@@ -24,12 +24,8 @@ func (m *Machine) Reset() error {
 // installFastMemory hands the CPU a read-only flat window over each isolated ROM
 // mirror, letting instruction fetches and TOS-vector reads bypass the bus.
 // EmuTOS executes entirely from ROM, so this covers the bulk of the fetch
-// traffic; the ROM has no address-dependent wait states, so a fast-region access
-// costs exactly what the bus path would (bus 4 + ROM 4 per word transfer).
-//
-// Low RAM is deliberately not exposed: the shifter charges a variable video-DMA
-// contention penalty on RAM access that a flat region cannot reproduce, which
-// would make cycle counts diverge from the bus model.
+// traffic. The ST's GLUE acknowledges ROM accesses immediately, so neither the
+// bus nor the fast region adds wait states to them.
 func (m *Machine) installFastMemory() {
 	m.fastRegions = m.fastRegions[:0]
 	if !m.disableFastMemory {
@@ -39,7 +35,7 @@ func (m *Machine) installFastMemory() {
 				continue
 			}
 			m.fastRegions = append(m.fastRegions, cpu.FastRegion{
-				Base: base, Mem: image, WaitStates: 8, ReadOnly: true,
+				Base: base, Mem: image, ReadOnly: true,
 			})
 		}
 	}

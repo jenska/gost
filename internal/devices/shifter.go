@@ -27,11 +27,6 @@ const (
 	defaultShifterClockHz = 8_000_000
 	defaultShifterFrameHz = 50
 
-	shifterLowMediumWordsPerLine = 80
-	shifterHighWordsPerLine      = 40
-	shifterDMASlotCycles         = 4
-	shifterContentionWaitStates  = 1
-
 	shifterSyncBlankDisplayBit = 0x01
 	// Track blank/display state at a finer horizontal resolution than the
 	// original coarse 8-way split so short border/blank pulses map to much
@@ -154,14 +149,12 @@ type ShifterDebugStats struct {
 	LastBlankPixels uint64
 	LastVideoWords  uint64
 	LastReadFaults  uint64
-	LastWaitHits    uint64
 
 	TotalRenderNanos int64
 	TotalPixelsDrawn uint64
 	TotalBlankPixels uint64
 	TotalVideoWords  uint64
 	TotalReadFaults  uint64
-	TotalWaitHits    uint64
 
 	FrameActive   bool
 	FrameCyclePos uint64
@@ -203,7 +196,6 @@ type Shifter struct {
 	frameBlankPixels uint64
 	frameVideoWords  uint64
 	frameReadFaults  uint64
-	frameWaitHits    uint64
 	displayBuffer    []byte
 	displayWidth     int
 	displayHeight    int
@@ -231,7 +223,6 @@ func (s *Shifter) DebugStats() ShifterDebugStats {
 		stats.LastBlankPixels = s.frameBlankPixels
 		stats.LastVideoWords = s.frameVideoWords
 		stats.LastReadFaults = s.frameReadFaults
-		stats.LastWaitHits = s.frameWaitHits
 	}
 	return stats
 }
@@ -248,10 +239,6 @@ func (s *Shifter) Contains(address uint32) bool {
 		return true
 	}
 	return s.model.containsRegister(address)
-}
-
-func (s *Shifter) WaitStates(cpu.Size, uint32) uint32 {
-	return 2
 }
 
 func (s *Shifter) Reset() {
@@ -283,7 +270,6 @@ func (s *Shifter) Reset() {
 	s.frameBlankPixels = 0
 	s.frameVideoWords = 0
 	s.frameReadFaults = 0
-	s.frameWaitHits = 0
 	s.displayBuffer = nil
 	s.displayWidth = 0
 	s.displayHeight = 0
@@ -397,7 +383,6 @@ func (s *Shifter) BeginFrame() {
 	s.frameBlankPixels = 0
 	s.frameVideoWords = 0
 	s.frameReadFaults = 0
-	s.frameWaitHits = 0
 
 	lineCount := height
 	if cap(s.lineStates) < lineCount {
@@ -483,40 +468,15 @@ func (s *Shifter) EndFrame() bool {
 		s.debugStats.LastBlankPixels = s.frameBlankPixels
 		s.debugStats.LastVideoWords = s.frameVideoWords
 		s.debugStats.LastReadFaults = s.frameReadFaults
-		s.debugStats.LastWaitHits = s.frameWaitHits
 		s.debugStats.TotalRenderNanos += renderNanos
 		s.debugStats.TotalPixelsDrawn += s.framePixelsDrawn
 		s.debugStats.TotalBlankPixels += s.frameBlankPixels
 		s.debugStats.TotalVideoWords += s.frameVideoWords
 		s.debugStats.TotalReadFaults += s.frameReadFaults
-		s.debugStats.TotalWaitHits += s.frameWaitHits
 	}
 	s.composeDisplayFrame()
 	s.frameActive = false
 	return true
-}
-
-func (s *Shifter) WaitStatesForRAMAccess(cpu.Size, uint32) uint32 {
-	frameCycles := s.frameCycles()
-	if !s.frameActive || frameCycles == 0 {
-		return 0
-	}
-	if len(s.lineStates) == 0 {
-		return 0
-	}
-
-	lineCycles := frameCycles / uint64(len(s.lineStates))
-	if lineCycles == 0 {
-		lineCycles = 1
-	}
-	posInLine := s.frameCyclePos % lineCycles
-	if !s.inVideoDMASlot(posInLine, lineCycles) {
-		return 0
-	}
-	if s.debugEnabled {
-		s.frameWaitHits++
-	}
-	return shifterContentionWaitStates
 }
 
 func dimensionsForResolution(resolution byte) (int, int) {
@@ -528,34 +488,6 @@ func dimensionsForResolution(resolution byte) (int, int) {
 	default:
 		return 640, 400
 	}
-}
-
-func (s *Shifter) inVideoDMASlot(posInLine, lineCycles uint64) bool {
-	fetchCycles := s.videoDMAFetchCycles(lineCycles)
-	if fetchCycles == 0 || posInLine >= fetchCycles {
-		return false
-	}
-	return posInLine%shifterDMASlotCycles == 0
-}
-
-func (s *Shifter) videoDMAFetchCycles(lineCycles uint64) uint64 {
-	if lineCycles == 0 {
-		return 0
-	}
-	var words uint64
-	switch s.resolution & 3 {
-	case 0, 1:
-		words = shifterLowMediumWordsPerLine
-	case 2:
-		words = shifterHighWordsPerLine
-	default:
-		return 0
-	}
-	fetchCycles := words * shifterDMASlotCycles
-	if fetchCycles > lineCycles {
-		return lineCycles
-	}
-	return fetchCycles
 }
 
 type shifterRenderStats struct {

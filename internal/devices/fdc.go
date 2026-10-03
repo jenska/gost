@@ -165,8 +165,10 @@ func (f *FDC) AddressRange() (uint32, uint32) {
 	return fdcBase, fdcBase + fdcSize - 1
 }
 
+// WaitStates is the extra delay of a DMA/FDC register access ($FF8604/6) on a
+// real STF: 4 cycles.
 func (f *FDC) WaitStates(cpu.Size, uint32) uint32 {
-	return 8
+	return 4
 }
 
 func (f *FDC) Reset() {

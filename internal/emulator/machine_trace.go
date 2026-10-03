@@ -209,7 +209,7 @@ func (m *Machine) traceShifterFrame(rendered bool) {
 	displayW, displayH := m.shifter.DisplayDimensions()
 	viewportX, viewportY, viewportW, viewportH := m.shifter.DisplayViewport()
 	if m.cfg.Trace == string(TraceModeShifterVerbose) {
-		fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t size=%dx%d display=%dx%d viewport=%d,%d,%d,%d base=%06x vaddr=%06x frame_pos=%d/%d render_ns=%d pixels=%d blank=%d words=%d faults=%d waits=%d totals{render_ns=%d pixels=%d blank=%d words=%d faults=%d waits=%d}\n",
+		fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t size=%dx%d display=%dx%d viewport=%d,%d,%d,%d base=%06x vaddr=%06x frame_pos=%d/%d render_ns=%d pixels=%d blank=%d words=%d faults=%d totals{render_ns=%d pixels=%d blank=%d words=%d faults=%d}\n",
 			m.frameCounter,
 			rendered,
 			stats.LastWidth,
@@ -229,17 +229,15 @@ func (m *Machine) traceShifterFrame(rendered bool) {
 			stats.LastBlankPixels,
 			stats.LastVideoWords,
 			stats.LastReadFaults,
-			stats.LastWaitHits,
 			stats.TotalRenderNanos,
 			stats.TotalPixelsDrawn,
 			stats.TotalBlankPixels,
 			stats.TotalVideoWords,
 			stats.TotalReadFaults,
-			stats.TotalWaitHits,
 		)
 		return
 	}
-	fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t size=%dx%d display=%dx%d viewport=%d,%d,%d,%d render_ns=%d pixels=%d blank=%d words=%d waits=%d\n",
+	fmt.Fprintf(m.traceWriter, "shifter frame=%d rendered=%t size=%dx%d display=%dx%d viewport=%d,%d,%d,%d render_ns=%d pixels=%d blank=%d words=%d\n",
 		m.frameCounter,
 		rendered,
 		stats.LastWidth,
@@ -254,6 +252,5 @@ func (m *Machine) traceShifterFrame(rendered bool) {
 		stats.LastPixelsDrawn,
 		stats.LastBlankPixels,
 		stats.LastVideoWords,
-		stats.LastWaitHits,
 	)
 }

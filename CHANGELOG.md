@@ -72,6 +72,15 @@
 
 ### Fixed
 
+- CPU bus timing now matches a real STF. Every bus access used to pay 4 extra
+  wait cycles on top of the 68000's own bus cycle (ROM 8, MFP 8, DMA/FDC 12),
+  so code ran at roughly half speed: TOS 1.02's floppy timeout took 3.7 s
+  instead of about 1.7 s, and booting without a disk took 61 s instead of 30 s.
+  RAM and ROM are now zero-wait, and I/O registers add the delays measured on
+  an STF (MFP, YM2149 and DMA/FDC 4 cycles, ACIA 6). The shifter RAM
+  contention model is gone: the ST interleaves CPU and video accesses, so video
+  DMA does not stall the CPU. The shifter trace no longer reports `waits=`.
+
 - The boot-ROM fast-memory window is now installed on the normal construction
   path. It was only wired into `Machine.Reset`, which the desktop and headless
   runners never call, so the shipped binary never actually used it.

@@ -39,9 +39,10 @@ func (a *ACIA) AddressRange() (uint32, uint32) {
 	return aciaBase, aciaBase + aciaSize - 1
 }
 
-// WaitStates returns the fixed ACIA bus latency.
+// WaitStates is the extra delay of an ACIA register access on a real STF: 6
+// cycles. The additional 0-8 cycles of E clock synchronisation are not modelled.
 func (a *ACIA) WaitStates(cpu.Size, uint32) uint32 {
-	return 2
+	return 6
 }
 
 // Reset restores each channel to its post-reset control and status state.

@@ -36,8 +36,10 @@ func (p *PSG) AddressRange() (uint32, uint32) {
 	return psgBase, psgBase + psgSize - 1
 }
 
+// WaitStates is the extra delay of a YM2149 register access on a real STF: 4
+// cycles. (The hardware charges it once per instruction, not per access.)
 func (p *PSG) WaitStates(cpu.Size, uint32) uint32 {
-	return 2
+	return 4
 }
 
 func (p *PSG) Reset() {

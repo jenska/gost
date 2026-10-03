@@ -105,6 +105,8 @@ func (m *MFP) AddressRange() (uint32, uint32) {
 	return mfpBase, mfpBase + mfpSize - 1
 }
 
+// WaitStates is the extra delay of an MFP register access on a real STF: 4
+// cycles.
 func (m *MFP) WaitStates(cpu.Size, uint32) uint32 {
 	return 4
 }

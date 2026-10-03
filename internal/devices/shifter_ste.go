@@ -16,7 +16,6 @@ func NewSTEShifter(cfg *config.Config, ram *RAM) *Shifter {
 	}
 	s.framebuffer = make([]byte, s.width*s.height*4)
 	s.model = steShifterModel{}
-	ram.SetContentionSource(s)
 
 	return s
 }

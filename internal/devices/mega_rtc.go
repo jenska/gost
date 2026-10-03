@@ -69,10 +69,6 @@ func (r *MegaRTC) AddressRange() (uint32, uint32) {
 	return megaRTCBase, megaRTCEnd - 1
 }
 
-func (r *MegaRTC) WaitStates(cpu.Size, uint32) uint32 {
-	return 4
-}
-
 func (r *MegaRTC) Read(size cpu.Size, address uint32) (uint32, error) {
 	if size != cpu.Byte {
 		// The clock sits on the low byte of the data bus.

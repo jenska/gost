@@ -113,7 +113,9 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 	)
 	bus := cpu.NewBus(busDevices...)
 	blitter.SetBus(bus)
-	bus.SetWaitStates(4)
+	// RAM and ROM accesses cost the plain 68000 bus cycle: the ST interleaves
+	// CPU and video accesses, so there is no base wait state. Only I/O devices
+	// add their own (see their WaitStates methods).
 
 	// WithDeferredReset keeps construction from resetting the CPU against a bus
 	// that is not fully described yet; machine.Reset below is the single reset
