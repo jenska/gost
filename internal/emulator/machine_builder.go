@@ -120,7 +120,9 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 	// WithDeferredReset keeps construction from resetting the CPU against a bus
 	// that is not fully described yet; machine.Reset below is the single reset
 	// path and is also what installs the ROM fast-memory window.
-	processor, err := cpu.NewCPU(bus, cpu.WithDeferredReset())
+	// WithCycleRounding(4) models the GLUE/MMU granting the CPU the bus only on
+	// 4-cycle boundaries: an instruction listed at 10 cycles takes 12 on an ST.
+	processor, err := cpu.NewCPU(bus, cpu.WithDeferredReset(), cpu.WithCycleRounding(4))
 	if err != nil {
 		return nil, err
 	}

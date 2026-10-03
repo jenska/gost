@@ -80,12 +80,20 @@
   an STF (MFP, YM2149 and DMA/FDC 4 cycles, ACIA 6). The shifter RAM
   contention model is gone: the ST interleaves CPU and video accesses, so video
   DMA does not stall the CPU. The shifter trace no longer reports `waits=`.
+- CPU instruction timing follows the MC68000 tables (m68kemu v1.6.0): long
+  memory operands, read-modify-write instructions, `LEA`/`JMP`/`JSR`, `MOVEM`,
+  taken and untaken branches, `DBcc` and `MULU`/`MULS`/`DIVU`/`DIVS` used to be
+  off by 2-12 cycles or fixed at their maxima. Each instruction is now also
+  rounded up to the ST's 4-cycle bus slots.
 
 - The boot-ROM fast-memory window is now installed on the normal construction
   path. It was only wired into `Machine.Reset`, which the desktop and headless
   runners never call, so the shipped binary never actually used it.
 
 ### Dependencies
+
+- `github.com/jenska/m68kemu` v1.5.2 → v1.6.0 (MC68000 instruction timing,
+  `WithCycleRounding`, scheduler kept in step with exception cycles)
 
 - `github.com/jenska/m68kemu` updated to v1.5.0 for the `WithDeferredReset`,
   `SetHooks`/`Hooks`, and `SetFastMemory` APIs, a polished public surface
