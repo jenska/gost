@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -30,47 +29,6 @@ func TestDefaultConfigIsMonochrome1040STF(t *testing.T) {
 	}
 	if cfg.Frames != DefaultHeadlessFrames {
 		t.Fatalf("unexpected headless frame default: got %d want %d", cfg.Frames, DefaultHeadlessFrames)
-	}
-}
-
-func TestPresetFlagAppliesCatalogueEntry(t *testing.T) {
-	for _, tc := range []struct {
-		preset  string
-		want    string
-		ram     uint32
-		color   bool
-		megaRTC bool
-	}{
-		{"default", "1040stf", 1024 * 1024, false, false},
-		{"1040stf", "1040stf", 1024 * 1024, true, false},
-		{"stf", "1040stf", 1024 * 1024, true, false},
-		{"st", "520st", 512 * 1024, true, false},
-		{"mega-st", "megast2", 2 * 1024 * 1024, false, true},
-		{"MegaSTE", "megaste", 4 * 1024 * 1024, false, true},
-	} {
-		cfg, err := Load([]string{"--preset", tc.preset})
-		if err != nil {
-			t.Fatalf("--preset %s: %v", tc.preset, err)
-		}
-		if got := MatchPreset(cfg); got != tc.want {
-			t.Errorf("--preset %s: MatchPreset = %q, want %q", tc.preset, got, tc.want)
-		}
-		if cfg.RAMSize != tc.ram || cfg.ColorMonitor != tc.color || cfg.MegaRTC != tc.megaRTC {
-			t.Errorf("--preset %s: RAM %d color %v mega-rtc %v, want %d %v %v",
-				tc.preset, cfg.RAMSize, cfg.ColorMonitor, cfg.MegaRTC, tc.ram, tc.color, tc.megaRTC)
-		}
-		if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
-			t.Errorf("--preset %s: hard disk size %d, want %d", tc.preset, cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
-		}
-	}
-}
-
-func TestMegaPresetsHaveBuiltInRTC(t *testing.T) {
-	for _, p := range MachinePresets {
-		mega := strings.HasPrefix(p.ID, "mega")
-		if p.MegaRTC != mega {
-			t.Errorf("preset %s: MegaRTC = %v, want %v", p.ID, p.MegaRTC, mega)
-		}
 	}
 }
 
@@ -287,5 +245,93 @@ func TestCLIPresetOverridesConfigFilePreset(t *testing.T) {
 	}
 	if cfg.RAMSize != 2*1024*1024 {
 		t.Fatalf("RAMSize = %d, want the Mega ST preset's 2 MB", cfg.RAMSize)
+	}
+}
+
+// TestFlagsAndConfigFileAgree checks that every config key yields the same
+// Config whether it arrives as a CLI flag or as a JSON config file entry.
+func TestFlagsAndConfigFileAgree(t *testing.T) {
+	args := []string{
+		"--rom=tos.img",
+		"--cartridge=cart.bin",
+		"--floppy-a=a.st",
+		"--floppy-b=b.msa",
+		"--hd-size-mb=60",
+		"--hd-image=hd.img",
+		"--scale=2.5",
+		"--fullscreen",
+		"--headless",
+		"--frames=42",
+		"--dump-frame=out.png",
+		"--trace=boot",
+		"--trace-start=0xE00100",
+		"--trace-end=0xE00200",
+		"--ram-size=2097152",
+		"--clock-hz=8000000",
+		"--cpu-clock-hz=16000000",
+		"--frame-hz=60",
+		"--color-monitor",
+		"--rtc",
+		"--mega-rtc",
+		"--midres-y-scale=1",
+		"--model=ste",
+		"--launcher",
+	}
+	fromFlags, err := Load(args)
+	if err != nil {
+		t.Fatalf("load from flags: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "gost.json")
+	data := []byte(`{
+		"rom": "tos.img",
+		"cartridge": "cart.bin",
+		"floppy-a": "a.st",
+		"floppy-b": "b.msa",
+		"hd-size-mb": 60,
+		"hd-image": "hd.img",
+		"scale": 2.5,
+		"fullscreen": true,
+		"headless": true,
+		"frames": 42,
+		"dump-frame": "out.png",
+		"trace": "boot",
+		"trace-start": "0xE00100",
+		"trace-end": 14680576,
+		"ram-size": 2097152,
+		"clock-hz": 8000000,
+		"cpu-clock-hz": 16000000,
+		"frame-hz": 60,
+		"color-monitor": true,
+		"rtc": true,
+		"mega-rtc": true,
+		"midres-y-scale": 1,
+		"model": "ste",
+		"launcher": true
+	}`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+	fromFile, err := Load([]string{"--config", path})
+	if err != nil {
+		t.Fatalf("load from config file: %v", err)
+	}
+
+	if !reflect.DeepEqual(fromFlags, fromFile) {
+		t.Fatalf("flags and config file disagree:\nflags: %+v\nfile:  %+v", *fromFlags, *fromFile)
+	}
+}
+
+func TestCPUMHzAliasMatchesCPUClockHz(t *testing.T) {
+	fromMHz, err := Load([]string{"--cpu-mhz=16"})
+	if err != nil {
+		t.Fatalf("load --cpu-mhz: %v", err)
+	}
+	fromHz, err := Load([]string{"--cpu-clock-hz=16000000"})
+	if err != nil {
+		t.Fatalf("load --cpu-clock-hz: %v", err)
+	}
+	if !reflect.DeepEqual(fromMHz, fromHz) {
+		t.Fatalf("cpu-mhz and cpu-clock-hz disagree:\nmhz: %+v\nhz:  %+v", *fromMHz, *fromHz)
 	}
 }

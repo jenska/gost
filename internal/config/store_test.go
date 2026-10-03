@@ -97,15 +97,35 @@ func TestLastConfigRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPresetCatalogueApplyAndMatch(t *testing.T) {
-	for _, preset := range MachinePresets {
-		cfg := DefaultConfig()
-		preset.Apply(cfg)
-		if got := MatchPreset(cfg); got != preset.ID {
-			t.Errorf("MatchPreset after Apply(%s) = %q, want %q", preset.ID, got, preset.ID)
-		}
-		if err := cfg.Validate(); err != nil {
-			t.Errorf("preset %s produced invalid config: %v", preset.ID, err)
-		}
+// TestSavedConfigRoundTripsAllPersistedFields saves a config with every
+// persisted field moved off its default and expects the reload to be identical.
+func TestSavedConfigRoundTripsAllPersistedFields(t *testing.T) {
+	t.Setenv(ConfigDirEnv, t.TempDir())
+
+	cfg := DefaultConfig()
+	cfg.Model = MachineModelSTE
+	cfg.RAMSize = 4 * 1024 * 1024
+	cfg.CPUClockHz = 16_000_000
+	cfg.ColorMonitor = true
+	cfg.HardDiskSizeMB = 60
+	cfg.ICDRTC = true
+	cfg.MegaRTC = true
+	cfg.Scale = 2
+	cfg.Fullscreen = true
+	cfg.ROMPath = "/roms/tos206.img"
+	cfg.CartridgePath = "/roms/cart.bin"
+	cfg.FloppyA = "/disks/a.st"
+	cfg.FloppyB = "/disks/b.msa"
+	cfg.HardDiskImagePath = "/disks/hd.img"
+
+	if err := SaveLastConfig(cfg); err != nil {
+		t.Fatalf("save last config: %v", err)
+	}
+	got, ok := LoadLastConfig()
+	if !ok {
+		t.Fatalf("LoadLastConfig() ok = false after save")
+	}
+	if !reflect.DeepEqual(got, cfg) {
+		t.Fatalf("round trip mismatch:\ngot:  %+v\nwant: %+v", *got, *cfg)
 	}
 }

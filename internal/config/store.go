@@ -55,12 +55,17 @@ func (cfg *Config) ToPatch() map[string]any {
 	return patch
 }
 
-func marshalPatch(cfg *Config) ([]byte, error) {
+// writeConfigFile saves the persisted settings of cfg as JSON at path,
+// creating its directory first.
+func writeConfigFile(path string, cfg *Config) error {
 	data, err := json.MarshalIndent(cfg.ToPatch(), "", "  ")
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return append(data, '\n'), nil
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
 // SaveProfile writes cfg to <ProfileDir>/<name>.json.
@@ -72,14 +77,7 @@ func SaveProfile(name string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	data, err := marshalPatch(cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, name+".json"), data, 0o644)
+	return writeConfigFile(filepath.Join(dir, name+".json"), cfg)
 }
 
 // LoadProfile reads the profile saved under name.
@@ -142,14 +140,7 @@ func SaveLastConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(home, 0o755); err != nil {
-		return err
-	}
-	data, err := marshalPatch(cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(home, lastConfigFile), data, 0o644)
+	return writeConfigFile(filepath.Join(home, lastConfigFile), cfg)
 }
 
 // LoadLastConfig returns the last configuration recorded by SaveLastConfig. The
