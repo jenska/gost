@@ -100,25 +100,6 @@ func TestLastConfigRoundTrip(t *testing.T) {
 	}
 }
 
-func TestShouldShowLauncher(t *testing.T) {
-	for _, tc := range []struct {
-		args []string
-		want bool
-	}{
-		{nil, true},
-		{[]string{}, true},
-		{[]string{"--launcher"}, true},
-		{[]string{"--config", "x.json"}, false},
-		{[]string{"--preset", "stf"}, false},
-		{[]string{"--launcher=false"}, false},
-		{[]string{"--preset", "stf", "--launcher"}, true},
-	} {
-		if got := ShouldShowLauncher(tc.args); got != tc.want {
-			t.Errorf("ShouldShowLauncher(%v) = %v, want %v", tc.args, got, tc.want)
-		}
-	}
-}
-
 func TestPresetCatalogueApplyAndMatch(t *testing.T) {
 	for _, preset := range MachinePresets {
 		cfg, err := ConfigForPreset(PresetDefault)

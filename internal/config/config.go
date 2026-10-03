@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -182,39 +183,30 @@ func NewConfig() (*Config, error) {
 	return Load(os.Args[1:])
 }
 
+// Load builds a validated Config from process arguments: preset defaults, then
+// the JSON file named by --config, then the remaining flags.
 func Load(args []string) (*Config, error) {
-	if args == nil {
-		args = []string{}
+	// The first pass only learns which config file and preset the flags name.
+	// It runs against a throwaway config, so flag errors and -help surface here,
+	// once, before any file is read.
+	var configPath, preset string
+	if err := parseFlags(DefaultConfig(), args, &configPath, &preset, os.Stderr); err != nil {
+		return nil, err
 	}
-	if containsHelpArg(args) {
-		return nil, parseFlags(DefaultConfig(), args)
-	}
-
-	configPath, _ := lookupFlagValue(args, KeyConfig)
 	patch, err := loadConfigPatch(configPath)
 	if err != nil {
 		return nil, err
 	}
-
-	preset, err := selectPreset(args, patch)
+	cfg, err := patch.build(preset)
 	if err != nil {
 		return nil, err
 	}
-
-	cfg, err := ConfigForPreset(preset)
-	if err != nil {
-		return nil, err
-	}
-	if err := patch.Apply(cfg); err != nil {
-		return nil, err
-	}
-	if err := parseFlags(cfg, args); err != nil {
+	if err := parseFlags(cfg, args, nil, nil, io.Discard); err != nil {
 		return nil, err
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-
 	return cfg, nil
 }
 
@@ -227,21 +219,8 @@ func LoadConfigFile(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	preset := PresetDefault
-	if named, ok, err := patch.Preset(); err != nil {
-		return nil, err
-	} else if ok {
-		if preset, err = normalizePreset(named); err != nil {
-			return nil, err
-		}
-	}
-
-	cfg, err := ConfigForPreset(preset)
+	cfg, err := patch.build("")
 	if err != nil {
-		return nil, err
-	}
-	if err := patch.Apply(cfg); err != nil {
 		return nil, err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -354,47 +333,42 @@ func jsonScalarText(raw json.RawMessage) (string, error) {
 	}
 }
 
-func (p configPatch) Preset() (Preset, bool, error) {
-	raw, ok := p[KeyPreset]
-	if !ok {
-		return "", false, nil
+// build returns the defaults of preset, or of the preset the patch names when
+// preset is empty, with the patch's remaining keys applied on top.
+func (p configPatch) build(preset string) (*Config, error) {
+	if raw, ok := p[KeyPreset]; ok && preset == "" {
+		if err := json.Unmarshal(raw, &preset); err != nil {
+			return nil, fmt.Errorf("decode %q: %w", KeyPreset, err)
+		}
 	}
-
-	var preset Preset
-	if err := json.Unmarshal(raw, &preset); err != nil {
-		return "", false, fmt.Errorf("decode %q: %w", KeyPreset, err)
+	cfg, err := ConfigForPreset(Preset(preset))
+	if err != nil {
+		return nil, err
 	}
-	return preset, true, nil
+	if err := p.Apply(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
-func selectPreset(args []string, patch configPatch) (Preset, error) {
-	if raw, ok := lookupFlagValue(args, KeyPreset); ok {
-		return normalizePreset(Preset(raw))
-	}
-	if preset, ok, err := patch.Preset(); err != nil {
-		return "", err
-	} else if ok {
-		return normalizePreset(preset)
-	}
-	return PresetDefault, nil
-}
-
-func parseFlags(cfg *Config, args []string) error {
+// parseFlags applies args to cfg. The --config and --preset values are stored
+// in configPath and preset when those are non-nil.
+func parseFlags(cfg *Config, args []string, configPath, preset *string, output io.Writer) error {
 	fs := flag.NewFlagSet("gost", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
+	fs.SetOutput(output)
 
-	preset := string(cfg.Preset)
-	fs.String(KeyConfig, "", "optional JSON config file loaded before CLI overrides")
-	fs.StringVar(&preset, KeyPreset, preset, "machine preset: default|stf|st|mega-st")
+	if configPath == nil {
+		configPath = new(string)
+	}
+	if preset == nil {
+		preset = new(string)
+	}
+	fs.StringVar(configPath, KeyConfig, "", "optional JSON config file loaded before CLI overrides")
+	fs.StringVar(preset, KeyPreset, "", "machine preset: default|stf|st|mega-st")
 	for _, f := range fields {
 		fs.Var(f.value(cfg), f.key, f.usage)
 	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg.Preset = Preset(preset)
-	return nil
+	return fs.Parse(args)
 }
 
 func normalizePreset(preset Preset) (Preset, error) {
@@ -421,36 +395,4 @@ func normalizeModel(model MachineModel) (MachineModel, error) {
 	default:
 		return "", fmt.Errorf("unsupported machine model %q", model)
 	}
-}
-
-func lookupFlagValue(args []string, name string) (string, bool) {
-	longName := "--" + name
-	shortName := "-" + name
-
-	for i := range args {
-		arg := args[i]
-		switch {
-		case arg == longName || arg == shortName:
-			if i+1 >= len(args) {
-				return "", false
-			}
-			return args[i+1], true
-		case strings.HasPrefix(arg, longName+"="):
-			return strings.TrimPrefix(arg, longName+"="), true
-		case strings.HasPrefix(arg, shortName+"="):
-			return strings.TrimPrefix(arg, shortName+"="), true
-		}
-	}
-
-	return "", false
-}
-
-func containsHelpArg(args []string) bool {
-	for _, arg := range args {
-		switch arg {
-		case "-h", "-help", "--help":
-			return true
-		}
-	}
-	return false
 }

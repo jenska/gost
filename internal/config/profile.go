@@ -166,22 +166,6 @@ func LoadLastConfig() (*Config, bool) {
 	return cfg, true
 }
 
-// ShouldShowLauncher reports whether the desktop launcher should open for the
-// given process arguments: always when --launcher is present, and by default
-// when the user passed no other configuration arguments.
-func ShouldShowLauncher(args []string) bool {
-	for _, arg := range args {
-		switch {
-		case arg == "--"+KeyLauncher, arg == "-"+KeyLauncher,
-			arg == "--"+KeyLauncher+"=true", arg == "-"+KeyLauncher+"=true":
-			return true
-		case arg == "--"+KeyLauncher+"=false", arg == "-"+KeyLauncher+"=false":
-			return false
-		}
-	}
-	return len(args) == 0
-}
-
 func validateProfileName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("profile name is required")

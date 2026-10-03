@@ -22,10 +22,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The browser build has no config panel: it always boots straight into the
-	// emulator with the configuration it was built with.
+	// The launcher opens when asked for with --launcher, and by default when no
+	// arguments were given. The browser build has no config panel: it always
+	// boots straight into the emulator with the configuration it was built with.
 	showLauncher := runtime.GOOS != "js" && !cfg.Headless &&
-		(cfg.Launcher || config.ShouldShowLauncher(os.Args[1:]))
+		(cfg.Launcher || len(os.Args) == 1)
 	if showLauncher {
 		if last, ok := config.LoadLastConfig(); ok {
 			cfg = last

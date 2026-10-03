@@ -251,3 +251,48 @@ func TestLoadCanSetFloppyBPathFromConfigFile(t *testing.T) {
 		t.Fatalf("unexpected drive B disk path: got %q want disk-b.msa", cfg.FloppyB)
 	}
 }
+
+func TestLoadParsesLauncherFlag(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{nil, false},
+		{[]string{"--launcher"}, true},
+		{[]string{"--launcher=false"}, false},
+		{[]string{"--preset", "stf", "--launcher"}, true},
+	} {
+		cfg, err := Load(tc.args)
+		if err != nil {
+			t.Fatalf("Load(%v): %v", tc.args, err)
+		}
+		if cfg.Launcher != tc.want {
+			t.Errorf("Load(%v).Launcher = %v, want %v", tc.args, cfg.Launcher, tc.want)
+		}
+	}
+}
+
+func TestLoadRejectsUnknownFlagAndPreset(t *testing.T) {
+	for _, args := range [][]string{
+		{"--no-such-flag"},
+		{"--preset", "amiga"},
+	} {
+		if _, err := Load(args); err == nil {
+			t.Errorf("Load(%v) = nil error, want error", args)
+		}
+	}
+}
+
+func TestCLIPresetOverridesConfigFilePreset(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gost.json")
+	if err := os.WriteFile(configPath, []byte(`{"preset":"st"}`), 0o644); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+	cfg, err := Load([]string{"--config", configPath, "--preset", "mega-st"})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.RAMSize != 2*1024*1024 {
+		t.Fatalf("RAMSize = %d, want the Mega ST preset's 2 MB", cfg.RAMSize)
+	}
+}
