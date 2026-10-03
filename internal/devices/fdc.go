@@ -1325,7 +1325,12 @@ func inferFloppyGeometry(size int) (sectorsPerTrack, sides, tracks int) {
 			if candidateSides == 2 {
 				score += 10
 			}
-			score -= abs(candidateTracks - 80)
+
+			if candidateTracks-80 < 0 {
+				score -= 80 - candidateTracks
+			} else {
+				score -= candidateTracks - 80
+			}
 
 			if score > best.score {
 				best = candidate{

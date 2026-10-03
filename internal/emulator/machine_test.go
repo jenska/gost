@@ -1004,22 +1004,6 @@ func writeMachinePSGRegister(t *testing.T, machine *Machine, reg, value byte) {
 	}
 }
 
-// keepDeviceIRQ rewires the CPU interrupt source to only the devices passed as
-// true, for tests that isolate a fault to a single interrupt path.
-func keepDeviceIRQ(m *Machine, glue, mfp, fdc bool) {
-	var src machineIRQ
-	if glue {
-		src.glue = m.glue
-	}
-	if mfp {
-		src.mfp = m.mfp
-	}
-	if fdc {
-		src.fdc = m.fdc
-	}
-	m.cpu.SetIRQSource(src)
-}
-
 func loopROM(code []byte) []byte {
 	if len(code) == 0 {
 		code = []byte{0x4E, 0x71, 0x60, 0xFE}
