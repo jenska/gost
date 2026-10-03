@@ -20,6 +20,36 @@ const (
 // through; 0 disables the virtual hard disk.
 var hardDiskSizeChoices = []uint32{0, 10, 20, 30, 60, 120}
 
+// RAMSizeChoice is one selectable RAM size for the launcher dropdown.
+type RAMSizeChoice struct {
+	Label string
+	Bytes uint32
+}
+
+// RAMSizeChoices are the RAM sizes offered by the launcher.
+var RAMSizeChoices = []RAMSizeChoice{
+	{Label: "256 KB", Bytes: 256 * 1024},
+	{Label: "512 KB", Bytes: 512 * 1024},
+	{Label: "1 MB", Bytes: 1024 * 1024},
+	{Label: "2 MB", Bytes: 2 * 1024 * 1024},
+	{Label: "2.5 MB", Bytes: 2560 * 1024},
+	{Label: "4 MB", Bytes: 4 * 1024 * 1024},
+}
+
+// CPUClockChoice is one selectable CPU speed for the launcher dropdown.
+type CPUClockChoice struct {
+	Label string
+	Hz    uint64
+}
+
+// CPUClockChoices are the CPU speeds offered by the launcher.
+var CPUClockChoices = []CPUClockChoice{
+	{Label: "8 MHz (stock)", Hz: 8_000_000},
+	{Label: "16 MHz", Hz: 16_000_000},
+	{Label: "32 MHz", Hz: 32_000_000},
+	{Label: "64 MHz", Hz: 64_000_000},
+}
+
 // configPanel is the shared Atari ST configuration UI. It is shown full-window
 // by the launcher and inside the F12 overlay during a session.
 type configPanel struct {
@@ -150,16 +180,16 @@ func (p *configPanel) newGrid() *widget.Container {
 	return widget.NewContainer(
 		widget.ContainerOpts.WidgetOpts(widget.WidgetOpts.MinSize(panelContentWidth, 0)),
 		widget.ContainerOpts.Layout(widget.NewGridLayout(
-			widget.GridLayoutOpts.Columns(2),
-			widget.GridLayoutOpts.Spacing(6, 4),
-			widget.GridLayoutOpts.DefaultStretch(true, false),
+			widget.GridLayoutOpts.Columns(3),
+			widget.GridLayoutOpts.Spacing(4, 4),
+			widget.GridLayoutOpts.DefaultStretch(true, true),
 		)),
 	)
 }
 
 func (p *configPanel) addCycle(parent *widget.Container, label string, value func() string, onCycle func()) {
 	c := &cycleField{label: label, value: value}
-	c.button = newPanelButtonW(label+":  "+value(), 300, func() {
+	c.button = newPanelButtonW(label+":  "+value(), func() {
 		onCycle()
 		p.transientStatus = false
 		p.Refresh()
@@ -313,10 +343,10 @@ func (p *configPanel) newFooter() *widget.Container {
 		)),
 	)
 	if p.mode == configModeLauncher {
-		footer.AddChild(newPanelButtonW("Start GoST", 140, p.apply))
+		footer.AddChild(newPanelButtonW("Start GoST", p.apply))
 	} else {
-		footer.AddChild(newPanelButtonW("Apply & Reboot", 140, p.apply))
-		footer.AddChild(newPanelButtonW("Close", 90, func() { p.app.setOverlayVisible(false) }))
+		footer.AddChild(newPanelButtonW("Apply & Reboot", p.apply))
+		footer.AddChild(newPanelButtonW("Close", func() { p.app.setOverlayVisible(false) }))
 	}
 	return footer
 }
@@ -349,13 +379,13 @@ func (p *configPanel) cycleModel() {
 }
 
 func (p *configPanel) cycleRAM() {
-	p.ramIndex = (p.ramIndex + 1) % len(config.RAMSizeChoices)
-	p.work.RAMSize = config.RAMSizeChoices[p.ramIndex].Bytes
+	p.ramIndex = (p.ramIndex + 1) % len(RAMSizeChoices)
+	p.work.RAMSize = RAMSizeChoices[p.ramIndex].Bytes
 }
 
 func (p *configPanel) cycleCPU() {
-	p.cpuIndex = (p.cpuIndex + 1) % len(config.CPUClockChoices)
-	p.work.CPUClockHz = config.CPUClockChoices[p.cpuIndex].Hz
+	p.cpuIndex = (p.cpuIndex + 1) % len(CPUClockChoices)
+	p.work.CPUClockHz = CPUClockChoices[p.cpuIndex].Hz
 }
 
 func (p *configPanel) cycleMonitor() {
@@ -373,13 +403,13 @@ func (p *configPanel) cycleHardDiskSize() {
 
 func (p *configPanel) syncIndices() {
 	p.ramIndex = 0
-	for i, choice := range config.RAMSizeChoices {
+	for i, choice := range RAMSizeChoices {
 		if choice.Bytes == p.work.RAMSize {
 			p.ramIndex = i
 		}
 	}
 	p.cpuIndex = 0
-	for i, choice := range config.CPUClockChoices {
+	for i, choice := range CPUClockChoices {
 		if choice.Hz == p.work.CPUClockHz {
 			p.cpuIndex = i
 		}
@@ -571,7 +601,7 @@ func (p *configPanel) presetLabel() string {
 }
 
 func ramLabel(bytes uint32) string {
-	for _, choice := range config.RAMSizeChoices {
+	for _, choice := range RAMSizeChoices {
 		if choice.Bytes == bytes {
 			return choice.Label
 		}
@@ -580,7 +610,7 @@ func ramLabel(bytes uint32) string {
 }
 
 func cpuLabel(hz uint64) string {
-	for _, choice := range config.CPUClockChoices {
+	for _, choice := range CPUClockChoices {
 		if choice.Hz == hz {
 			return choice.Label
 		}

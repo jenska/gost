@@ -41,6 +41,11 @@ var MachinePresets = []MachinePreset{
 		Note: "1 MB, TOS 1.06-1.62",
 	},
 	{
+		ID: "megast1", Label: "Atari Mega ST 1", Base: PresetMegaST, Model: MachineModelST,
+		RAMSize: 1024 * 1024, ColorMonitor: false, CPUClockHz: DefaultClockHz,
+		Note: "1 MB, TOS 1.02-1.04",
+	},
+	{
 		ID: "megast2", Label: "Atari Mega ST 2", Base: PresetMegaST, Model: MachineModelST,
 		RAMSize: 2 * 1024 * 1024, ColorMonitor: false, CPUClockHz: DefaultClockHz,
 		Note: "2 MB, TOS 1.02-1.04",
@@ -92,33 +97,4 @@ func (p MachinePreset) Apply(cfg *Config) {
 	cfg.RAMSize = p.RAMSize
 	cfg.ColorMonitor = p.ColorMonitor
 	cfg.CPUClockHz = p.CPUClockHz
-}
-
-// RAMSizeChoice is one selectable RAM size for the launcher dropdown.
-type RAMSizeChoice struct {
-	Label string
-	Bytes uint32
-}
-
-// RAMSizeChoices are the RAM sizes offered by the launcher.
-var RAMSizeChoices = []RAMSizeChoice{
-	{Label: "256 KB", Bytes: 256 * 1024},
-	{Label: "512 KB", Bytes: 512 * 1024},
-	{Label: "1 MB", Bytes: 1024 * 1024},
-	{Label: "2 MB", Bytes: 2 * 1024 * 1024},
-	{Label: "2.5 MB", Bytes: 2560 * 1024},
-	{Label: "4 MB", Bytes: 4 * 1024 * 1024},
-}
-
-// CPUClockChoice is one selectable CPU speed for the launcher dropdown.
-type CPUClockChoice struct {
-	Label string
-	Hz    uint64
-}
-
-// CPUClockChoices are the CPU speeds offered by the launcher.
-var CPUClockChoices = []CPUClockChoice{
-	{Label: "8 MHz (stock)", Hz: 8_000_000},
-	{Label: "16 MHz", Hz: 16_000_000},
-	{Label: "32 MHz", Hz: 32_000_000},
 }

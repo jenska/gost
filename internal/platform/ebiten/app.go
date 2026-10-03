@@ -40,9 +40,10 @@ const (
 )
 
 type App struct {
+	cfg config.Config
+
 	machine *emulator.Machine
 	session *emulator.Session
-	cfg     config.Config
 
 	audio  *hostAudioQueue
 	player *audio.Player

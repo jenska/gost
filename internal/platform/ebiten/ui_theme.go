@@ -68,12 +68,11 @@ func newPanelTextInput(placeholder string, width int) *widget.TextInput {
 }
 
 func newPanelButton(label string, onClick func()) *widget.Button {
-	return newPanelButtonW(label, 0, onClick)
+	return newPanelButtonW(label, onClick)
 }
 
-func newPanelButtonW(label string, width int, onClick func()) *widget.Button {
+func newPanelButtonW(label string, onClick func()) *widget.Button {
 	return widget.NewButton(
-		widget.ButtonOpts.WidgetOpts(widget.WidgetOpts.MinSize(width, 24)),
 		widget.ButtonOpts.Image(&widget.ButtonImage{
 			Idle:    euiimage.NewNineSliceColor(buttonIdleColor),
 			Hover:   euiimage.NewNineSliceColor(buttonHoverColor),
