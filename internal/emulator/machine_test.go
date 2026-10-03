@@ -91,7 +91,7 @@ func TestMachineMegaSTPresetBootsFromLocalROMPath(t *testing.T) {
 		t.Fatalf("expected Mega ST preset to enable default hard disk, got %d want %d", cfg.HardDiskSizeMB, config.DefaultHardDiskSizeMB)
 	}
 
-	romImage, err := config.LoadROM(cfg.ROMPath)
+	romImage, err := loadROMImage(cfg.ROMPath)
 	if err != nil {
 		t.Fatalf("load ROM image: %v", err)
 	}

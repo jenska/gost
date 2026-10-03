@@ -443,7 +443,7 @@ func (m *MFP) timerCurrentValue(index int) byte {
 }
 
 func (m *MFP) configureEventCountTiming() {
-	timing := m.cfg.Video()
+	timing := VideoTimingFor(m.cfg)
 	m.eventCountFrameCycles = timing.FrameCycles
 	m.eventCountScanlines = timing.Scanlines
 	m.eventCountActiveLines = timing.ActiveLines

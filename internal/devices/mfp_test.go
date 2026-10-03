@@ -107,7 +107,7 @@ func TestMFPTimerBEventCountModePausesDuringVerticalBlank(t *testing.T) {
 		t.Fatalf("write timer b event-count control: %v", err)
 	}
 
-	timing := cfg.Video()
+	timing := VideoTimingFor(cfg)
 	activeEnd := timing.ActiveLines * timing.FrameCycles / timing.Scanlines
 	mfp.Advance(activeEnd + 1_000)
 	blankValue, err := mfp.Read(1, mfpBase+mfpTBDR)

@@ -199,48 +199,6 @@ func (cfg *Config) FrameCycles() uint64 {
 	return cfg.ClockHz / cfg.FrameHz
 }
 
-// ST raster line counts. FrameHz at or above 55 is treated as an NTSC machine.
-const (
-	VideoPALScanlines  = 313
-	VideoNTSCScanlines = 263
-	// VideoActiveLines is the number of displayed scanlines per frame.
-	VideoActiveLines = 200
-)
-
-// VideoTiming is the ST raster timing a device derives from the machine clock
-// and refresh rate.
-type VideoTiming struct {
-	FrameCycles uint64 // machine cycles per display frame (>= 1)
-	Scanlines   uint64 // total scanlines per frame
-	ActiveLines uint64 // displayed scanlines per frame (<= Scanlines)
-}
-
-// Video returns the raster timing for this config, substituting the package
-// defaults for a nil receiver or an unset ClockHz/FrameHz.
-func (cfg *Config) Video() VideoTiming {
-	clockHz, frameHz := uint64(DefaultClockHz), uint64(DefaultFrameHz)
-	if cfg != nil {
-		if cfg.ClockHz != 0 {
-			clockHz = cfg.ClockHz
-		}
-		if cfg.FrameHz != 0 {
-			frameHz = cfg.FrameHz
-		}
-	}
-
-	t := VideoTiming{FrameCycles: clockHz / frameHz}
-	if t.FrameCycles == 0 {
-		t.FrameCycles = 1
-	}
-	if frameHz >= 55 {
-		t.Scanlines = VideoNTSCScanlines
-	} else {
-		t.Scanlines = VideoPALScanlines
-	}
-	t.ActiveLines = min(VideoActiveLines, t.Scanlines)
-	return t
-}
-
 func ConfigForPreset(preset Preset) (*Config, error) {
 	normalized, err := normalizePreset(preset)
 	if err != nil {
@@ -681,43 +639,4 @@ func mhzToHz(mhz float64) (uint64, error) {
 		return 0, fmt.Errorf("invalid %s %.6f: effective CPU clock rounded to 0 Hz", KeyCPUMHz, mhz)
 	}
 	return hz, nil
-}
-
-// romImageMaxBytes is a generous ceiling on a loadable ROM image. Real TOS
-// images top out at 512 KiB and the ST ROM window spans 1 MiB; anything larger
-// is almost certainly the wrong file (a disk or hard-disk image passed as
-// --rom or --cartridge).
-const romImageMaxBytes = 1024 * 1024
-
-// tosImageSizes are the sizes real TOS ROM images come in (192, 256, 512 KiB).
-var tosImageSizes = []int{192 * 1024, 256 * 1024, 512 * 1024}
-
-// TruncatedTOSImage reports the standard TOS image size that size falls one
-// byte short of. Dumps are sometimes truncated that way; LoadROM pads the
-// missing byte with $FF, which can silently corrupt a pointer stored at the
-// very end of the ROM (TOS 1.02 keeps its desktop start address there).
-func TruncatedTOSImage(size int) (want int, truncated bool) {
-	for _, s := range tosImageSizes {
-		if size == s-1 {
-			return s, true
-		}
-	}
-	return 0, false
-}
-
-func LoadROM(path string) ([]byte, error) {
-	image, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if len(image) == 0 {
-		return nil, fmt.Errorf("ROM image %q is empty", path)
-	}
-	if len(image) > romImageMaxBytes {
-		return nil, fmt.Errorf("ROM image %q is %d bytes, which exceeds the %d byte maximum", path, len(image), romImageMaxBytes)
-	}
-	if len(image)%2 != 0 {
-		image = append(image, 0xFF)
-	}
-	return image, nil
 }

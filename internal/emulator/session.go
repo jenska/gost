@@ -42,7 +42,7 @@ func BuildMachine(cfg *config.Config) (*Session, error) {
 
 	var cartridgeImage []byte
 	if cfg.CartridgePath != "" {
-		cartridgeImage, err = config.LoadROM(cfg.CartridgePath)
+		cartridgeImage, err = loadROMImage(cfg.CartridgePath)
 		if err != nil {
 			return nil, fmt.Errorf("load cartridge ROM: %w", err)
 		}
@@ -109,13 +109,13 @@ func loadTOSROM(path string) (image []byte, name, warning string, err error) {
 	if path == "" {
 		return assets.DefaultROM(), assets.DefaultOSName, "", nil
 	}
-	image, err = config.LoadROM(path)
+	image, err = loadROMImage(path)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("load ROM: %w", err)
 	}
-	// LoadROM pads odd sizes, so check the size on disk.
+	// loadROMImage pads odd sizes, so check the size on disk.
 	if info, statErr := os.Stat(path); statErr == nil {
-		if want, truncated := config.TruncatedTOSImage(int(info.Size())); truncated {
+		if want, truncated := truncatedTOSImage(int(info.Size())); truncated {
 			warning = fmt.Sprintf("ROM image %s is %d bytes, one byte short of a %d KiB TOS image; "+
 				"it is probably a truncated dump and may not boot", path, info.Size(), want/1024)
 		}

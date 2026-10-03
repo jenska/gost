@@ -85,7 +85,7 @@ func (g *GLUE) configureTiming(cfg *config.Config) {
 	if cfg.FrameCycles() == 0 {
 		return // no usable clock/refresh; GLUE stays idle
 	}
-	timing := cfg.Video()
+	timing := VideoTimingFor(cfg)
 	g.frameCycles = timing.FrameCycles
 	g.scanlines = timing.Scanlines
 }
