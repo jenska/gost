@@ -99,6 +99,14 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 		newMonsterProbeRegion(),
 	}
 
+	var megaRTC *devices.MegaRTC
+	if cfg.MegaRTC {
+		// The Mega machines' built-in RP5C15 clock. Without it $FFFC20 reads as
+		// open bus, which TOS takes as "no clock".
+		megaRTC = devices.NewMegaRTC()
+		busDevices = append(busDevices, megaRTC)
+	}
+
 	busDevices = append(busDevices,
 		newOpenBusRegion(romImage),
 		rom,
@@ -133,6 +141,7 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 		printer:      printer,
 		rs232:        rs232,
 		steSound:     steSound,
+		megaRTC:      megaRTC,
 		clocked:      clockedDevices(glue, mfp, acia, fdc, psg, steSound),
 		frameCycles:  frameCycles,
 		traceWriter:  io.Discard,

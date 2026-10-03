@@ -53,6 +53,7 @@ type (
 		printer       *devices.PrinterPort
 		rs232         *devices.RS232
 		steSound      *devices.STESound
+		megaRTC       *devices.MegaRTC // nil unless cfg.MegaRTC
 		clocked       []devices.Clocked
 		frameCycles   uint64
 		cpuCycleCarry uint64

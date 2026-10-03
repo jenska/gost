@@ -180,6 +180,7 @@ go run ./cmd/gost --config configs/atari-1040ste-color.json
 - `--hd-size-mb <n>`: virtual ACSI hard disk size in MiB (default `30`, set `0` to disable)
 - `--hd-image <path>`: optional persistent ACSI hard disk image file; raw sector images and `.hdi` containers are supported
 - `--rtc`: enable the optional ICD-compatible ACSI real-time clock
+- `--mega-rtc`: enable the RP5C15 real-time clock built into the Mega ST and Mega STE (set by the Mega presets)
 - `--ram-size <bytes>`: emulated RAM size in bytes
 - `--clock-hz <n>`: base machine clock frequency in Hz
 - `--cpu-mhz <n>`: CPU frequency in MHz; changes CPU speed without changing other hardware timing

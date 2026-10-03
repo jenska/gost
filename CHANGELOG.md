@@ -4,6 +4,11 @@
 
 ### Added
 
+- Mega ST / Mega STE built-in real-time clock: the Ricoh RP5C15 at
+  `$FFFC21-$FFFC3F`, backed by the host clock and settable from TOS. The Mega
+  presets enable it; `--mega-rtc` (config key `mega-rtc`) turns it on for any
+  machine. The ICD ACSI clock (`--rtc`) is unchanged.
+
 - Desktop configuration launcher: a bare `go run ./cmd/gost` (or `--launcher`)
   now opens a full configuration screen before boot. It offers Atari ST model
   presets (520 ST, 1040 STF, 1040 STE, Mega ST 1/2/4, Mega STE), colour/monochrome
