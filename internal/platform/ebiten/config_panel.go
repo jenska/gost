@@ -138,7 +138,7 @@ func newConfigPanel(app *App, mode configMode, initial config.Config) *configPan
 		return "Monochrome"
 	}, p.cycleMonitor)
 	p.addCycle(grid, "RTC", func() string {
-		if p.work.RTC {
+		if p.work.ICDRTC {
 			return "On"
 		}
 		return "Off"
@@ -393,7 +393,7 @@ func (p *configPanel) cycleMonitor() {
 }
 
 func (p *configPanel) cycleRTC() {
-	p.work.RTC = !p.work.RTC
+	p.work.ICDRTC = !p.work.ICDRTC
 }
 
 func (p *configPanel) cycleHardDiskSize() {

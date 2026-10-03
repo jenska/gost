@@ -65,7 +65,7 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 
 	mfp.AttachRS232(rs232)
 
-	if cfg.RTC {
+	if cfg.ICDRTC {
 		// The ICD RTC is reached through ACSI command bytes and reports its
 		// detect/session line through MFP GPIP5.
 		rtc := devices.NewICDRTC()

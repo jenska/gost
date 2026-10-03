@@ -78,8 +78,8 @@ func TestMachineMegaSTPresetBootsFromLocalROMPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.Preset != config.PresetMegaST {
-		t.Fatalf("unexpected preset: got %q want %q", cfg.Preset, config.PresetMegaST)
+	if got := config.MatchPreset(cfg); got != "megast2" {
+		t.Fatalf("unexpected preset: got %q want megast2", got)
 	}
 	if cfg.ROMPath != romPath {
 		t.Fatalf("unexpected ROM path: got %q want %q", cfg.ROMPath, romPath)
@@ -542,7 +542,7 @@ func TestMachineSmokeBootsWithLocal1stWordPlusSTX(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Model = config.MachineModelSTE
-	cfg.RAMSize = config.STFDefaultRAMSize
+	cfg.RAMSize = 1024 * 1024
 	cfg.ColorMonitor = false
 	machine, err := NewMachine(cfg, assets.DefaultROM())
 	if err != nil {
@@ -603,7 +603,7 @@ func TestMachinePrinterBusyDrivesMFPGPIP0(t *testing.T) {
 func TestMachineRTCFlagRoutesICDRTCThroughFDCAndGPIP(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.HardDiskSizeMB = 0
-	cfg.RTC = true
+	cfg.ICDRTC = true
 	machine, err := NewMachine(cfg, loopROM(nil))
 	if err != nil {
 		t.Fatalf("create machine with RTC: %v", err)

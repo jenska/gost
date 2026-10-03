@@ -16,10 +16,6 @@ const (
 	DefaultFrameHz        = 50
 	DefaultHardDiskSizeMB = 30
 	DefaultHeadlessFrames = 1000
-
-	STDefaultRAMSize     = 512 * 1024
-	STFDefaultRAMSize    = 1024 * 1024
-	MegaSTDefaultRAMSize = 2 * 1024 * 1024
 )
 
 type MachineModel string
@@ -30,15 +26,6 @@ const (
 
 	bootTraceStart = 0xE00000
 	bootTraceEnd   = 0xE01000
-)
-
-type Preset string
-
-const (
-	PresetDefault Preset = "default"
-	PresetSTF     Preset = "stf"
-	PresetST      Preset = "st"
-	PresetMegaST  Preset = "mega-st"
 )
 
 const (
@@ -65,6 +52,7 @@ const (
 	KeyFrameHz        = "frame-hz"
 	KeyColorMonitor   = "color-monitor"
 	KeyRTC            = "rtc"
+	KeyMegaRTC        = "mega-rtc"
 	KeyMidResYScale   = "midres-y-scale"
 	KeyModel          = "model"
 	KeyLauncher       = "launcher"
@@ -72,8 +60,6 @@ const (
 
 // Config holds all configuration parameters for the Atari ST emulation.
 type Config struct {
-	// Preset is the initial configuration preset to load (default, stf, st, mega-st).
-	Preset Preset
 	// ROMPath is the path to a custom TOS ROM file; if empty, uses bundled EmuTOS.
 	ROMPath string
 	// CartridgePath is the path to an optional cartridge ROM image.
@@ -112,8 +98,12 @@ type Config struct {
 	FrameHz uint64
 	// ColorMonitor enables color monitor mode; false uses monochrome mode.
 	ColorMonitor bool
-	// RTC enables the ICD-compatible ACSI real-time clock.
-	RTC bool
+	// ICDRTC enables the ICD-compatible ACSI real-time clock, an add-on clock
+	// reached through the hard disk interface.
+	ICDRTC bool
+	// MegaRTC enables the RP5C15 real-time clock built into the Mega ST and
+	// Mega STE.
+	MegaRTC bool
 	// MidResYScale applies Y-axis pixel doubling for medium resolution mode.
 	MidResYScale int
 	// Model specifies the machine type: st or ste.
@@ -124,12 +114,22 @@ type Config struct {
 
 type configPatch map[string]json.RawMessage
 
+// DefaultConfig returns the configuration used when no preset is named: an
+// Atari 1040 STF on a monochrome monitor.
 func DefaultConfig() *Config {
-	cfg, err := ConfigForPreset(PresetDefault)
-	if err != nil {
-		panic(err)
+	return &Config{
+		Scale:          1.0,
+		Frames:         DefaultHeadlessFrames,
+		TraceStart:     bootTraceStart,
+		TraceEnd:       bootTraceEnd,
+		RAMSize:        DefaultRAMSize,
+		ClockHz:        DefaultClockHz,
+		CPUClockHz:     DefaultClockHz,
+		FrameHz:        DefaultFrameHz,
+		HardDiskSizeMB: DefaultHardDiskSizeMB,
+		MidResYScale:   2,
+		Model:          MachineModelST,
 	}
-	return cfg
 }
 
 func (cfg *Config) FrameCycles() uint64 {
@@ -137,46 +137,6 @@ func (cfg *Config) FrameCycles() uint64 {
 		return 0
 	}
 	return cfg.ClockHz / cfg.FrameHz
-}
-
-func ConfigForPreset(preset Preset) (*Config, error) {
-	normalized, err := normalizePreset(preset)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg := &Config{}
-	cfg.Scale = 1.0
-	cfg.Frames = DefaultHeadlessFrames
-	cfg.TraceStart = bootTraceStart
-	cfg.TraceEnd = bootTraceEnd
-	cfg.RAMSize = DefaultRAMSize
-	cfg.ClockHz = DefaultClockHz
-	cfg.CPUClockHz = DefaultClockHz
-	cfg.FrameHz = DefaultFrameHz
-	cfg.HardDiskSizeMB = DefaultHardDiskSizeMB
-	cfg.ColorMonitor = false
-	cfg.RTC = false
-	cfg.MidResYScale = 2
-	cfg.Model = MachineModelST
-
-	cfg.Preset = normalized
-	switch normalized {
-	case PresetSTF:
-		cfg.Model = MachineModelST
-		cfg.RAMSize = STFDefaultRAMSize
-		cfg.ColorMonitor = true
-	case PresetST:
-		cfg.Model = MachineModelST
-		cfg.RAMSize = STDefaultRAMSize
-		cfg.ColorMonitor = false
-	case PresetMegaST:
-		cfg.Model = MachineModelST
-		cfg.RAMSize = MegaSTDefaultRAMSize
-		cfg.ColorMonitor = false
-	default:
-	}
-	return cfg, nil
 }
 
 func NewConfig() (*Config, error) {
@@ -234,15 +194,10 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("config is nil")
 	}
 
-	preset, err := normalizePreset(cfg.Preset)
-	if err != nil {
-		return err
-	}
 	model, err := normalizeModel(cfg.Model)
 	if err != nil {
 		return err
 	}
-	cfg.Preset = preset
 	cfg.Model = model
 
 	if cfg.Scale <= 0 {
@@ -341,7 +296,7 @@ func (p configPatch) build(preset string) (*Config, error) {
 			return nil, fmt.Errorf("decode %q: %w", KeyPreset, err)
 		}
 	}
-	cfg, err := ConfigForPreset(Preset(preset))
+	cfg, err := configForPreset(preset)
 	if err != nil {
 		return nil, err
 	}
@@ -364,26 +319,11 @@ func parseFlags(cfg *Config, args []string, configPath, preset *string, output i
 		preset = new(string)
 	}
 	fs.StringVar(configPath, KeyConfig, "", "optional JSON config file loaded before CLI overrides")
-	fs.StringVar(preset, KeyPreset, "", "machine preset: default|stf|st|mega-st")
+	fs.StringVar(preset, KeyPreset, "", presetUsage())
 	for _, f := range fields {
 		fs.Var(f.value(cfg), f.key, f.usage)
 	}
 	return fs.Parse(args)
-}
-
-func normalizePreset(preset Preset) (Preset, error) {
-	switch normalized := Preset(strings.ToLower(strings.TrimSpace(string(preset)))); normalized {
-	case "", PresetDefault:
-		return PresetDefault, nil
-	case PresetSTF:
-		return PresetSTF, nil
-	case PresetST:
-		return PresetST, nil
-	case PresetMegaST:
-		return PresetMegaST, nil
-	default:
-		return "", fmt.Errorf("unsupported preset %q", preset)
-	}
 }
 
 func normalizeModel(model MachineModel) (MachineModel, error) {

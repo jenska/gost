@@ -8,15 +8,12 @@ import (
 func TestProfileSaveListLoadRoundTrip(t *testing.T) {
 	t.Setenv(ConfigDirEnv, t.TempDir())
 
-	cfg, err := ConfigForPreset(PresetSTF)
-	if err != nil {
-		t.Fatalf("config for preset: %v", err)
-	}
+	cfg := DefaultConfig()
 	cfg.RAMSize = 2 * 1024 * 1024
 	cfg.CPUClockHz = 16_000_000
 	cfg.ColorMonitor = false
 	cfg.FloppyA = "/disks/a.stx"
-	cfg.RTC = true
+	cfg.ICDRTC = true
 
 	if err := SaveProfile("my-ste", cfg); err != nil {
 		t.Fatalf("save profile: %v", err)
@@ -43,7 +40,7 @@ func TestProfileSaveListLoadRoundTrip(t *testing.T) {
 		{"CPUClockHz", loaded.CPUClockHz, cfg.CPUClockHz},
 		{"ColorMonitor", loaded.ColorMonitor, cfg.ColorMonitor},
 		{"FloppyA", loaded.FloppyA, cfg.FloppyA},
-		{"RTC", loaded.RTC, cfg.RTC},
+		{"RTC", loaded.ICDRTC, cfg.ICDRTC},
 		{"Model", loaded.Model, cfg.Model},
 	} {
 		if tc.got != tc.want {
@@ -102,10 +99,7 @@ func TestLastConfigRoundTrip(t *testing.T) {
 
 func TestPresetCatalogueApplyAndMatch(t *testing.T) {
 	for _, preset := range MachinePresets {
-		cfg, err := ConfigForPreset(PresetDefault)
-		if err != nil {
-			t.Fatalf("config for preset: %v", err)
-		}
+		cfg := DefaultConfig()
 		preset.Apply(cfg)
 		if got := MatchPreset(cfg); got != preset.ID {
 			t.Errorf("MatchPreset after Apply(%s) = %q, want %q", preset.ID, got, preset.ID)

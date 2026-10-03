@@ -41,7 +41,7 @@ func ProfileDir() (string, error) {
 // ToPatch renders the user-facing subset of the configuration as a flag-keyed
 // map suitable for JSON serialisation and reloading through LoadConfigFile.
 func (cfg *Config) ToPatch() map[string]any {
-	patch := map[string]any{KeyPreset: string(cfg.Preset)}
+	patch := map[string]any{}
 	for _, f := range fields {
 		if !f.persist {
 			continue

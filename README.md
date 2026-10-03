@@ -138,7 +138,7 @@ Load order is: preset defaults, then JSON config file, then CLI flags.
 Running the desktop build with no arguments (or with `--launcher`) opens a
 configuration screen before the ST boots. It lets you:
 
-- pick an Atari ST model preset (520 ST, 1040 STF, 1040 STE, Mega ST 2/4, Mega STE)
+- pick an Atari ST model preset (520 ST, 1040 STF, 1040 STE, Mega ST 1/2/4, Mega STE)
 - choose a colour or monochrome monitor, RAM size, and CPU speed
 - toggle fullscreen and set the window scale
 - select a TOS ROM, floppy A/B images, and a hard-disk image with native file
@@ -171,7 +171,7 @@ go run ./cmd/gost --config configs/atari-1040ste-color.json
 
 - `--config <path>`: optional JSON config file loaded before CLI overrides
 - `--launcher`: open the desktop configuration launcher before boot (implied when no other arguments are given)
-- `--preset <name>`: machine preset, currently `default`, `stf`, `st`, or `mega-st`
+- `--preset <name>`: machine preset: `default` (1040 STF, monochrome), `520st`, `1040stf`, `1040ste`, `megast1`, `megast2`, `megast4`, or `megaste`; the older names `st`, `stf`, and `mega-st` map to `520st`, `1040stf`, and `megast2`
 - `--model <name>`: hardware model, currently `st` or `ste`
 - `--rom <path>`: path to the TOS ROM image; bundled EmuTOS is used when omitted
 - `--cartridge <path>`: optional cartridge ROM image mapped read-only at `$FA0000-$FBFFFF` (up to 128 KiB)

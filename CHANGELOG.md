@@ -6,7 +6,7 @@
 
 - Desktop configuration launcher: a bare `go run ./cmd/gost` (or `--launcher`)
   now opens a full configuration screen before boot. It offers Atari ST model
-  presets (520 ST, 1040 STF, 1040 STE, Mega ST 2/4, Mega STE), colour/monochrome
+  presets (520 ST, 1040 STF, 1040 STE, Mega ST 1/2/4, Mega STE), colour/monochrome
   monitor, RAM size, CPU speed, TOS ROM, floppy A/B, and a hard-disk image with
   native file pickers (including a save dialog to create a new image), plus a
   fullscreen checkbox and a window-scale slider. The same panel is reachable
@@ -27,6 +27,14 @@
   Ebiten game loop without a main-thread AppKit call.
 
 ### Changed
+
+- `--preset` and the `preset` config key now take the launcher's machine IDs
+  (`520st`, `1040stf`, `1040ste`, `megast1`, `megast2`, `megast4`, `megaste`);
+  there is a single preset catalogue instead of two. The default machine is a
+  1040 STF on a monochrome monitor. The old names keep working: `stf` and
+  `mega-st` load the same settings as before (Mega ST 2 now also gets its
+  built-in clock), while `st` now loads the 520 ST with a colour monitor
+  instead of a monochrome one. Saved profiles no longer store a preset name.
 
 - Fetches and TOS-vector reads from the boot ROM now bypass the bus via a
   read-only flat memory window (`m68kemu` `SetFastMemory`), cutting an EmuTOS

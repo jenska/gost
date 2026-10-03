@@ -31,6 +31,7 @@ func TestFlagsAndConfigFileAgree(t *testing.T) {
 		"--frame-hz=60",
 		"--color-monitor",
 		"--rtc",
+		"--mega-rtc",
 		"--midres-y-scale=1",
 		"--model=ste",
 		"--launcher",
@@ -62,6 +63,7 @@ func TestFlagsAndConfigFileAgree(t *testing.T) {
 		"frame-hz": 60,
 		"color-monitor": true,
 		"rtc": true,
+		"mega-rtc": true,
 		"midres-y-scale": 1,
 		"model": "ste",
 		"launcher": true
@@ -104,7 +106,8 @@ func TestSavedConfigRoundTripsAllPersistedFields(t *testing.T) {
 	cfg.CPUClockHz = 16_000_000
 	cfg.ColorMonitor = true
 	cfg.HardDiskSizeMB = 60
-	cfg.RTC = true
+	cfg.ICDRTC = true
+	cfg.MegaRTC = true
 	cfg.Scale = 2
 	cfg.Fullscreen = true
 	cfg.ROMPath = "/roms/tos206.img"

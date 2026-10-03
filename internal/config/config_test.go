@@ -3,20 +3,27 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
-func TestConfigForPresetDefault(t *testing.T) {
-	cfg, err := ConfigForPreset(PresetDefault)
+func TestDefaultConfigIsMonochrome1040STF(t *testing.T) {
+	cfg, err := Load(nil)
 	if err != nil {
-		t.Fatalf("config for preset: %v", err)
+		t.Fatalf("load config: %v", err)
 	}
-
-	if cfg.Preset != PresetDefault {
-		t.Fatalf("unexpected preset: got %q want %q", cfg.Preset, PresetDefault)
+	if !reflect.DeepEqual(cfg, DefaultConfig()) {
+		t.Fatalf("Load(nil) = %+v, want DefaultConfig()", *cfg)
 	}
-	if cfg.RAMSize != DefaultRAMSize {
-		t.Fatalf("unexpected RAM size: got %d want %d", cfg.RAMSize, DefaultRAMSize)
+	if got := MatchPreset(cfg); got != "1040stf" {
+		t.Fatalf("MatchPreset(default) = %q, want 1040stf", got)
+	}
+	if cfg.ColorMonitor {
+		t.Fatalf("expected the default machine to use a monochrome monitor")
+	}
+	if cfg.MegaRTC || cfg.ICDRTC {
+		t.Fatalf("expected the default machine to have no RTC")
 	}
 	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
 		t.Fatalf("unexpected hard disk size: got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
@@ -24,28 +31,46 @@ func TestConfigForPresetDefault(t *testing.T) {
 	if cfg.Frames != DefaultHeadlessFrames {
 		t.Fatalf("unexpected headless frame default: got %d want %d", cfg.Frames, DefaultHeadlessFrames)
 	}
-	if cfg.Model != MachineModelST {
-		t.Fatalf("unexpected model: got %q want %q", cfg.Model, MachineModelST)
+}
+
+func TestPresetFlagAppliesCatalogueEntry(t *testing.T) {
+	for _, tc := range []struct {
+		preset  string
+		want    string
+		ram     uint32
+		color   bool
+		megaRTC bool
+	}{
+		{"default", "1040stf", 1024 * 1024, false, false},
+		{"1040stf", "1040stf", 1024 * 1024, true, false},
+		{"stf", "1040stf", 1024 * 1024, true, false},
+		{"st", "520st", 512 * 1024, true, false},
+		{"mega-st", "megast2", 2 * 1024 * 1024, false, true},
+		{"MegaSTE", "megaste", 4 * 1024 * 1024, false, true},
+	} {
+		cfg, err := Load([]string{"--preset", tc.preset})
+		if err != nil {
+			t.Fatalf("--preset %s: %v", tc.preset, err)
+		}
+		if got := MatchPreset(cfg); got != tc.want {
+			t.Errorf("--preset %s: MatchPreset = %q, want %q", tc.preset, got, tc.want)
+		}
+		if cfg.RAMSize != tc.ram || cfg.ColorMonitor != tc.color || cfg.MegaRTC != tc.megaRTC {
+			t.Errorf("--preset %s: RAM %d color %v mega-rtc %v, want %d %v %v",
+				tc.preset, cfg.RAMSize, cfg.ColorMonitor, cfg.MegaRTC, tc.ram, tc.color, tc.megaRTC)
+		}
+		if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
+			t.Errorf("--preset %s: hard disk size %d, want %d", tc.preset, cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
+		}
 	}
 }
 
-func TestConfigForPresetSTF(t *testing.T) {
-	cfg, err := ConfigForPreset(PresetSTF)
-	if err != nil {
-		t.Fatalf("config for preset: %v", err)
-	}
-
-	if cfg.Preset != PresetSTF {
-		t.Fatalf("unexpected preset: got %q want %q", cfg.Preset, PresetSTF)
-	}
-	if cfg.RAMSize != STFDefaultRAMSize {
-		t.Fatalf("unexpected RAM size: got %d want %d", cfg.RAMSize, STFDefaultRAMSize)
-	}
-	if !cfg.ColorMonitor {
-		t.Fatalf("expected STF preset to enable color monitor")
-	}
-	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
-		t.Fatalf("unexpected STF hard disk size: got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
+func TestMegaPresetsHaveBuiltInRTC(t *testing.T) {
+	for _, p := range MachinePresets {
+		mega := strings.HasPrefix(p.ID, "mega")
+		if p.MegaRTC != mega {
+			t.Errorf("preset %s: MegaRTC = %v, want %v", p.ID, p.MegaRTC, mega)
+		}
 	}
 }
 
@@ -61,9 +86,6 @@ func TestLoadAppliesPresetBeforeOverrides(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.Preset != PresetSTF {
-		t.Fatalf("unexpected preset: got %q want %q", cfg.Preset, PresetSTF)
-	}
 	if cfg.RAMSize != 2*1024*1024 {
 		t.Fatalf("unexpected RAM size: got %d want %d", cfg.RAMSize, 2*1024*1024)
 	}
@@ -92,11 +114,11 @@ func TestLoadCanReadPresetFromConfigFile(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.Preset != PresetSTF {
-		t.Fatalf("unexpected preset: got %q want %q", cfg.Preset, PresetSTF)
+	if got := MatchPreset(cfg); got != "1040stf" {
+		t.Fatalf("unexpected preset: got %q want 1040stf", got)
 	}
-	if cfg.RAMSize != STFDefaultRAMSize {
-		t.Fatalf("unexpected RAM size: got %d want %d", cfg.RAMSize, STFDefaultRAMSize)
+	if cfg.RAMSize != 1024*1024 {
+		t.Fatalf("unexpected RAM size: got %d want %d", cfg.RAMSize, 1024*1024)
 	}
 	if !cfg.ColorMonitor {
 		t.Fatalf("expected STF preset to default to color mode")
@@ -137,9 +159,6 @@ func TestFlagsOverrideConfigFileSettings(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.Preset != PresetSTF {
-		t.Fatalf("unexpected preset: got %q want %q", cfg.Preset, PresetSTF)
-	}
 	if cfg.RAMSize != 2*1024*1024 {
 		t.Fatalf("unexpected RAM size: got %d want %d", cfg.RAMSize, 2*1024*1024)
 	}
@@ -151,38 +170,12 @@ func TestFlagsOverrideConfigFileSettings(t *testing.T) {
 	}
 }
 
-func TestConfigForPresetMegaST(t *testing.T) {
-	cfg, err := ConfigForPreset(PresetMegaST)
-	if err != nil {
-		t.Fatalf("config for preset: %v", err)
-	}
-
-	if cfg.Preset != PresetMegaST {
-		t.Fatalf("unexpected preset: got %q want %q", cfg.Preset, PresetMegaST)
-	}
-	if cfg.RAMSize != MegaSTDefaultRAMSize {
-		t.Fatalf("unexpected RAM size: got %d want %d", cfg.RAMSize, MegaSTDefaultRAMSize)
-	}
-	if cfg.ColorMonitor {
-		t.Fatalf("expected Mega ST preset to default to monochrome mode")
-	}
-	if cfg.HardDiskSizeMB != DefaultHardDiskSizeMB {
-		t.Fatalf("expected Mega ST preset to enable default hard disk, got %d want %d", cfg.HardDiskSizeMB, DefaultHardDiskSizeMB)
-	}
-	if cfg.Model != MachineModelST {
-		t.Fatalf("unexpected model: got %q want %q", cfg.Model, MachineModelST)
-	}
-	if cfg.RTC {
-		t.Fatalf("expected Mega ST preset to keep optional RTC disabled by default")
-	}
-}
-
 func TestLoadCanEnableRTCFlag(t *testing.T) {
 	cfg, err := Load([]string{"--rtc"})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if !cfg.RTC {
+	if !cfg.ICDRTC {
 		t.Fatalf("expected --rtc to enable ICD RTC support")
 	}
 }
@@ -197,7 +190,7 @@ func TestLoadCanEnableRTCFromConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if !cfg.RTC {
+	if !cfg.ICDRTC {
 		t.Fatalf("expected JSON rtc option to enable ICD RTC support")
 	}
 }
