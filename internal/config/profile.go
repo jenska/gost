@@ -41,27 +41,16 @@ func ProfileDir() (string, error) {
 // ToPatch renders the user-facing subset of the configuration as a flag-keyed
 // map suitable for JSON serialisation and reloading through LoadConfigFile.
 func (cfg *Config) ToPatch() map[string]any {
-	patch := map[string]any{
-		KeyPreset:         string(cfg.Preset),
-		KeyModel:          string(cfg.Model),
-		KeyRAMSize:        cfg.RAMSize,
-		KeyCPUClockHz:     cfg.CPUClockHz,
-		KeyColorMonitor:   cfg.ColorMonitor,
-		KeyHardDiskSizeMB: cfg.HardDiskSizeMB,
-		KeyRTC:            cfg.RTC,
-		KeyScale:          cfg.Scale,
-		KeyFullscreen:     cfg.Fullscreen,
-	}
-	for key, value := range map[string]string{
-		KeyROM:           cfg.ROMPath,
-		KeyCartridge:     cfg.CartridgePath,
-		KeyFloppyA:       cfg.FloppyA,
-		KeyFloppyB:       cfg.FloppyB,
-		KeyHardDiskImage: cfg.HardDiskImagePath,
-	} {
-		if value != "" {
-			patch[key] = value
+	patch := map[string]any{KeyPreset: string(cfg.Preset)}
+	for _, f := range fields {
+		if !f.persist {
+			continue
 		}
+		value := f.value(cfg).Get()
+		if s, ok := value.(string); ok && s == "" {
+			continue // unset image paths stay out of the file
+		}
+		patch[f.key] = value
 	}
 	return patch
 }

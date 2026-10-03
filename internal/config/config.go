@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -123,66 +122,6 @@ type Config struct {
 }
 
 type configPatch map[string]json.RawMessage
-
-type addressFlag struct {
-	target *uint32
-}
-
-type uint32Flag struct {
-	target *uint32
-}
-
-type mhzFlag struct {
-	target *uint64
-}
-
-func (f addressFlag) String() string {
-	if f.target == nil {
-		return ""
-	}
-	return formatAddress(*f.target)
-}
-
-func (f addressFlag) Set(raw string) error {
-	value, err := parseAddress(raw)
-	if err != nil {
-		return err
-	}
-	*f.target = value
-	return nil
-}
-
-func (f uint32Flag) String() string {
-	if f.target == nil {
-		return ""
-	}
-	return strconv.FormatUint(uint64(*f.target), 10)
-}
-
-func (f uint32Flag) Set(raw string) error {
-	value, err := strconv.ParseUint(strings.TrimSpace(raw), 0, 32)
-	if err != nil {
-		return err
-	}
-	*f.target = uint32(value)
-	return nil
-}
-
-func (f mhzFlag) String() string {
-	if f.target == nil {
-		return ""
-	}
-	return strconv.FormatFloat(float64(*f.target)/1_000_000.0, 'f', -1, 64)
-}
-
-func (f mhzFlag) Set(raw string) error {
-	hz, err := parseMHz(raw)
-	if err != nil {
-		return err
-	}
-	*f.target = hz
-	return nil
-}
 
 func DefaultConfig() *Config {
 	cfg, err := ConfigForPreset(PresetDefault)
@@ -372,70 +311,47 @@ func loadConfigPatch(path string) (configPatch, error) {
 	return patch, nil
 }
 
-// jsonFields maps each config key whose JSON value decodes straight into a
-// Config field to that field's address. Keys needing custom parsing (preset
-// selection, addresses, MHz) are handled explicitly in Apply.
-func (cfg *Config) jsonFields() map[string]any {
-	return map[string]any{
-		KeyROM:            &cfg.ROMPath,
-		KeyCartridge:      &cfg.CartridgePath,
-		KeyFloppyA:        &cfg.FloppyA,
-		KeyFloppyB:        &cfg.FloppyB,
-		KeyHardDiskSizeMB: &cfg.HardDiskSizeMB,
-		KeyHardDiskImage:  &cfg.HardDiskImagePath,
-		KeyScale:          &cfg.Scale,
-		KeyFullscreen:     &cfg.Fullscreen,
-		KeyHeadless:       &cfg.Headless,
-		KeyFrames:         &cfg.Frames,
-		KeyDumpFrame:      &cfg.DumpFramePath,
-		KeyTrace:          &cfg.Trace,
-		KeyRAMSize:        &cfg.RAMSize,
-		KeyClockHz:        &cfg.ClockHz,
-		KeyCPUClockHz:     &cfg.CPUClockHz,
-		KeyFrameHz:        &cfg.FrameHz,
-		KeyColorMonitor:   &cfg.ColorMonitor,
-		KeyRTC:            &cfg.RTC,
-		KeyMidResYScale:   &cfg.MidResYScale,
-		KeyModel:          &cfg.Model,
-		KeyLauncher:       &cfg.Launcher,
-	}
-}
-
+// Apply sets every key in the patch on cfg through the same flag.Value that
+// parses the key on the command line.
 func (p configPatch) Apply(cfg *Config) error {
-	fields := cfg.jsonFields()
 	for key, raw := range p {
-		switch key {
-		case KeyPreset:
-			// Preset is selected before defaults are built, so ignore it here.
-		case KeyTraceStart:
-			value, err := decodeAddressJSON(raw)
-			if err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-			cfg.TraceStart = value
-		case KeyTraceEnd:
-			value, err := decodeAddressJSON(raw)
-			if err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-			cfg.TraceEnd = value
-		case KeyCPUMHz:
-			value, err := decodeMHzJSON(raw)
-			if err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
-			cfg.CPUClockHz = value
-		default:
-			target, ok := fields[key]
-			if !ok {
-				return fmt.Errorf("unsupported config key %q", key)
-			}
-			if err := decodeJSON(raw, target); err != nil {
-				return fmt.Errorf("decode %q: %w", key, err)
-			}
+		if key == KeyPreset {
+			continue // the preset seeds the defaults before the patch applies
+		}
+		f, ok := lookupField(key)
+		if !ok {
+			return fmt.Errorf("unsupported config key %q", key)
+		}
+		text, err := jsonScalarText(raw)
+		if err != nil {
+			return fmt.Errorf("decode %q: %w", key, err)
+		}
+		if err := f.value(cfg).Set(text); err != nil {
+			return fmt.Errorf("decode %q: %w", key, err)
 		}
 	}
 	return nil
+}
+
+// jsonScalarText returns a JSON string, number, or boolean as the text a flag
+// would carry: strings unquoted, numbers and booleans verbatim.
+func jsonScalarText(raw json.RawMessage) (string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return "", fmt.Errorf("empty value")
+	}
+	switch raw[0] {
+	case '"':
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return "", err
+		}
+		return text, nil
+	case '{', '[', 'n':
+		return "", fmt.Errorf("expected a string, number, or boolean, got %s", raw)
+	default:
+		return string(raw), nil
+	}
 }
 
 func (p configPatch) Preset() (Preset, bool, error) {
@@ -445,7 +361,7 @@ func (p configPatch) Preset() (Preset, bool, error) {
 	}
 
 	var preset Preset
-	if err := decodeJSON(raw, &preset); err != nil {
+	if err := json.Unmarshal(raw, &preset); err != nil {
 		return "", false, fmt.Errorf("decode %q: %w", KeyPreset, err)
 	}
 	return preset, true, nil
@@ -468,41 +384,16 @@ func parseFlags(cfg *Config, args []string) error {
 	fs.SetOutput(os.Stderr)
 
 	preset := string(cfg.Preset)
-	model := string(cfg.Model)
-
 	fs.String(KeyConfig, "", "optional JSON config file loaded before CLI overrides")
 	fs.StringVar(&preset, KeyPreset, preset, "machine preset: default|stf|st|mega-st")
-	fs.StringVar(&cfg.ROMPath, KeyROM, cfg.ROMPath, "path to Atari ST TOS ROM")
-	fs.StringVar(&cfg.CartridgePath, KeyCartridge, cfg.CartridgePath, "path to optional Atari ST cartridge ROM image")
-	fs.StringVar(&cfg.FloppyA, KeyFloppyA, cfg.FloppyA, "path to drive A disk image (.st, .msa, .dim, or compatible .adi)")
-	fs.StringVar(&cfg.FloppyB, KeyFloppyB, cfg.FloppyB, "path to drive B disk image (.st, .msa, .dim, or compatible .adi)")
-	fs.Var(uint32Flag{target: &cfg.HardDiskSizeMB}, KeyHardDiskSizeMB, "virtual ACSI hard disk size in MiB (0 disables)")
-	fs.StringVar(&cfg.HardDiskImagePath, KeyHardDiskImage, cfg.HardDiskImagePath, "path to persistent virtual hard disk image file")
-	fs.Float64Var(&cfg.Scale, KeyScale, cfg.Scale, "display scale factor")
-	fs.BoolVar(&cfg.Fullscreen, KeyFullscreen, cfg.Fullscreen, "run in fullscreen mode")
-	fs.BoolVar(&cfg.Headless, KeyHeadless, cfg.Headless, "disable video output and window creation")
-	fs.IntVar(&cfg.Frames, KeyFrames, cfg.Frames, "frames to run in headless mode")
-	fs.StringVar(&cfg.DumpFramePath, KeyDumpFrame, cfg.DumpFramePath, "write the last rendered framebuffer to a PNG file")
-	fs.StringVar(&cfg.Trace, KeyTrace, cfg.Trace, "enable tracing: cpu|cpu-verbose|boot|boot-verbose|shifter|shifter-verbose")
-	fs.Var(addressFlag{target: &cfg.TraceStart}, KeyTraceStart, "first PC included in boot traces")
-	fs.Var(addressFlag{target: &cfg.TraceEnd}, KeyTraceEnd, "last PC included in boot traces")
-	fs.Var(uint32Flag{target: &cfg.RAMSize}, KeyRAMSize, "amount of emulated RAM in bytes")
-	fs.Uint64Var(&cfg.ClockHz, KeyClockHz, cfg.ClockHz, "base machine clock frequency in Hz")
-	fs.Var(mhzFlag{target: &cfg.CPUClockHz}, KeyCPUMHz, "CPU frequency in MHz (hardware timing remains unchanged)")
-	fs.Uint64Var(&cfg.CPUClockHz, KeyCPUClockHz, cfg.CPUClockHz, "CPU frequency in Hz (hardware timing remains unchanged)")
-	fs.Uint64Var(&cfg.FrameHz, KeyFrameHz, cfg.FrameHz, "frames per second for display and VBL timing")
-	fs.BoolVar(&cfg.ColorMonitor, KeyColorMonitor, cfg.ColorMonitor, "emulate an Atari color monitor instead of monochrome")
-	fs.BoolVar(&cfg.RTC, KeyRTC, cfg.RTC, "enable the ICD-compatible ACSI real-time clock")
-	fs.IntVar(&cfg.MidResYScale, KeyMidResYScale, cfg.MidResYScale, "vertical host scaling for medium resolution (>=1)")
-	fs.StringVar(&model, KeyModel, model, "machine model: st|ste")
-	fs.BoolVar(&cfg.Launcher, KeyLauncher, cfg.Launcher, "open the desktop configuration launcher before boot")
+	for _, f := range fields {
+		fs.Var(f.value(cfg), f.key, f.usage)
+	}
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-
 	cfg.Preset = Preset(preset)
-	cfg.Model = MachineModel(model)
 	return nil
 }
 
@@ -530,51 +421,6 @@ func normalizeModel(model MachineModel) (MachineModel, error) {
 	default:
 		return "", fmt.Errorf("unsupported machine model %q", model)
 	}
-}
-
-func decodeJSON(raw json.RawMessage, dst any) error {
-	return json.Unmarshal(raw, dst)
-}
-
-func decodeAddressJSON(raw json.RawMessage) (uint32, error) {
-	if len(raw) == 0 {
-		return 0, fmt.Errorf("empty address")
-	}
-	if raw[0] == '"' {
-		var text string
-		if err := json.Unmarshal(raw, &text); err != nil {
-			return 0, err
-		}
-		return parseAddress(text)
-	}
-
-	var value uint64
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return 0, err
-	}
-	if value > 0xFFFFFFFF {
-		return 0, fmt.Errorf("address %d overflows uint32", value)
-	}
-	return uint32(value), nil
-}
-
-func decodeMHzJSON(raw json.RawMessage) (uint64, error) {
-	if len(raw) == 0 {
-		return 0, fmt.Errorf("empty MHz value")
-	}
-	if raw[0] == '"' {
-		var text string
-		if err := json.Unmarshal(raw, &text); err != nil {
-			return 0, err
-		}
-		return parseMHz(text)
-	}
-
-	var mhz float64
-	if err := json.Unmarshal(raw, &mhz); err != nil {
-		return 0, err
-	}
-	return mhzToHz(mhz)
 }
 
 func lookupFlagValue(args []string, name string) (string, bool) {
@@ -607,36 +453,4 @@ func containsHelpArg(args []string) bool {
 		}
 	}
 	return false
-}
-
-func parseAddress(raw string) (uint32, error) {
-	value, err := strconv.ParseUint(strings.TrimSpace(raw), 0, 32)
-	if err != nil {
-		return 0, err
-	}
-	return uint32(value), nil
-}
-
-func formatAddress(value uint32) string {
-	return fmt.Sprintf("0x%06x", value)
-}
-
-func parseMHz(raw string) (uint64, error) {
-	mhz, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil {
-		return 0, err
-	}
-	return mhzToHz(mhz)
-}
-
-func mhzToHz(mhz float64) (uint64, error) {
-	if mhz <= 0 {
-		return 0, fmt.Errorf("invalid %s %.3f: must be > 0", KeyCPUMHz, mhz)
-	}
-
-	hz := uint64(mhz * 1_000_000.0)
-	if hz == 0 {
-		return 0, fmt.Errorf("invalid %s %.6f: effective CPU clock rounded to 0 Hz", KeyCPUMHz, mhz)
-	}
-	return hz, nil
 }
