@@ -92,6 +92,11 @@
 
 ### Dependencies
 
+- `github.com/jenska/m68kemu` v1.6.0 → v1.6.1: `MOVEP` had its size and
+  direction swapped (TOS and games use it for the MFP and video registers),
+  and opcode words the 68000 does not have now raise the illegal-instruction
+  exception instead of executing
+
 - `github.com/jenska/m68kemu` v1.5.2 → v1.6.0 (MC68000 instruction timing,
   `WithCycleRounding`, scheduler kept in step with exception cycles)
 
