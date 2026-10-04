@@ -134,7 +134,7 @@ func Run(session *emulator.Session, cfg config.Config, startInLauncher bool) err
 	ebitenlib.SetWindowTitle("GoST Emulator")
 	applyAppIcon()
 	ebitenlib.SetWindowResizingMode(ebitenlib.WindowResizingModeEnabled)
-	ebitenlib.SetTPS(int(cfg.FrameHz))
+	ebitenlib.SetTPS(int(cfg.RefreshHz()))
 	ebitenlib.SetFullscreen(cfg.Fullscreen)
 
 	player, err := newAudioPlayer(app.audio)
@@ -204,6 +204,7 @@ func (a *App) applyDisplayConfig() {
 func (a *App) applyConfig(newCfg config.Config) {
 	if !a.machineConfigChanged(newCfg) {
 		a.cfg = newCfg
+		a.machine.SetFastFloppy(newCfg.FastFloppy)
 		if a.mode == modeLauncher {
 			a.applyRunningWindow()
 		} else {
@@ -219,11 +220,12 @@ func (a *App) applyConfig(newCfg config.Config) {
 
 // machineConfigChanged reports whether newCfg differs from the active config in a
 // way that requires rebuilding the machine. Host-only display settings (scale,
-// fullscreen) are ignored.
+// fullscreen) and the floppy speed, which applies live, are ignored.
 func (a *App) machineConfigChanged(newCfg config.Config) bool {
 	old, cur := a.cfg, newCfg
 	old.Scale, cur.Scale = 0, 0
 	old.Fullscreen, cur.Fullscreen = false, false
+	old.FastFloppy, cur.FastFloppy = false, false
 	return !reflect.DeepEqual(old.ToPatch(), cur.ToPatch())
 }
 
@@ -312,8 +314,8 @@ func (a *App) reboot(newCfg config.Config) error {
 	a.scale = clampScale(newCfg.Scale)
 	ebitenlib.SetFullscreen(newCfg.Fullscreen)
 	a.applyRunningWindow()
-	if newCfg.FrameHz > 0 {
-		ebitenlib.SetTPS(int(newCfg.FrameHz))
+	if refreshHz := newCfg.RefreshHz(); refreshHz > 0 {
+		ebitenlib.SetTPS(int(refreshHz))
 	}
 	return nil
 }

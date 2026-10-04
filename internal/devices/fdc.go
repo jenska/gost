@@ -131,6 +131,20 @@ type FDC struct {
 	// commands skip the spin-up and only those reading the disk get stuck.
 	emptyMotorOn bool
 
+	// Disk-surface timing; see fdc_timing.go. busyCycles is the time left on
+	// the running command, whose completion interrupt is held (heldInterrupt)
+	// until then. holdInterrupt diverts queueInterrupt while a timed command
+	// executes. rotation is the position in the current revolution, motorIdle
+	// how long the motor has run with no command.
+	busyCycles    uint64
+	holdInterrupt bool
+	heldInterrupt bool
+	rotation      uint64
+	motorOn       bool
+	motorIdle     uint64
+	// fast skips the disk-surface timing: commands complete at once.
+	fast bool
+
 	// track/head state
 	headTrack         int
 	lastStepDirection int // +1=in, -1=out
@@ -183,6 +197,11 @@ func (f *FDC) Reset() {
 	f.typeI = true
 	f.noIndexWait = false
 	f.emptyMotorOn = false
+	f.busyCycles = 0
+	f.holdInterrupt = false
+	f.heldInterrupt = false
+	f.motorOn = false
+	f.motorIdle = 0
 	f.headTrack = 0
 	f.lastStepDirection = -1
 	f.selectedDrive = 0
@@ -557,8 +576,6 @@ func (f *FDC) Write(size cpu.Size, address uint32, value uint32) error {
 	}
 }
 
-func (f *FDC) Advance(uint64) {}
-
 // PendingIRQ reports the FDC/DMA interrupt line: level 5 with the configured
 // vector while an operation has completed and not yet been acknowledged. The
 // same event is also delivered through MFP GPIP i5 (see queueInterrupt).
@@ -681,7 +698,12 @@ func (f *FDC) currentDataWord() uint16 {
 		if f.irq != nil {
 			f.irq(false)
 		}
-		return uint16(f.status)
+		// The motor line is live: it drops once the drive has idled.
+		status := f.status &^ fdcStatusMotorOn
+		if f.motorOn || f.emptyMotorOn {
+			status |= fdcStatusMotorOn
+		}
+		return uint16(status)
 	case dmaA0:
 		return uint16(f.track)
 	case dmaA1:
@@ -815,9 +837,18 @@ func (f *FDC) execute(cmd byte) error {
 		}
 	}
 
-	switch {
-	case cmd&0xF0 == fdcCmdForceI:
+	if cmd&0xF0 == fdcCmdForceI {
 		return f.execForceInterrupt()
+	}
+	if !f.diskPresent() {
+		return f.dispatch(cmd)
+	}
+	return f.runTimed(cmd, func() error { return f.dispatch(cmd) })
+}
+
+// dispatch runs a non-Force-Interrupt command to completion.
+func (f *FDC) dispatch(cmd byte) error {
+	switch {
 	case cmd&0xF0 == fdcCmdRestore:
 		return f.execRestore(cmd)
 	case cmd&0xF0 == fdcCmdSeek:
@@ -847,6 +878,7 @@ func (f *FDC) execute(cmd byte) error {
 }
 
 func (f *FDC) execForceInterrupt() error {
+	f.cancelTimedCommand()
 	f.typeI = true
 	f.noIndexWait = false
 	f.status = f.baseStatus()
@@ -1153,6 +1185,10 @@ func (f *FDC) commandSectorCount(cmd byte) (count int, multi bool) {
 }
 
 func (f *FDC) queueInterrupt() {
+	if f.holdInterrupt {
+		f.heldInterrupt = true
+		return
+	}
 	vector := f.vector
 	f.pending = append(f.pending, Interrupt{Level: 5, Vector: vector})
 	if f.irq != nil {
@@ -1166,16 +1202,13 @@ func (f *FDC) baseStatus() byte {
 		status |= fdcStatusTrack0
 	}
 	disk := f.selectedDisk()
-	if disk != nil && len(disk.image) != 0 {
-		status |= fdcStatusMotorOn
-	}
 	if disk != nil && disk.writeProtected {
 		status |= fdcStatusWriteProtect
 	}
-	if f.emptyMotorOn {
+	if f.motorOn || f.emptyMotorOn {
 		status |= fdcStatusMotorOn
 	}
-	if f.noIndexWait {
+	if f.noIndexWait || f.busyCycles != 0 {
 		status |= fdcStatusBusy
 	}
 	return status

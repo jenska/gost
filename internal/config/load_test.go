@@ -335,3 +335,16 @@ func TestCPUMHzAliasMatchesCPUClockHz(t *testing.T) {
 		t.Fatalf("cpu-mhz and cpu-clock-hz disagree:\nmhz: %+v\nhz:  %+v", *fromMHz, *fromHz)
 	}
 }
+
+func TestLoadFastFloppyFlag(t *testing.T) {
+	cfg, err := Load([]string{"--fast-floppy"})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.FastFloppy {
+		t.Fatal("expected --fast-floppy to enable instant floppy commands")
+	}
+	if patch := cfg.ToPatch(); patch[KeyFastFloppy] != true {
+		t.Fatalf("fast-floppy should persist in saved configs, patch has %v", patch[KeyFastFloppy])
+	}
+}

@@ -9,8 +9,9 @@ import (
 
 func testShifterConfig(frameCycles uint64) *config.Config {
 	return &config.Config{
-		ClockHz: frameCycles,
-		FrameHz: 1,
+		ClockHz:      frameCycles,
+		FrameHz:      1,
+		ColorMonitor: true,
 	}
 }
 

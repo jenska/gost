@@ -31,7 +31,7 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 	}
 	frameCycles := cfg.FrameCycles()
 	if frameCycles == 0 {
-		return nil, fmt.Errorf("invalid frame timing: clock-hz %d / frame-hz %d yields 0 frame cycles", cfg.ClockHz, cfg.FrameHz)
+		return nil, fmt.Errorf("invalid frame timing: clock-hz %d / refresh %d Hz yields 0 frame cycles", cfg.ClockHz, cfg.RefreshHz())
 	}
 
 	// Core memory devices are created first because several later devices
@@ -58,6 +58,7 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 	mfp := devices.NewMFP(cfg)
 	acia := devices.NewACIA(mfp.SetACIAInterrupt)
 	fdc := devices.NewFDC(ram, mfp.SetFDCInterrupt)
+	fdc.SetFastFloppy(cfg.FastFloppy)
 	psg := devices.NewPSG(cfg.ClockHz)
 	printer := devices.NewPrinterPort()
 	rs232 := devices.NewRS232()

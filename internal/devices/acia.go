@@ -10,7 +10,18 @@ const (
 	aciaChannelSize = 4
 	aciaChannelCt   = 2
 	aciaSize        = aciaChannelSize * aciaChannelCt
+
+	// Both ACIAs run from a 500 kHz clock (the 8 MHz machine clock / 16) and
+	// receive 10-bit frames: start bit, 8 data bits, stop bit. The keyboard
+	// link divides by 64 (7812.5 baud), MIDI by 16 (31250 baud). These are the
+	// machine cycles one byte spends on the wire.
+	aciaIKBDByteCycles = 10 * 64 * 16
+	aciaMIDIByteCycles = 10 * 16 * 16
 )
+
+// aciaByteCycles is the per-channel receive time: channel 0 is the IKBD,
+// channel 1 MIDI.
+var aciaByteCycles = [aciaChannelCt]uint64{aciaIKBDByteCycles, aciaMIDIByteCycles}
 
 // ACIA fronts the IKBD and MIDI byte devices as memory-mapped serial channels.
 type ACIA struct {
@@ -23,8 +34,12 @@ type ACIA struct {
 	data    [aciaChannelCt]byte
 	// rxLoaded reports whether the receive register currently contains unread data.
 	rxLoaded [aciaChannelCt]bool
-	// rxCooldown delays refilling the receive register until the next advance tick after a read.
-	rxCooldown [aciaChannelCt]bool
+	// rxShift is the byte arriving on each channel's serial line, valid while
+	// rxShifting. rxShiftCycles counts down the machine cycles until it has been
+	// received; at zero it moves to the data register as soon as that is free.
+	rxShift       [aciaChannelCt]byte
+	rxShifting    [aciaChannelCt]bool
+	rxShiftCycles [aciaChannelCt]uint64
 }
 
 // NewACIA wires the IKBD behind channel 0 and  MIDI behind channel 1.
@@ -53,7 +68,8 @@ func (a *ACIA) Reset() {
 		a.status[i] = 0x02
 		a.data[i] = 0
 		a.rxLoaded[i] = false
-		a.rxCooldown[i] = false
+		a.rxShifting[i] = false
+		a.rxShiftCycles[i] = 0
 	}
 	a.updateIRQ()
 }
@@ -62,17 +78,15 @@ func (a *ACIA) Reset() {
 // updates receive state when a data byte is consumed.
 func (a *ACIA) Read(size cpu.Size, address uint32) (uint32, error) {
 	channel := aciaChannelIndex(address)
-	if !a.rxCooldown[channel] {
-		a.pollReceiveChannel(channel)
-	}
 	switch (address - aciaBase) % aciaChannelSize {
 	case 0, 1:
 		return uint32(a.status[channel]), nil
 	case 2, 3:
 		value := a.data[channel]
 		a.rxLoaded[channel] = false
-		a.rxCooldown[channel] = true
 		a.status[channel] &^= 0x81
+		// A byte that finished arriving while the register was full moves up now.
+		a.completeReceive(channel)
 		a.updateIRQ()
 		return uint32(value), nil
 	default:
@@ -88,9 +102,10 @@ func (a *ACIA) Write(size cpu.Size, address uint32, value uint32) error {
 	case 0, 1:
 		a.control[channel] = byte(value)
 		if a.control[channel]&0x03 == 0x03 {
+			// Master reset clears the registers. A byte already on the wire
+			// keeps arriving, so host input is not dropped.
 			a.status[channel] = 0x02
 			a.rxLoaded[channel] = false
-			a.rxCooldown[channel] = false
 			a.updateIRQ()
 		}
 	case 2, 3:
@@ -100,66 +115,92 @@ func (a *ACIA) Write(size cpu.Size, address uint32, value uint32) error {
 			a.midi.WriteOutput(byte(value))
 		}
 	}
-	a.pollReceiveChannel(channel)
 	a.updateIRQ()
 	return nil
 }
 
-// Advance releases the one-tick receive cooldown and polls attached endpoints
-// for new bytes.
-func (a *ACIA) Advance(uint64) {
-	for i := range a.rxCooldown {
-		a.rxCooldown[i] = false
-	}
-	for channel := range aciaChannelCt {
-		a.pollReceiveChannel(uint32(channel))
+// Advance moves each channel's serial line on by cycles, receiving bytes from
+// the attached IKBD and MIDI endpoints at their baud rates.
+func (a *ACIA) Advance(cycles uint64) {
+	for channel := range uint32(aciaChannelCt) {
+		a.advanceReceive(channel, cycles)
 	}
 }
 
-// pollReceiveChannel loads one pending endpoint byte when that channel's
-// receive register is empty.
-func (a *ACIA) pollReceiveChannel(channel uint32) {
+// NextEventCycles reports when the next byte in flight finishes arriving.
+func (a *ACIA) NextEventCycles() (uint64, bool) {
+	var next uint64
+	for channel := range aciaChannelCt {
+		if !a.rxShifting[channel] || a.rxShiftCycles[channel] == 0 {
+			continue
+		}
+		if next == 0 || a.rxShiftCycles[channel] < next {
+			next = a.rxShiftCycles[channel]
+		}
+	}
+	return next, next != 0
+}
+
+// advanceReceive runs one channel's receiver for cycles. The endpoint sends
+// back to back, so a new byte starts as soon as the previous one is received.
+func (a *ACIA) advanceReceive(channel uint32, cycles uint64) {
+	for {
+		if !a.rxShifting[channel] && !a.startReceive(channel) {
+			return
+		}
+		if cycles < a.rxShiftCycles[channel] {
+			a.rxShiftCycles[channel] -= cycles
+			return
+		}
+		cycles -= a.rxShiftCycles[channel]
+		a.rxShiftCycles[channel] = 0
+		if !a.completeReceive(channel) {
+			return // data register still full; hold the byte until it is read
+		}
+	}
+}
+
+// startReceive puts the endpoint's next byte on the channel's serial line.
+func (a *ACIA) startReceive(channel uint32) bool {
+	var value byte
 	switch channel {
 	case 0:
-		a.pollIKBD()
+		if !a.ikbd.HasData() {
+			return false
+		}
+		b, err := a.ikbd.ReadByte()
+		if err != nil {
+			return false
+		}
+		value = b
 	case 1:
-		a.pollMIDI()
+		b, ok := a.midi.PopInput()
+		if !ok {
+			return false
+		}
+		value = b
+	default:
+		return false
 	}
+	a.rxShift[channel] = value
+	a.rxShifting[channel] = true
+	a.rxShiftCycles[channel] = aciaByteCycles[channel]
+	return true
 }
 
-// pollIKBD loads one pending IKBD byte into channel 0 when the receive register is empty.
-func (a *ACIA) pollIKBD() {
-	if a.rxLoaded[0] || !a.ikbd.HasData() {
-		return
+// completeReceive moves a fully received byte into the empty data register and
+// raises receive-ready. It reports false when there is no such byte or the
+// register is still full.
+func (a *ACIA) completeReceive(channel uint32) bool {
+	if !a.rxShifting[channel] || a.rxShiftCycles[channel] != 0 || a.rxLoaded[channel] {
+		return false
 	}
-	value, err := a.ikbd.ReadByte()
-	if err != nil {
-		return
-	}
-	a.data[0] = value
-	a.rxLoaded[0] = true
-	a.status[0] |= 0x01
-	if a.control[0]&0x80 != 0 {
-		a.status[0] |= 0x80
-	}
+	a.rxShifting[channel] = false
+	a.data[channel] = a.rxShift[channel]
+	a.rxLoaded[channel] = true
+	a.status[channel] |= 0x01
 	a.updateIRQ()
-}
-
-func (a *ACIA) pollMIDI() {
-	if a.rxLoaded[1] || !a.midi.InputAvailable() {
-		return
-	}
-	value, ok := a.midi.PopInput()
-	if !ok {
-		return
-	}
-	a.data[1] = value
-	a.rxLoaded[1] = true
-	a.status[1] |= 0x01
-	if a.control[1]&0x80 != 0 {
-		a.status[1] |= 0x80
-	}
-	a.updateIRQ()
+	return true
 }
 
 // updateIRQ keeps both channel IRQ bits and the shared external ACIA IRQ line
@@ -194,7 +235,6 @@ func (a *ACIA) PushMouse(dx, dy int, buttons byte) {
 
 func (a *ACIA) PushMIDIInput(data []byte) {
 	a.midi.PushInput(data)
-	a.pollMIDI()
 }
 
 func (a *ACIA) MIDIOutput() []byte {

@@ -143,6 +143,12 @@ func newConfigPanel(app *App, mode configMode, initial config.Config) *configPan
 		}
 		return "Off"
 	}, p.cycleRTC)
+	p.addCycle(grid, "Floppy", func() string {
+		if p.work.FastFloppy {
+			return "Fast"
+		}
+		return "Real speed"
+	}, p.cycleFastFloppy)
 	p.addCycle(grid, "Hard disk", func() string {
 		if p.work.HardDiskSizeMB == 0 {
 			return "Off"
@@ -394,6 +400,10 @@ func (p *configPanel) cycleMonitor() {
 
 func (p *configPanel) cycleRTC() {
 	p.work.ICDRTC = !p.work.ICDRTC
+}
+
+func (p *configPanel) cycleFastFloppy() {
+	p.work.FastFloppy = !p.work.FastFloppy
 }
 
 func (p *configPanel) cycleHardDiskSize() {

@@ -13,6 +13,7 @@ func (m *Machine) Reset() error {
 	m.overlayROM.ColdReset()
 	m.memoryConfig.ColdReset()
 	m.cpuCycleCarry = 0
+	m.cpuCycleDebt = 0
 	m.frameCounter = 0
 	if err := m.cpu.Reset(); err != nil {
 		return err
@@ -65,11 +66,8 @@ func (m *Machine) StepFrame() (bool, error) {
 	remainingHardwareCycles := m.frameCycles
 	for remainingHardwareCycles > 0 {
 		quantum := m.nextStepQuantum(remainingHardwareCycles)
-		cpuQuantum := m.cpuCyclesForHardwareCycles(quantum)
-		if cpuQuantum > 0 {
-			if err := m.cpu.RunCycles(cpuQuantum); err != nil {
-				return false, err
-			}
+		if err := m.runCPU(m.cpuCyclesForHardwareCycles(quantum)); err != nil {
+			return false, err
 		}
 		m.advanceDevices(quantum)
 		m.shifter.AdvanceFrame(quantum)
@@ -82,6 +80,25 @@ func (m *Machine) StepFrame() (bool, error) {
 		m.traceShifterFrame(rendered)
 	}
 	return rendered, nil
+}
+
+// runCPU gives the CPU budget cycles. RunCycles only stops on an instruction
+// boundary, so it usually overshoots; the overshoot is owed and deducted from
+// the next budget, keeping the CPU locked to the machine clock instead of
+// gaining a partial instruction on every quantum.
+func (m *Machine) runCPU(budget uint64) error {
+	if budget <= m.cpuCycleDebt {
+		m.cpuCycleDebt -= budget
+		return nil
+	}
+	budget -= m.cpuCycleDebt
+	start := m.cpu.Cycles()
+	if err := m.cpu.RunCycles(budget); err != nil {
+		m.cpuCycleDebt = 0
+		return err
+	}
+	m.cpuCycleDebt = m.cpu.Cycles() - start - budget
+	return nil
 }
 
 func (m *Machine) nextStepQuantum(remainingHardwareCycles uint64) uint64 {

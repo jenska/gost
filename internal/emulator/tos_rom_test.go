@@ -180,7 +180,9 @@ func bootToDesktopAndOpenAbout(t *testing.T, img tosImage, color bool, opts mach
 		t.Fatalf("%s rendering: "+format, append([]any{variant}, args...)...)
 	}
 
-	const maxFrames = 4000
+	// Allow 80 s of emulated time: TOS 1.0x spends about 60 s on its empty-drive
+	// timeouts before the desktop appears, whatever the monitor's refresh rate.
+	maxFrames := 80 * int(cfg.RefreshHz())
 	frame := 0
 	for ; frame < maxFrames && !desktopDrawn(m); frame += 50 {
 		if frame == 500 {

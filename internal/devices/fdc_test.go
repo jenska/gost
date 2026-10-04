@@ -183,6 +183,10 @@ func TestFDCStatusReadClearsInterruptLine(t *testing.T) {
 		t.Fatalf("execute read command: %v", err)
 	}
 
+	if len(line) != 0 && line[len(line)-1] {
+		t.Fatalf("interrupt raised before the sector came round: %v", line)
+	}
+	finishFDCCommand(fdc)
 	if len(line) == 0 || !line[len(line)-1] {
 		t.Fatalf("expected FDC completion to assert the interrupt line, got %v", line)
 	}
@@ -1324,4 +1328,124 @@ func sendACSICommandDatacontrolStyle(t *testing.T, fdc *FDC, cmd []byte) byte {
 		t.Fatalf("read ACSI status: %v", err)
 	}
 	return byte(status)
+}
+
+// finishFDCCommand runs the drive until the current command completes.
+func finishFDCCommand(fdc *FDC) {
+	if cycles, ok := fdc.NextEventCycles(); ok {
+		fdc.Advance(cycles)
+	}
+}
+
+// writeFDCCommand selects the WD1772 command register and issues cmd.
+func writeFDCCommand(t *testing.T, fdc *FDC, register uint16, value uint16) {
+	t.Helper()
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetControl, uint32(dmaDRQFloppy|register)); err != nil {
+		t.Fatalf("select register %x: %v", register, err)
+	}
+	if err := fdc.Write(cpu.Word, fdcBase+fdcOffsetData, uint32(value)); err != nil {
+		t.Fatalf("write register %x: %v", register, err)
+	}
+}
+
+func newTimedFDC(t *testing.T) *FDC {
+	t.Helper()
+	fdc := NewFDC(NewRAM(0, 1024*1024), nil)
+	if err := fdc.InsertDisk(make([]byte, 80*2*fdcSectorsTrack*fdcSectorSize)); err != nil {
+		t.Fatalf("insert disk: %v", err)
+	}
+	return fdc
+}
+
+func TestFDCReadSectorWaitsForSpinUpThenTheSector(t *testing.T) {
+	fdc := newTimedFDC(t)
+	setupFloppyDMA(t, fdc, 0x1000, 1, 1, false)
+	writeFDCCommand(t, fdc, 0, fdcCmdRead)
+
+	busy, ok := fdc.NextEventCycles()
+	if !ok || fdc.status&fdcStatusBusy == 0 {
+		t.Fatalf("read sector should be busy, status %02x", fdc.status)
+	}
+	// The motor was off: six index pulses, then sector 1 from the index.
+	want := uint64(5*fdcRevolutionCycles + (fdcGap1Bytes+fdcIDSyncBytes+fdcIDToDataEndBytes)*256)
+	if busy != want {
+		t.Fatalf("busy for %d cycles, want %d", busy, want)
+	}
+	fdc.Advance(busy - 1)
+	if len(fdc.pending) != 0 {
+		t.Fatal("interrupt raised one cycle early")
+	}
+	fdc.Advance(1)
+	if len(fdc.pending) != 1 || fdc.status&fdcStatusBusy != 0 {
+		t.Fatalf("command should have completed: pending %d status %02x", len(fdc.pending), fdc.status)
+	}
+
+	// With the motor running, sector 2 follows a single record later.
+	setupFloppyDMA(t, fdc, 0x1000, 1, 2, false)
+	writeFDCCommand(t, fdc, 0, fdcCmdRead)
+	busy, _ = fdc.NextEventCycles()
+	if want := uint64(fdcSectorRecord * 256); busy != want {
+		t.Fatalf("motor-on read of the next sector busy for %d cycles, want %d", busy, want)
+	}
+}
+
+func TestFDCSeekTakesTheStepRate(t *testing.T) {
+	fdc := newTimedFDC(t)
+	fdc.motorOn = true
+	writeFDCCommand(t, fdc, dmaA1|dmaA0, 10)         // data register: target track
+	writeFDCCommand(t, fdc, 0, fdcCmdSeek|0x08|0x03) // no spin-up, 3 ms steps
+	if busy, _ := fdc.NextEventCycles(); busy != 10*3*fdcCyclesPerMs {
+		t.Fatalf("10-track seek at 3 ms busy for %d cycles, want %d", busy, 10*3*fdcCyclesPerMs)
+	}
+}
+
+func TestFDCForceInterruptCancelsATimedCommand(t *testing.T) {
+	fdc := newTimedFDC(t)
+	setupFloppyDMA(t, fdc, 0x1000, 1, 1, false)
+	writeFDCCommand(t, fdc, 0, fdcCmdRead)
+	writeFDCCommand(t, fdc, 0, fdcCmdForceI)
+	if _, ok := fdc.NextEventCycles(); ok || fdc.status&fdcStatusBusy != 0 {
+		t.Fatalf("Force Interrupt should end the command, status %02x", fdc.status)
+	}
+	fdc.Advance(10 * fdcRevolutionCycles)
+	if len(fdc.pending) != 1 {
+		t.Fatalf("only the Force Interrupt should raise an interrupt, got %d", len(fdc.pending))
+	}
+}
+
+func TestFDCMotorStopsAfterTenIdleRevolutions(t *testing.T) {
+	fdc := newTimedFDC(t)
+	setupFloppyDMA(t, fdc, 0x1000, 1, 1, false)
+	writeFDCCommand(t, fdc, 0, fdcCmdRead)
+	finishFDCCommand(fdc)
+
+	status := func() uint32 {
+		v, _ := fdc.Read(cpu.Word, fdcBase+fdcOffsetData)
+		return v
+	}
+	if status()&fdcStatusMotorOn == 0 {
+		t.Fatal("motor should run after a command")
+	}
+	fdc.Advance(fdcMotorOffCycles - 1)
+	if status()&fdcStatusMotorOn == 0 {
+		t.Fatal("motor stopped early")
+	}
+	fdc.Advance(1)
+	if status()&fdcStatusMotorOn != 0 {
+		t.Fatal("motor should stop after ten idle revolutions")
+	}
+}
+
+func TestFDCFastFloppyCompletesAtOnce(t *testing.T) {
+	fdc := newTimedFDC(t)
+	fdc.SetFastFloppy(true)
+	setupFloppyDMA(t, fdc, 0x1000, 1, 1, false)
+	writeFDCCommand(t, fdc, 0, fdcCmdRead)
+
+	if _, ok := fdc.NextEventCycles(); ok || fdc.status&fdcStatusBusy != 0 {
+		t.Fatalf("fast floppy read should not stay busy, status %02x", fdc.status)
+	}
+	if len(fdc.pending) != 1 {
+		t.Fatalf("fast floppy read should interrupt at once, pending %d", len(fdc.pending))
+	}
 }

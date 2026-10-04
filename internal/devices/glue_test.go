@@ -7,7 +7,7 @@ import (
 )
 
 func TestGLUEAssertsHBLLineAtScanlineBoundary(t *testing.T) {
-	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50, ColorMonitor: true}
 	glue := NewGLUE(cfg)
 
 	cycles, ok := glue.NextEventCycles()
@@ -35,7 +35,7 @@ func TestGLUEAssertsHBLLineAtScanlineBoundary(t *testing.T) {
 }
 
 func TestGLUEAssertsVBLLineAtFrameBoundary(t *testing.T) {
-	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50, ColorMonitor: true}
 	glue := NewGLUE(cfg)
 
 	glue.Advance(cfg.FrameCycles())
@@ -48,7 +48,7 @@ func TestGLUEAssertsVBLLineAtFrameBoundary(t *testing.T) {
 // unacknowledged VBL (level 4) must not be downgraded to an HBL (level 2) by the
 // scanline edges that follow it in the next frame.
 func TestGLUEVBLLineOutranksLaterHBLEdges(t *testing.T) {
-	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50, ColorMonitor: true}
 	glue := NewGLUE(cfg)
 
 	glue.Advance(cfg.FrameCycles())
@@ -64,7 +64,7 @@ func TestGLUEVBLLineOutranksLaterHBLEdges(t *testing.T) {
 }
 
 func TestGLUENTSCUsesShorterScanlineTiming(t *testing.T) {
-	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 60}
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 60, ColorMonitor: true}
 	glue := NewGLUE(cfg)
 
 	cycles, ok := glue.NextEventCycles()
@@ -73,5 +73,22 @@ func TestGLUENTSCUsesShorterScanlineTiming(t *testing.T) {
 	}
 	if cycles != 506 {
 		t.Fatalf("unexpected first NTSC scanline cycles: got %d want 506", cycles)
+	}
+}
+
+func TestGLUEMonochromeUsesFixed71HzRaster(t *testing.T) {
+	// frame-hz does not apply to the SM124: it always runs 501 lines at ~71 Hz.
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50}
+	glue := NewGLUE(cfg)
+
+	if got, want := cfg.FrameCycles(), uint64(8_000_000/config.MonoFrameHz); got != want {
+		t.Fatalf("mono frame cycles: got %d want %d", got, want)
+	}
+	cycles, ok := glue.NextEventCycles()
+	if !ok {
+		t.Fatalf("expected GLUE timing event")
+	}
+	if cycles != 224 {
+		t.Fatalf("unexpected first mono scanline cycles: got %d want 224", cycles)
 	}
 }

@@ -4,6 +4,10 @@
 
 ### Added
 
+- `--fast-floppy` (config key `fast-floppy`, "Floppy" in the configuration
+  panel) completes floppy commands instantly instead of at real WD1772 speed.
+  It applies live from the `F12` panel without rebooting the ST.
+
 - Mega ST / Mega STE built-in real-time clock: the Ricoh RP5C15 at
   `$FFFC21-$FFFC3F`, backed by the host clock and settable from TOS. The Mega
   presets enable it; `--mega-rtc` (config key `mega-rtc`) turns it on for any
@@ -72,6 +76,21 @@
 
 ### Fixed
 
+- The CPU ran 16-34% faster than a real 8 MHz ST: `RunCycles` finishes the
+  current instruction past its budget, and that overshoot was never charged
+  back, so the CPU gained part of an instruction on every device quantum. The
+  overshoot is now owed and deducted from the next budget, locking the CPU to
+  the machine clock.
+- A monochrome monitor now runs at the SM124's fixed ~71 Hz with 501 scanlines
+  (400 visible) instead of the 50 Hz colour raster. VBL, HBL, Timer B event
+  counting and the host frame rate follow it; `frame-hz` applies to colour only.
+- IKBD and MIDI bytes now take their wire time (1.28 ms at 7812.5 baud, 320 µs
+  at 31250 baud) instead of arriving on the next device tick.
+- Floppy commands now take WD1772 time on a drive with media: motor spin-up
+  (6 index pulses) and motor-off after 10 idle revolutions, step rate and head
+  settle, rotational latency to the sector at 300 rpm and 32 µs per byte, and
+  5 revolutions before Record Not Found. Status stays busy and the interrupt
+  is held until the command completes.
 - CPU bus timing now matches a real STF. Every bus access used to pay 4 extra
   wait cycles on top of the 68000's own bus cycle (ROM 8, MFP 8, DMA/FDC 12),
   so code ran at roughly half speed: TOS 1.02's floppy timeout took 3.7 s

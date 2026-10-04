@@ -14,7 +14,7 @@ func TestACIAReceivesIKBDBytes(t *testing.T) {
 	}
 
 	acia.PushKey(0x1E, true)
-	acia.Advance(0)
+	acia.Advance(aciaIKBDByteCycles)
 
 	status, err := acia.Read(1, aciaBase)
 	if err != nil {
@@ -74,6 +74,7 @@ func TestACIAMIDIReceiveByte(t *testing.T) {
 	acia := NewACIA(nil)
 
 	acia.PushMIDIInput([]byte{0x90})
+	acia.Advance(aciaMIDIByteCycles)
 
 	status, err := acia.Read(1, aciaBase+4)
 	if err != nil {
@@ -96,6 +97,7 @@ func TestACIAMIDIStaggersQueuedBytesAcrossAdvances(t *testing.T) {
 	acia := NewACIA(nil)
 
 	acia.PushMIDIInput([]byte{0x90, 0x40})
+	acia.Advance(aciaMIDIByteCycles)
 
 	first, err := acia.Read(1, aciaBase+6)
 	if err != nil {
@@ -110,10 +112,10 @@ func TestACIAMIDIStaggersQueuedBytesAcrossAdvances(t *testing.T) {
 		t.Fatalf("read MIDI status after first byte: %v", err)
 	}
 	if status&0x01 != 0 {
-		t.Fatalf("expected second MIDI byte to wait for advance, got %02x", status)
+		t.Fatalf("expected second MIDI byte to still be on the wire, got %02x", status)
 	}
 
-	acia.Advance(0)
+	acia.Advance(aciaMIDIByteCycles)
 	second, err := acia.Read(1, aciaBase+6)
 	if err != nil {
 		t.Fatalf("read second MIDI byte: %v", err)
@@ -131,7 +133,7 @@ func TestACIAKeyboardDoesNotDriveCPUInterruptLine(t *testing.T) {
 	}
 
 	acia.PushKey(0x1E, true)
-	acia.Advance(0)
+	acia.Advance(aciaIKBDByteCycles)
 
 	// The ACIA has no interrupt line of its own; it signals the CPU only by
 	// driving MFP GPIP i4 through the SetACIAInterrupt callback.
@@ -158,7 +160,7 @@ func TestACIAKeyboardSignalsMFPInterruptOnReceive(t *testing.T) {
 	}
 
 	acia.PushKey(0x1E, true)
-	acia.Advance(0)
+	acia.Advance(aciaIKBDByteCycles)
 
 	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
@@ -195,6 +197,7 @@ func TestACIAMIDISignalsMFPInterruptOnReceive(t *testing.T) {
 	}
 
 	acia.PushMIDIInput([]byte{0x90})
+	acia.Advance(aciaMIDIByteCycles)
 
 	irqs := drainIRQ(mfp)
 	if len(irqs) != 1 {
@@ -216,7 +219,7 @@ func TestACIAStaggersQueuedMouseBytesAcrossAdvances(t *testing.T) {
 	acia := NewACIA(nil)
 
 	acia.PushMouse(4, 2, 0)
-	acia.Advance(0)
+	acia.Advance(aciaIKBDByteCycles)
 
 	status, err := acia.Read(1, aciaBase)
 	if err != nil {
@@ -239,10 +242,10 @@ func TestACIAStaggersQueuedMouseBytesAcrossAdvances(t *testing.T) {
 		t.Fatalf("read status after draining first byte: %v", err)
 	}
 	if status&0x01 != 0 {
-		t.Fatalf("expected second mouse byte to wait for the next advance, got %02x", status)
+		t.Fatalf("expected second mouse byte to still be on the wire, got %02x", status)
 	}
 
-	acia.Advance(0)
+	acia.Advance(aciaIKBDByteCycles)
 
 	second, err := acia.Read(1, aciaBase+2)
 	if err != nil {
@@ -250,5 +253,53 @@ func TestACIAStaggersQueuedMouseBytesAcrossAdvances(t *testing.T) {
 	}
 	if second != 0x04 {
 		t.Fatalf("unexpected second mouse byte: got %02x want 04", second)
+	}
+}
+
+// The keyboard link runs at 7812.5 baud: each 10-bit byte takes 1.28 ms, so a
+// byte is not ready one cycle early and the next follows back to back.
+func TestACIAIKBDBytesArriveAtLineRate(t *testing.T) {
+	acia := NewACIA(nil)
+	acia.PushMouse(4, 2, 0) // three-byte packet
+
+	if got, ok := acia.NextEventCycles(); ok {
+		t.Fatalf("no byte should be in flight before the first advance, got %d", got)
+	}
+	acia.Advance(aciaIKBDByteCycles - 1)
+	if status, _ := acia.Read(1, aciaBase); status&0x01 != 0 {
+		t.Fatalf("byte ready one cycle early: status %02x", status)
+	}
+	if got, ok := acia.NextEventCycles(); !ok || got != 1 {
+		t.Fatalf("NextEventCycles = %d, %v; want 1, true", got, ok)
+	}
+	acia.Advance(1)
+	if data, _ := acia.Read(1, aciaBase+2); data != 0xF8 {
+		t.Fatalf("first byte = %02x, want f8", data)
+	}
+
+	// A late reader finds the second byte held and the third arriving behind it.
+	acia.Advance(2*aciaIKBDByteCycles + 100)
+	if data, _ := acia.Read(1, aciaBase+2); data != 0x04 {
+		t.Fatalf("second byte = %02x, want 04", data)
+	}
+	if status, _ := acia.Read(1, aciaBase); status&0x01 == 0 {
+		t.Fatalf("third byte, received while the register was full, should load on read: status %02x", status)
+	}
+	if data, _ := acia.Read(1, aciaBase+2); data != 0x02 {
+		t.Fatalf("third byte = %02x, want 02", data)
+	}
+}
+
+func TestACIAMIDIBytesArriveAtLineRate(t *testing.T) {
+	acia := NewACIA(nil)
+	acia.PushMIDIInput([]byte{0x90})
+
+	acia.Advance(aciaMIDIByteCycles - 1)
+	if status, _ := acia.Read(1, aciaBase+4); status&0x01 != 0 {
+		t.Fatalf("MIDI byte ready one cycle early: status %02x", status)
+	}
+	acia.Advance(1)
+	if status, _ := acia.Read(1, aciaBase+4); status&0x01 == 0 {
+		t.Fatalf("MIDI byte not ready after %d cycles: status %02x", aciaMIDIByteCycles, status)
 	}
 }

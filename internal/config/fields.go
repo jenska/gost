@@ -66,6 +66,8 @@ var fields = []field{
 		func(c *Config) flag.Getter { return (*boolValue)(&c.ICDRTC) }},
 	{KeyMegaRTC, "enable the Mega ST/STE built-in RP5C15 real-time clock", true,
 		func(c *Config) flag.Getter { return (*boolValue)(&c.MegaRTC) }},
+	{KeyFastFloppy, "complete floppy commands instantly instead of at real drive speed", true,
+		func(c *Config) flag.Getter { return (*boolValue)(&c.FastFloppy) }},
 	{KeyMidResYScale, "vertical host scaling for medium resolution (>=1)", false,
 		func(c *Config) flag.Getter { return (*intValue)(&c.MidResYScale) }},
 	{KeyModel, "machine model: st|ste", true,

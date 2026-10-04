@@ -6,9 +6,13 @@ import (
 )
 
 const (
-	DefaultRAMSize        = 1024 * 1024
-	DefaultClockHz        = 8_000_000
-	DefaultFrameHz        = 50
+	DefaultRAMSize = 1024 * 1024
+	DefaultClockHz = 8_000_000
+	DefaultFrameHz = 50
+	// MonoFrameHz is the refresh rate of the SM124 monochrome monitor. The ST
+	// drives it at a fixed ~71.2 Hz (501 lines of 224 cycles), whatever frame-hz
+	// says, so a mono machine always runs at this rate.
+	MonoFrameHz           = 71
 	DefaultHardDiskSizeMB = 30
 	DefaultHeadlessFrames = 1000
 )
@@ -48,6 +52,7 @@ const (
 	KeyColorMonitor   = "color-monitor"
 	KeyRTC            = "rtc"
 	KeyMegaRTC        = "mega-rtc"
+	KeyFastFloppy     = "fast-floppy"
 	KeyMidResYScale   = "midres-y-scale"
 	KeyModel          = "model"
 	KeyLauncher       = "launcher"
@@ -89,7 +94,8 @@ type Config struct {
 	ClockHz uint64
 	// CPUClockHz is the emulated CPU clock frequency in Hz.
 	CPUClockHz uint64
-	// FrameHz is the emulated display refresh rate in Hz (typically 50 or 60).
+	// FrameHz is the emulated color display refresh rate in Hz (50 or 60). A
+	// monochrome monitor always runs at MonoFrameHz; see RefreshHz.
 	FrameHz uint64
 	// ColorMonitor enables color monitor mode; false uses monochrome mode.
 	ColorMonitor bool
@@ -99,6 +105,9 @@ type Config struct {
 	// MegaRTC enables the RP5C15 real-time clock built into the Mega ST and
 	// Mega STE.
 	MegaRTC bool
+	// FastFloppy completes floppy commands at once instead of taking the
+	// WD1772's motor, seek and rotation time.
+	FastFloppy bool
 	// MidResYScale applies Y-axis pixel doubling for medium resolution mode.
 	MidResYScale int
 	// Model specifies the machine type: st or ste.
@@ -125,11 +134,24 @@ func DefaultConfig() *Config {
 	}
 }
 
-func (cfg *Config) FrameCycles() uint64 {
-	if cfg == nil || cfg.ClockHz == 0 || cfg.FrameHz == 0 {
+// RefreshHz is the display refresh rate the machine actually runs at: FrameHz
+// on a color monitor, MonoFrameHz on a monochrome one.
+func (cfg *Config) RefreshHz() uint64 {
+	if cfg == nil {
 		return 0
 	}
-	return cfg.ClockHz / cfg.FrameHz
+	if !cfg.ColorMonitor && cfg.FrameHz != 0 {
+		return MonoFrameHz
+	}
+	return cfg.FrameHz
+}
+
+func (cfg *Config) FrameCycles() uint64 {
+	refreshHz := cfg.RefreshHz()
+	if refreshHz == 0 || cfg.ClockHz == 0 {
+		return 0
+	}
+	return cfg.ClockHz / refreshHz
 }
 
 func (cfg *Config) Validate() error {
@@ -165,7 +187,7 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("invalid frames %d: must be >= 0", cfg.Frames)
 	}
 	if cfg.FrameCycles() == 0 {
-		return fmt.Errorf("invalid frame timing: clock-hz %d / frame-hz %d yields 0 frame cycles", cfg.ClockHz, cfg.FrameHz)
+		return fmt.Errorf("invalid frame timing: clock-hz %d / refresh %d Hz yields 0 frame cycles", cfg.ClockHz, cfg.RefreshHz())
 	}
 	return nil
 }

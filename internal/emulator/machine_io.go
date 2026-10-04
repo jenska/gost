@@ -57,8 +57,10 @@ type (
 		clocked       []devices.Clocked
 		frameCycles   uint64
 		cpuCycleCarry uint64
-		traceWriter   io.Writer
-		frameCounter  uint64
+		// cpuCycleDebt is how far the CPU ran past its last budget; see runCPU.
+		cpuCycleDebt uint64
+		traceWriter  io.Writer
+		frameCounter uint64
 		// fastRegions is the reusable buffer of flat-memory regions handed to the
 		// CPU via SetFastMemory (installed once per reset, ROM mirrors only).
 		fastRegions []cpu.FastRegion
@@ -175,6 +177,12 @@ func (m *Machine) InsertFloppy(drive int, image *DiskImage) error {
 }
 
 // EjectFloppy removes the disk image from floppy drive 0 (A:) or 1 (B:).
+// SetFastFloppy switches floppy commands between instant completion and real
+// WD1772 timing. It takes effect with the next command.
+func (m *Machine) SetFastFloppy(fast bool) {
+	m.fdc.SetFastFloppy(fast)
+}
+
 func (m *Machine) EjectFloppy(drive int) error {
 	if drive < 0 || drive > 1 {
 		return fmt.Errorf("unsupported floppy drive %d", drive)

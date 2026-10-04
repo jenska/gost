@@ -956,6 +956,10 @@ func TestMachineMIDIThroughACIAChannel1Registers(t *testing.T) {
 	machine := mustMachine(t, loopROM(nil))
 
 	machine.PushMIDIInput([]byte{0x90})
+	// The byte needs 320 µs on the 31250-baud line; one frame covers that.
+	if _, err := machine.StepFrame(); err != nil {
+		t.Fatalf("step frame: %v", err)
+	}
 	status, err := machine.bus.Read(cpu.Byte, 0xFFFC04)
 	if err != nil {
 		t.Fatalf("read MIDI ACIA status: %v", err)
@@ -1013,4 +1017,25 @@ func loopROM(code []byte) []byte {
 	binary.BigEndian.PutUint32(rom[4:8], defaultROMHighAlias+8)
 	copy(rom[8:], code)
 	return rom
+}
+
+// The CPU must stay locked to the machine clock: RunCycles overshoots its
+// budget to finish the current instruction, and that overshoot has to be paid
+// back rather than handed to the CPU for free on every quantum.
+func TestMachineCPUCyclesTrackMachineClock(t *testing.T) {
+	machine := mustMachine(t, assets.DefaultROM())
+
+	const frames = 200
+	for i := range frames {
+		if _, err := machine.StepFrame(); err != nil {
+			t.Fatalf("step frame %d: %v", i, err)
+		}
+	}
+
+	want := uint64(frames) * machine.frameCycles
+	got := machine.Cycles()
+	// Allow one long instruction of overshoot at the end of the last quantum.
+	if got < want || got > want+200 {
+		t.Fatalf("CPU ran %d cycles over %d frames, want %d (+ at most one instruction)", got, frames, want)
+	}
 }
