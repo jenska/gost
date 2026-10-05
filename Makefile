@@ -10,7 +10,6 @@ GO_WASM_EXEC ?= $(shell $(GO) env GOROOT)/lib/wasm/wasm_exec.js
 FRAMES ?= 1000
 ARGS ?=
 ROM ?=
-RUN_CONFIG ?= configs/atari-1040ste-mono.json
 RUN_FLOPPY_ARGS :=
 
 .PHONY: help ci build test test-race vet fmt fmt-check run run-rom  headless headless-rom  wasm clean
@@ -24,7 +23,7 @@ help:
 	@printf "  make vet              Run go vet over all packages\n"
 	@printf "  make fmt              Format all Go sources with gofmt\n"
 	@printf "  make fmt-check        Fail if any Go source needs gofmt\n"
-	@printf "  make run              Run the desktop emulator with %s\n" "$(RUN_CONFIG)"
+	@printf "  make run              Run the desktop emulator with default config\n"
 	@printf "  make run-rom          Run with a local ROM via ROM=/path/to/tos.rom\n"
 	@printf "  make headless         Run headless for FRAMES=%s\n" "$(FRAMES)"
 	@printf "  make headless-rom     Run headless with a local ROM via ROM=/path/to/tos.rom\n"
@@ -68,7 +67,7 @@ fmt-check:
 	fi
 
 run:
-	$(GO) run $(CMD) --config $(RUN_CONFIG) $(RUN_FLOPPY_ARGS) $(ARGS)
+	$(GO) run $(CMD) --preset mega-st $(RUN_FLOPPY_ARGS) $(ARGS)
 
 run-rom:
 	@test -n "$(ROM)" || (printf "set ROM=/path/to/tos.rom\n" && exit 1)
