@@ -3,6 +3,7 @@ package ebiten
 import (
 	"errors"
 	"fmt"
+	"image/color"
 	"os"
 	"reflect"
 	"runtime"
@@ -61,6 +62,9 @@ type App struct {
 	launcher      *ebitenui.UI
 	launcherPanel *configPanel
 	overlay       *overlay
+	// configTopic is the index of the configuration topic last shown, so the
+	// panel reopens on it.
+	configTopic int
 
 	// buildMachine assembles a fresh Session from a config; overridable in tests.
 	buildMachine func(*config.Config) (*emulator.Session, error)
@@ -85,7 +89,7 @@ const (
 	configWindowHeight = 540
 )
 
-var launcherBackgroundColor = panelRowBackgroundColor
+var launcherBackgroundColor = color.NRGBA{R: 0x22, G: 0x28, B: 0x2E, A: 0xFF}
 
 type hostCommandKind int
 
@@ -174,7 +178,7 @@ func (a *App) enterLauncher() {
 	root := widget.NewContainer(widget.ContainerOpts.Layout(widget.NewAnchorLayout()))
 	panel := newConfigPanel(a, configModeLauncher, a.cfg)
 	root.AddChild(panel.container)
-	a.launcher = &ebitenui.UI{Container: root}
+	a.launcher = &ebitenui.UI{Container: root, PreRenderHook: panel.drawShadow}
 	a.launcherPanel = panel
 	ebitenlib.SetWindowSize(configWindowWidth, configWindowHeight)
 }
@@ -520,9 +524,17 @@ func (a *App) Draw(screen *ebitenlib.Image) {
 		return
 	}
 	screen.DrawImage(a.texture, nil)
-	if a.overlayVisible() {
-		a.overlay.Draw(screen)
+}
+
+// DrawFinalScreen implements ebiten.FinalScreenDrawer. The ST picture is
+// scaled onto the window as usual; the F12 overlay is drawn on top at the
+// window's real resolution, so it fits the window whatever the ST resolution.
+func (a *App) DrawFinalScreen(screen ebitenlib.FinalScreen, offscreen *ebitenlib.Image, geoM ebitenlib.GeoM) {
+	if a.mode != modeLauncher && a.overlayVisible() {
+		a.overlay.DrawFinal(screen, offscreen, geoM)
+		return
 	}
+	ebitenlib.DefaultDrawFinalScreen(screen, offscreen, geoM)
 }
 
 func (a *App) Layout(int, int) (int, int) {
@@ -531,8 +543,8 @@ func (a *App) Layout(int, int) (int, int) {
 	}
 	// The F12 overlay is a HUD drawn on top of the emulated screen: it never
 	// changes the display's logical size, so the ST picture never rescales or
-	// repositions when it opens. If the panel is taller or wider than the
-	// current ST resolution, it scrolls instead (see overlay.go).
+	// repositions when it opens. The overlay is drawn at window resolution in
+	// DrawFinalScreen instead (see overlay.go).
 	return a.machine.DisplayDimensions()
 }
 

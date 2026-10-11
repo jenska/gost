@@ -1,11 +1,14 @@
 package ebiten
 
 import (
+	"image"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	ebitenlib "github.com/hajimehoshi/ebiten/v2"
 	"github.com/jenska/gost/internal/config"
 	"github.com/jenska/gost/internal/emulator"
 	"github.com/jenska/ym2149/renderer/atarist"
@@ -106,13 +109,50 @@ func TestAppLayoutStaysFixedWhileOverlayIsOpen(t *testing.T) {
 	}
 }
 
-func TestOverlayWrapsPanelInScrollContainer(t *testing.T) {
+func TestOverlayScaleFitsPanelIntoWindow(t *testing.T) {
+	cases := []struct {
+		screenW, screenH int
+		deviceScale      float64
+		want             float64
+	}{
+		{screenW: 1280, screenH: 800, deviceScale: 1, want: 1},
+		{screenW: 700, screenH: 507, deviceScale: 1, want: 1},
+		{screenW: 640, screenH: 400, deviceScale: 1, want: 400.0 / 507},
+		{screenW: 340, screenH: 507, deviceScale: 1, want: 0.5},
+		// High-DPI: as large as the device scale allows, in whole factors.
+		{screenW: 1536, screenH: 1024, deviceScale: 2, want: 2},
+		{screenW: 1280, screenH: 800, deviceScale: 2, want: 1},
+		{screenW: 640, screenH: 400, deviceScale: 2, want: 400.0 / 507},
+	}
+	for _, c := range cases {
+		got := overlayScale(c.screenW, c.screenH, 680, 507, c.deviceScale)
+		if math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("overlayScale(%d, %d, dpi %v) = %v, want %v", c.screenW, c.screenH, c.deviceScale, got, c.want)
+		}
+		if w, h := 680*got, 507*got; w > float64(c.screenW)+1e-9 || h > float64(c.screenH)+1e-9 {
+			t.Errorf("screen %dx%d: scaled panel %.1fx%.1f does not fit", c.screenW, c.screenH, w, h)
+		}
+	}
+}
+
+func TestOverlayCursorTransformMapsLogicalToCanvas(t *testing.T) {
+	// A 320x200 ST screen shown 3x with a 10px letterbox, overlay at 0.5.
+	var geoM ebitenlib.GeoM
+	geoM.Scale(3, 3)
+	geoM.Translate(10, 0)
+	m := overlayCursorTransform(geoM, image.Point{}, 0.5)
+	x, y := m.Apply(100, 50)
+	if x != 620 || y != 300 {
+		t.Fatalf("logical (100,50) maps to canvas (%v,%v), want (620,300)", x, y)
+	}
+}
+
+func TestOverlayPanelFitsTypicalWindows(t *testing.T) {
 	t.Setenv(config.ConfigDirEnv, t.TempDir())
 	app := newTestApp(t)
-
 	o := newOverlay(app)
-	if o.scroll == nil {
-		t.Fatalf("overlay should host the config panel in a scroll container")
+	if o.panelW > configWindowWidth || o.panelH > configWindowHeight {
+		t.Fatalf("overlay panel %dx%d exceeds the %dx%d launcher window", o.panelW, o.panelH, configWindowWidth, configWindowHeight)
 	}
 }
 
@@ -192,7 +232,7 @@ func TestConfigPanelApplyReadsPathInputsAndValidates(t *testing.T) {
 	panel := newConfigPanel(app, configModeLauncher, app.cfg)
 
 	panel.pathInputs[targetFloppyB].SetText("/tmp/game.stx")
-	panel.cycleMonitor()
+	panel.work.ColorMonitor = !panel.work.ColorMonitor
 	panel.apply()
 
 	if len(app.hostCommands) != 1 || app.hostCommands[0].kind != hostCommandReboot {
@@ -203,18 +243,45 @@ func TestConfigPanelApplyReadsPathInputsAndValidates(t *testing.T) {
 	}
 }
 
-func TestConfigPanelCyclePresetUpdatesMachineFields(t *testing.T) {
+func TestConfigPanelApplyPresetUpdatesMachineFields(t *testing.T) {
 	t.Setenv(config.ConfigDirEnv, t.TempDir())
 	app := newTestApp(t)
 	panel := newConfigPanel(app, configModeLauncher, app.cfg)
 
-	seen := map[string]bool{}
-	for range len(config.MachinePresets) + 1 {
-		panel.cyclePreset()
-		seen[config.MatchPreset(&panel.work)] = true
+	for i := range config.MachinePresets {
+		preset := &config.MachinePresets[i]
+		panel.selectPreset(preset)
+		if got := panel.matchingPreset(); got != preset {
+			t.Fatalf("after selecting preset %s, matching preset = %s", preset.ID, got.ID)
+		}
+		if panel.work.RAMSize != preset.RAMSize || panel.work.Model != preset.Model {
+			t.Fatalf("preset %s not applied: RAM=%d model=%s", preset.ID, panel.work.RAMSize, panel.work.Model)
+		}
+		if panel.presetCombo.SelectedEntry() != preset {
+			t.Fatalf("preset combo shows %v, want %s", panel.presetCombo.SelectedEntry(), preset.ID)
+		}
 	}
-	if len(seen) < 2 {
-		t.Fatalf("cycling presets did not change configuration: %v", seen)
+}
+
+func TestConfigPanelPresetComboShowsCustomAndKeepsMonitor(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	panel := newConfigPanel(app, configModeLauncher, app.cfg)
+
+	preset := &config.MachinePresets[0]
+	panel.selectPreset(preset)
+	panel.work.ColorMonitor = !preset.ColorMonitor
+	// Re-reporting the already matching preset (as the combo does when it is
+	// synced) must not re-apply it and reset the monitor.
+	panel.selectPreset(preset)
+	if panel.work.ColorMonitor == preset.ColorMonitor {
+		t.Fatalf("re-selecting the matching preset reset the monitor")
+	}
+
+	panel.work.RAMSize = 256 * 1024
+	panel.Refresh()
+	if panel.presetCombo.SelectedEntry() != customPreset {
+		t.Fatalf("preset combo shows %v, want Custom", panel.presetCombo.SelectedEntry())
 	}
 }
 
@@ -223,7 +290,7 @@ func TestConfigPanelProfileSaveLoadRoundTrip(t *testing.T) {
 	app := newTestApp(t)
 	panel := newConfigPanel(app, configModeLauncher, app.cfg)
 
-	panel.cycleRAM()
+	panel.work.RAMSize = 2 * 1024 * 1024
 	wantRAM := panel.work.RAMSize
 	panel.profileName.SetText("test-profile")
 	panel.saveProfile()
@@ -282,13 +349,32 @@ func TestConfigPanelFitsConfigWindow(t *testing.T) {
 	app := newTestApp(t)
 	for _, mode := range []configMode{configModeLauncher, configModeOverlay} {
 		panel := newConfigPanel(app, mode, app.cfg)
-		w, h := panel.container.PreferredSize()
-		if w > configWindowWidth {
-			t.Errorf("mode %d: panel width %d exceeds window width %d", mode, w, configWindowWidth)
+		for _, page := range panel.pages {
+			panel.selectPage(page)
+			w, h := panel.container.PreferredSize()
+			if w > configWindowWidth {
+				t.Errorf("mode %d, page %q: panel width %d exceeds window width %d", mode, page.title, w, configWindowWidth)
+			}
+			if h > configWindowHeight {
+				t.Errorf("mode %d, page %q: panel height %d exceeds window height %d", mode, page.title, h, configWindowHeight)
+			}
+			if pw, ph := page.content.PreferredSize(); pw > pageInnerWidth || ph > panelBodyHeight-60 {
+				t.Errorf("mode %d, page %q: content %dx%d overflows the page area", mode, page.title, pw, ph)
+			}
 		}
-		if h > configWindowHeight {
-			t.Errorf("mode %d: panel height %d exceeds window height %d", mode, h, configWindowHeight)
-		}
+	}
+}
+
+func TestConfigPanelRemembersSelectedTopic(t *testing.T) {
+	t.Setenv(config.ConfigDirEnv, t.TempDir())
+	app := newTestApp(t)
+	panel := newConfigPanel(app, configModeOverlay, app.cfg)
+	display := panel.pages[len(panel.pages)-2]
+	panel.selectPage(display)
+
+	reopened := newConfigPanel(app, configModeOverlay, app.cfg)
+	if reopened.current.title != display.title {
+		t.Fatalf("reopened panel shows %q, want %q", reopened.current.title, display.title)
 	}
 }
 

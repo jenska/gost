@@ -2,10 +2,12 @@ package ebiten
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	euiimage "github.com/ebitenui/ebitenui/image"
 	"github.com/ebitenui/ebitenui/widget"
+	ebitenlib "github.com/hajimehoshi/ebiten/v2"
 	"github.com/jenska/gost/internal/config"
 )
 
@@ -16,11 +18,11 @@ const (
 	configModeOverlay
 )
 
-// hardDiskSizeChoices are the ACSI hard-disk sizes (in MiB) the panel cycles
-// through; 0 disables the virtual hard disk.
+// hardDiskSizeChoices are the ACSI hard-disk sizes (in MiB) the panel offers;
+// 0 disables the virtual hard disk.
 var hardDiskSizeChoices = []uint32{0, 10, 20, 30, 60, 120}
 
-// RAMSizeChoice is one selectable RAM size for the launcher dropdown.
+// RAMSizeChoice is one selectable RAM size for the launcher.
 type RAMSizeChoice struct {
 	Label string
 	Bytes uint32
@@ -36,7 +38,7 @@ var RAMSizeChoices = []RAMSizeChoice{
 	{Label: "4 MB", Bytes: 4 * 1024 * 1024},
 }
 
-// CPUClockChoice is one selectable CPU speed for the launcher dropdown.
+// CPUClockChoice is one selectable CPU speed for the launcher.
 type CPUClockChoice struct {
 	Label string
 	Hz    uint64
@@ -50,6 +52,30 @@ var CPUClockChoices = []CPUClockChoice{
 	{Label: "64 MHz", Hz: 64_000_000},
 }
 
+// Panel geometry. The panel is a topic list on the left and the selected
+// topic's page on the right; both share a fixed body height so switching
+// topics never resizes the panel. The hosting window (launcher or F12 overlay)
+// is sized to comfortably contain it.
+const (
+	panelContentWidth = 680
+	topicListWidth    = 150
+	panelBodyHeight   = 400
+	panelBodySpacing  = 10
+	panelPadding      = 8
+	pageContentWidth  = panelContentWidth - 2*panelPadding - topicListWidth - panelBodySpacing
+	pageInnerWidth    = pageContentWidth - 2*pagePadding
+	pagePadding       = 12
+)
+
+// configPage is one topic of the configuration panel: an entry in the topic
+// list and the settings shown beside it. Each topic is built in its own
+// config_page_*.go file.
+type configPage struct {
+	title       string
+	description string
+	content     *widget.Container
+}
+
 // configPanel is the shared Atari ST configuration UI. It is shown full-window
 // by the launcher and inside the F12 overlay during a session.
 type configPanel struct {
@@ -59,37 +85,33 @@ type configPanel struct {
 	container *widget.Container
 	status    *widget.Text
 
+	header      *widget.Container
+	presetCombo *widget.ListComboButton
+	presetNote  *widget.Text
+
+	topics    *widget.List
+	pages     []*configPage
+	pageTitle *widget.Text
+	pageDesc  *widget.Text
+	flipBook  *widget.FlipBook
+	current   *configPage
+
 	work config.Config
 
-	cycles []*cycleField
+	// refreshers re-sync widgets that mirror p.work (selected options,
+	// dynamic hints) and run on every Refresh.
+	refreshers []func()
 
 	pathInputs   map[fileTarget]*widget.TextInput
 	lastPathText map[fileTarget]string
 
-	profileName *widget.TextInput
-	profileList *widget.Text
-
-	fullscreenBox *widget.Checkbox
-	scaleSlider   *widget.Slider
-	scaleValue    *widget.Text
-
-	ramIndex int
-	cpuIndex int
-	hdIndex  int
+	profileName  *widget.TextInput
+	profileGrid  *widget.Container
+	profileEmpty *widget.Text
 
 	// transientStatus is set while an explicit message (profile saved, error)
 	// should stay on the status line instead of the idle hint.
 	transientStatus bool
-}
-
-type cycleField struct {
-	button *widget.Button
-	label  string
-	value  func() string
-}
-
-func (c *cycleField) refresh() {
-	c.button.SetText(c.label + ":  " + c.value())
 }
 
 func newConfigPanel(app *App, mode configMode, initial config.Config) *configPanel {
@@ -100,7 +122,6 @@ func newConfigPanel(app *App, mode configMode, initial config.Config) *configPan
 		pathInputs:   map[fileTarget]*widget.TextInput{},
 		lastPathText: map[fileTarget]string{},
 	}
-	p.syncIndices()
 
 	p.container = widget.NewContainer(
 		widget.ContainerOpts.WidgetOpts(
@@ -110,234 +131,131 @@ func newConfigPanel(app *App, mode configMode, initial config.Config) *configPan
 			}),
 			widget.WidgetOpts.MinSize(panelContentWidth, 0),
 		),
-		widget.ContainerOpts.BackgroundImage(euiimage.NewNineSliceColor(panelBackgroundColor)),
+		widget.ContainerOpts.BackgroundImage(newPanelFrameImage()),
 		widget.ContainerOpts.Layout(widget.NewRowLayout(
 			widget.RowLayoutOpts.Direction(widget.DirectionVertical),
-			widget.RowLayoutOpts.Padding(&widget.Insets{Top: 4, Bottom: 4, Left: 6, Right: 6}),
-			widget.RowLayoutOpts.Spacing(2),
+			widget.RowLayoutOpts.Padding(widget.NewInsetsSimple(panelPadding)),
+			widget.RowLayoutOpts.Spacing(6),
 		)),
 	)
 
-	title := "GoST Configuration"
-	if mode == configModeOverlay {
-		title = "GoST Configuration  ·  Apply reboots the ST"
+	p.container.AddChild(p.newHeader("GoST Configuration"))
+
+	p.pages = []*configPage{
+		p.newMachinePage(),
+		p.newCPUMemoryPage(),
+		p.newTOSPage(),
+		p.newFloppyPage(),
+		p.newHardDiskPage(),
+		p.newDisplayPage(),
+		p.newProfilesPage(),
 	}
-	p.container.AddChild(newPanelText(title, 13, panelTitleColor))
-
-	p.container.AddChild(newPanelText("MACHINE", 10, panelAccentColor))
-	grid := p.newGrid()
-	p.container.AddChild(grid)
-	p.addCycle(grid, "Preset", func() string { return p.presetLabel() }, p.cyclePreset)
-	p.addCycle(grid, "Machine", func() string { return strings.ToUpper(string(p.work.Model)) }, p.cycleModel)
-	p.addCycle(grid, "RAM", func() string { return ramLabel(p.work.RAMSize) }, p.cycleRAM)
-	p.addCycle(grid, "CPU", func() string { return cpuLabel(p.work.CPUClockHz) }, p.cycleCPU)
-	p.addCycle(grid, "Monitor", func() string {
-		if p.work.ColorMonitor {
-			return "Colour"
-		}
-		return "Monochrome"
-	}, p.cycleMonitor)
-	p.addCycle(grid, "RTC", func() string {
-		if p.work.ICDRTC {
-			return "On"
-		}
-		return "Off"
-	}, p.cycleRTC)
-	p.addCycle(grid, "Floppy", func() string {
-		if p.work.FastFloppy {
-			return "Fast"
-		}
-		return "Real speed"
-	}, p.cycleFastFloppy)
-	p.addCycle(grid, "Hard disk", func() string {
-		if p.work.HardDiskSizeMB == 0 {
-			return "Off"
-		}
-		return fmt.Sprintf("%d MB", p.work.HardDiskSizeMB)
-	}, p.cycleHardDiskSize)
-
-	p.container.AddChild(p.newPathRow("", "TOS ROM — blank uses bundled EmuTOS", targetROM, p.work.ROMPath, 384, "Clear"))
-
-	p.container.AddChild(newPanelText("DRIVES", 10, panelAccentColor))
-	p.container.AddChild(p.newPathRow("Floppy A", ".st / .msa / .stx / .dim image", targetFloppyA, p.work.FloppyA, 300, "Eject"))
-	p.container.AddChild(p.newPathRow("Floppy B", ".st / .msa / .stx / .dim image", targetFloppyB, p.work.FloppyB, 300, "Eject"))
-	p.container.AddChild(p.newHardDiskRow())
-
-	p.container.AddChild(newPanelText("DISPLAY", 10, panelAccentColor))
-	p.container.AddChild(p.newDisplayRow())
-
-	p.container.AddChild(newPanelText("PROFILES", 10, panelAccentColor))
-	p.container.AddChild(p.newProfileRow())
+	p.container.AddChild(p.newBody())
 
 	p.status = newPanelText("", 11, panelMutedTextColor)
 	p.container.AddChild(p.status)
 	p.container.AddChild(p.newFooter())
 
+	p.selectPage(p.pages[app.configTopic%len(p.pages)])
 	p.reloadProfiles()
 	p.Refresh()
 	return p
 }
 
-// panelContentWidth is the fixed inner width of the configuration panel; the
-// hosting window (launcher or F12 overlay) is sized to comfortably contain it.
-const panelContentWidth = 640
-
-func (p *configPanel) newGrid() *widget.Container {
-	return widget.NewContainer(
-		widget.ContainerOpts.WidgetOpts(widget.WidgetOpts.MinSize(panelContentWidth, 0)),
+// newBody lays out the topic list beside the page area.
+func (p *configPanel) newBody() *widget.Container {
+	body := widget.NewContainer(
 		widget.ContainerOpts.Layout(widget.NewGridLayout(
-			widget.GridLayoutOpts.Columns(3),
-			widget.GridLayoutOpts.Spacing(4, 4),
-			widget.GridLayoutOpts.DefaultStretch(true, true),
+			widget.GridLayoutOpts.Columns(2),
+			widget.GridLayoutOpts.Stretch([]bool{false, true}, []bool{true}),
+			widget.GridLayoutOpts.Spacing(panelBodySpacing, 0),
 		)),
 	)
-}
 
-func (p *configPanel) addCycle(parent *widget.Container, label string, value func() string, onCycle func()) {
-	c := &cycleField{label: label, value: value}
-	c.button = newPanelButtonW(label+":  "+value(), func() {
-		onCycle()
-		p.transientStatus = false
-		p.Refresh()
-	})
-	p.cycles = append(p.cycles, c)
-	parent.AddChild(c.button)
-}
-
-func (p *configPanel) newRowContainer() *widget.Container {
-	return widget.NewContainer(
-		widget.ContainerOpts.Layout(widget.NewRowLayout(
-			widget.RowLayoutOpts.Direction(widget.DirectionHorizontal),
-			widget.RowLayoutOpts.Spacing(6),
-			widget.RowLayoutOpts.Padding(&widget.Insets{Top: 3, Bottom: 3, Left: 6, Right: 6}),
+	entries := make([]any, len(p.pages))
+	for i, page := range p.pages {
+		entries[i] = page
+	}
+	p.topics = widget.NewList(
+		widget.ListOpts.ContainerOpts(widget.ContainerOpts.WidgetOpts(
+			widget.WidgetOpts.MinSize(topicListWidth, panelBodyHeight),
 		)),
+		widget.ListOpts.Entries(entries),
+		widget.ListOpts.EntryLabelFunc(func(e any) string { return e.(*configPage).title }),
+		widget.ListOpts.EntryFontFace(panelFontFace(13)),
+		widget.ListOpts.EntryColor(listEntryColor),
+		widget.ListOpts.EntryTextPadding(&widget.Insets{Top: 6, Bottom: 6, Left: 12, Right: 8}),
+		widget.ListOpts.EntryTextPosition(widget.TextPositionStart, widget.TextPositionCenter),
+		widget.ListOpts.ScrollContainerImage(&widget.ScrollContainerImage{
+			Idle: euiimage.NewNineSliceColor(panelRowBackgroundColor),
+			// The mask clips the entries; it must be opaque to show them.
+			Mask: euiimage.NewNineSliceColor(color.Black),
+		}),
+		widget.ListOpts.ScrollContainerPadding(&widget.Insets{Top: 6, Bottom: 6}),
+		widget.ListOpts.HideHorizontalSlider(),
+		widget.ListOpts.HideVerticalSlider(),
+		widget.ListOpts.EntrySelectedHandler(func(args *widget.ListEntrySelectedEventArgs) {
+			if page, ok := args.Entry.(*configPage); ok {
+				p.showPage(page)
+			}
+		}),
+	)
+	body.AddChild(p.topics)
+
+	pageArea := widget.NewContainer(
+		widget.ContainerOpts.WidgetOpts(widget.WidgetOpts.MinSize(pageContentWidth, panelBodyHeight)),
 		widget.ContainerOpts.BackgroundImage(euiimage.NewNineSliceColor(panelRowBackgroundColor)),
-		widget.ContainerOpts.WidgetOpts(widget.WidgetOpts.MinSize(panelContentWidth, 0)),
-	)
-}
-
-func (p *configPanel) newPathRow(label, placeholder string, target fileTarget, initial string, inputWidth int, clearLabel string) *widget.Container {
-	row := p.newRowContainer()
-	if label != "" {
-		l := newPanelText(label, 12, panelTextColor)
-		l.GetWidget().MinWidth = 58
-		row.AddChild(l)
-	}
-	input := newPanelTextInput(placeholder, inputWidth)
-	input.SetText(initial)
-	p.pathInputs[target] = input
-	p.lastPathText[target] = initial
-	row.AddChild(input)
-	row.AddChild(newPanelButton("Browse", func() { p.app.QueueBrowse(target) }))
-	row.AddChild(newPanelButton(clearLabel, func() {
-		input.SetText("")
-		p.lastPathText[target] = ""
-		p.app.ClearSelectedPath(target)
-	}))
-	return row
-}
-
-func (p *configPanel) newHardDiskRow() *widget.Container {
-	row := p.newRowContainer()
-	l := newPanelText("Hard disk", 12, panelTextColor)
-	l.GetWidget().MinWidth = 58
-	row.AddChild(l)
-	input := newPanelTextInput("hard disk image — blank keeps it memory-only", 232)
-	input.SetText(p.work.HardDiskImagePath)
-	p.pathInputs[targetHardDiskOpen] = input
-	p.lastPathText[targetHardDiskOpen] = p.work.HardDiskImagePath
-	row.AddChild(input)
-	row.AddChild(newPanelButton("Browse", func() { p.app.QueueBrowse(targetHardDiskOpen) }))
-	row.AddChild(newPanelButton("New", func() { p.app.QueueBrowse(targetHardDiskNew) }))
-	row.AddChild(newPanelButton("Detach", func() {
-		input.SetText("")
-		p.lastPathText[targetHardDiskOpen] = ""
-		p.app.ClearSelectedPath(targetHardDiskOpen)
-		p.app.ClearSelectedPath(targetHardDiskNew)
-	}))
-	return row
-}
-
-const (
-	scaleSliderMin = 1
-	scaleSliderMax = 4
-)
-
-func scaleToSlider(scale float64) int {
-	v := int(scale + 0.5)
-	if v < scaleSliderMin {
-		v = scaleSliderMin
-	}
-	if v > scaleSliderMax {
-		v = scaleSliderMax
-	}
-	return v
-}
-
-// fullscreenBoxWidth reserves enough row space for the fullscreen checkbox.
-// widget.Checkbox.PreferredSize does not count its own check-box glyph towards
-// the widget's width (only the label is measured), so a RowLayout placed a
-// sibling widget right on top of it; wrapping the checkbox in a container that
-// does honor WidgetOpts.MinSize keeps the next control clear of it.
-const fullscreenBoxWidth = 112
-
-func (p *configPanel) newDisplayRow() *widget.Container {
-	row := p.newRowContainer()
-
-	p.fullscreenBox = newPanelCheckbox("Fullscreen", p.work.Fullscreen, func(checked bool) {
-		p.work.Fullscreen = checked
-		p.transientStatus = false
-	})
-	fullscreenWrap := widget.NewContainer(
-		widget.ContainerOpts.WidgetOpts(widget.WidgetOpts.MinSize(fullscreenBoxWidth, 0)),
-		widget.ContainerOpts.Layout(widget.NewAnchorLayout()),
-	)
-	fullscreenWrap.AddChild(p.fullscreenBox)
-	row.AddChild(fullscreenWrap)
-
-	scaleLabel := newPanelText("Scale", 12, panelTextColor)
-	scaleLabel.GetWidget().MinWidth = 46
-	row.AddChild(scaleLabel)
-
-	p.scaleSlider = newPanelSlider(scaleSliderMin, scaleSliderMax, scaleToSlider(p.work.Scale), func(v int) {
-		p.work.Scale = float64(v)
-		p.transientStatus = false
-		p.refreshScaleValue()
-	})
-	row.AddChild(p.scaleSlider)
-
-	p.scaleValue = newPanelText("", 12, panelMutedTextColor)
-	p.scaleValue.GetWidget().MinWidth = 34
-	row.AddChild(p.scaleValue)
-	p.refreshScaleValue()
-	return row
-}
-
-func (p *configPanel) refreshScaleValue() {
-	if p.scaleValue != nil {
-		p.scaleValue.Label = fmt.Sprintf("%d×", scaleToSlider(p.work.Scale))
-	}
-}
-
-func (p *configPanel) newProfileRow() *widget.Container {
-	row := p.newRowContainer()
-	p.profileList = newPanelText("", 11, panelMutedTextColor)
-	p.profileName = newPanelTextInput("Profile name", 200)
-	row.AddChild(p.profileName)
-	row.AddChild(newPanelButton("Save", p.saveProfile))
-	row.AddChild(newPanelButton("Load", p.loadProfile))
-	row.AddChild(newPanelButton("Delete", p.deleteProfile))
-
-	wrap := widget.NewContainer(
 		widget.ContainerOpts.Layout(widget.NewRowLayout(
 			widget.RowLayoutOpts.Direction(widget.DirectionVertical),
-			widget.RowLayoutOpts.Spacing(2),
+			widget.RowLayoutOpts.Padding(widget.NewInsetsSimple(pagePadding)),
+			widget.RowLayoutOpts.Spacing(4),
 		)),
-		widget.ContainerOpts.WidgetOpts(widget.WidgetOpts.MinSize(panelContentWidth, 0)),
 	)
-	wrap.AddChild(p.profileList)
-	wrap.AddChild(row)
-	return wrap
+	p.pageTitle = newPanelText("", 16, panelTitleColor)
+	p.pageDesc = newPanelText("", 11, panelMutedTextColor)
+	p.pageDesc.GetWidget().MinWidth = pageInnerWidth
+	pageArea.AddChild(p.pageTitle)
+	pageArea.AddChild(p.pageDesc)
+	pageArea.AddChild(newSeparator(pageInnerWidth))
+	p.flipBook = widget.NewFlipBook(
+		widget.FlipBookOpts.ContainerOpts(widget.ContainerOpts.WidgetOpts(
+			widget.WidgetOpts.LayoutData(widget.RowLayoutData{Stretch: true}),
+		)),
+		widget.FlipBookOpts.Padding(&widget.Insets{Top: 6}),
+	)
+	pageArea.AddChild(p.flipBook)
+	body.AddChild(pageArea)
+	return body
+}
+
+// drawShadow is an ebitenui PreRenderHook that draws the panel's shadow
+// beneath it.
+func (p *configPanel) drawShadow(screen *ebitenlib.Image) {
+	drawPanelShadow(screen, p.container.GetWidget().Rect)
+}
+
+// selectPage switches to page and highlights it in the topic list.
+func (p *configPanel) selectPage(page *configPage) {
+	p.showPage(page)
+	p.topics.SetSelectedEntry(page)
+}
+
+func (p *configPanel) showPage(page *configPage) {
+	if page == p.current {
+		return
+	}
+	p.current = page
+	p.pageTitle.Label = page.title
+	p.pageDesc.Label = page.description
+	p.flipBook.SetPage(page.content)
+	p.flipBook.RequestRelayout()
+	for i, candidate := range p.pages {
+		if candidate == page {
+			// Remember the topic so a rebuilt panel (each F12 opens a fresh
+			// overlay) comes back to it.
+			p.app.configTopic = i
+		}
+	}
 }
 
 func (p *configPanel) newFooter() *widget.Container {
@@ -345,7 +263,6 @@ func (p *configPanel) newFooter() *widget.Container {
 		widget.ContainerOpts.Layout(widget.NewRowLayout(
 			widget.RowLayoutOpts.Direction(widget.DirectionHorizontal),
 			widget.RowLayoutOpts.Spacing(8),
-			widget.RowLayoutOpts.Padding(&widget.Insets{Top: 4}),
 		)),
 	)
 	if p.mode == configModeLauncher {
@@ -355,156 +272,6 @@ func (p *configPanel) newFooter() *widget.Container {
 		footer.AddChild(newPanelButtonW("Close", func() { p.app.setOverlayVisible(false) }))
 	}
 	return footer
-}
-
-// --- cycle handlers -------------------------------------------------------
-
-func (p *configPanel) cyclePreset() {
-	presets := config.MachinePresets
-	if len(presets) == 0 {
-		return
-	}
-	current := config.MatchPreset(&p.work)
-	next := 0
-	for i, preset := range presets {
-		if preset.ID == current {
-			next = (i + 1) % len(presets)
-			break
-		}
-	}
-	presets[next].Apply(&p.work)
-	p.syncIndices()
-}
-
-func (p *configPanel) cycleModel() {
-	if p.work.Model == config.MachineModelSTE {
-		p.work.Model = config.MachineModelST
-	} else {
-		p.work.Model = config.MachineModelSTE
-	}
-}
-
-func (p *configPanel) cycleRAM() {
-	p.ramIndex = (p.ramIndex + 1) % len(RAMSizeChoices)
-	p.work.RAMSize = RAMSizeChoices[p.ramIndex].Bytes
-}
-
-func (p *configPanel) cycleCPU() {
-	p.cpuIndex = (p.cpuIndex + 1) % len(CPUClockChoices)
-	p.work.CPUClockHz = CPUClockChoices[p.cpuIndex].Hz
-}
-
-func (p *configPanel) cycleMonitor() {
-	p.work.ColorMonitor = !p.work.ColorMonitor
-}
-
-func (p *configPanel) cycleRTC() {
-	p.work.ICDRTC = !p.work.ICDRTC
-}
-
-func (p *configPanel) cycleFastFloppy() {
-	p.work.FastFloppy = !p.work.FastFloppy
-}
-
-func (p *configPanel) cycleHardDiskSize() {
-	p.hdIndex = (p.hdIndex + 1) % len(hardDiskSizeChoices)
-	p.work.HardDiskSizeMB = hardDiskSizeChoices[p.hdIndex]
-}
-
-func (p *configPanel) syncIndices() {
-	p.ramIndex = 0
-	for i, choice := range RAMSizeChoices {
-		if choice.Bytes == p.work.RAMSize {
-			p.ramIndex = i
-		}
-	}
-	p.cpuIndex = 0
-	for i, choice := range CPUClockChoices {
-		if choice.Hz == p.work.CPUClockHz {
-			p.cpuIndex = i
-		}
-	}
-	p.hdIndex = 0
-	for i, mb := range hardDiskSizeChoices {
-		if mb == p.work.HardDiskSizeMB {
-			p.hdIndex = i
-		}
-	}
-}
-
-// --- profiles -----------------------------------------------------------
-
-func (p *configPanel) reloadProfiles() {
-	names, err := config.ListProfiles()
-	if err != nil {
-		p.setStatus("list profiles: " + err.Error())
-		return
-	}
-	if p.profileList == nil {
-		return
-	}
-	if len(names) == 0 {
-		p.profileList.Label = "No saved profiles yet."
-	} else {
-		p.profileList.Label = "Saved: " + strings.Join(names, ", ")
-	}
-}
-
-func (p *configPanel) saveProfile() {
-	name := strings.TrimSpace(p.profileName.GetText())
-	p.readPathInputs()
-	if err := p.work.Validate(); err != nil {
-		p.setStatus("invalid configuration: " + err.Error())
-		return
-	}
-	if err := config.SaveProfile(name, &p.work); err != nil {
-		p.setStatus("save profile: " + err.Error())
-		return
-	}
-	p.setStatus("Saved profile " + name)
-	p.reloadProfiles()
-}
-
-func (p *configPanel) loadProfile() {
-	name := strings.TrimSpace(p.profileName.GetText())
-	loaded, err := config.LoadProfile(name)
-	if err != nil {
-		p.setStatus("load profile: " + err.Error())
-		return
-	}
-	// Preserve host-only fields that profiles do not carry.
-	loaded.FrameHz = p.work.FrameHz
-	loaded.ClockHz = p.work.ClockHz
-	p.work = *loaded
-	p.syncIndices()
-	p.pushPathInputs()
-	p.syncDisplayWidgets()
-	p.setStatus("Loaded profile " + name)
-	p.Refresh()
-}
-
-func (p *configPanel) syncDisplayWidgets() {
-	if p.fullscreenBox != nil {
-		state := widget.WidgetUnchecked
-		if p.work.Fullscreen {
-			state = widget.WidgetChecked
-		}
-		p.fullscreenBox.SetState(state)
-	}
-	if p.scaleSlider != nil {
-		p.scaleSlider.Current = scaleToSlider(p.work.Scale)
-	}
-	p.refreshScaleValue()
-}
-
-func (p *configPanel) deleteProfile() {
-	name := strings.TrimSpace(p.profileName.GetText())
-	if err := config.DeleteProfile(name); err != nil {
-		p.setStatus("delete profile: " + err.Error())
-		return
-	}
-	p.setStatus("Deleted profile " + name)
-	p.reloadProfiles()
 }
 
 // --- apply / refresh --------------------------------------------------------
@@ -547,7 +314,7 @@ func (p *configPanel) apply() {
 	p.app.applyConfig(p.work)
 }
 
-// Refresh reconciles widget labels and browsed paths with the working config.
+// Refresh reconciles widgets and browsed paths with the working config.
 // It is called every frame by the hosting UI.
 func (p *configPanel) Refresh() {
 	// A path chosen through a native dialog lands in the App; pull it in unless
@@ -571,8 +338,8 @@ func (p *configPanel) Refresh() {
 		}
 	}
 
-	for _, c := range p.cycles {
-		c.refresh()
+	for _, refresh := range p.refreshers {
+		refresh()
 	}
 
 	if p.status == nil {
@@ -586,12 +353,12 @@ func (p *configPanel) Refresh() {
 	case p.mode == configModeOverlay:
 		p.status.Label = "Apply & Reboot restarts the ST · F12 closes this panel"
 	default:
-		p.status.Label = "Choose a machine, mount images, then Start GoST"
+		p.status.Label = "Pick a topic on the left, adjust it, then Start GoST"
 	}
 }
 
-// setStatus shows an explicit message that persists until the next cycle change
-// or Apply.
+// setStatus shows an explicit message that persists until the next option
+// change or Apply.
 func (p *configPanel) setStatus(text string) {
 	if p.status != nil {
 		p.status.Label = text
@@ -599,16 +366,13 @@ func (p *configPanel) setStatus(text string) {
 	p.transientStatus = true
 }
 
-// --- labels ---------------------------------------------------------------
-
-func (p *configPanel) presetLabel() string {
-	if id := config.MatchPreset(&p.work); id != "" {
-		if preset, ok := config.PresetByID(id); ok {
-			return preset.Label
-		}
-	}
-	return "Custom"
+// changed is called after the user picks an option; it drops any explicit
+// status message in favour of the idle hint.
+func (p *configPanel) changed() {
+	p.transientStatus = false
 }
+
+// --- labels ---------------------------------------------------------------
 
 func ramLabel(bytes uint32) string {
 	for _, choice := range RAMSizeChoices {
