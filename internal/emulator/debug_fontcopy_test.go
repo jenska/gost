@@ -21,7 +21,7 @@ func TestDebugFontCopy(t *testing.T) {
 	counts := map[uint32]int{}
 	lastValues := map[uint32]uint32{}
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		address := info.Address & 0xFFFFFF
 		if !info.Write || address < 0x323c || address >= 0x3300 {
 			return
@@ -74,7 +74,7 @@ func TestDebugFontCopyWriters(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if pc < 0xE13AE0 || pc > 0xE13BE8 {
 			return
@@ -90,7 +90,7 @@ func TestDebugFontCopyWriters(t *testing.T) {
 			machine.decodeTraceInstruction(info),
 		)
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		address := info.Address & 0xFFFFFF
 		if !info.Write {
 			return

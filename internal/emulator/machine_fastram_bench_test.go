@@ -15,13 +15,9 @@ func benchmarkBootFrames(b *testing.B, frames int, disableFastMem bool) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		machine, err := NewMachine(DefaultConfig(), rom)
+		machine, err := newMachine(DefaultConfig(), rom, nil, machineOptions{noFastMemory: disableFastMem})
 		if err != nil {
-			b.Fatalf("NewMachine: %v", err)
-		}
-		machine.disableFastMemory = disableFastMem
-		if err := machine.Reset(); err != nil {
-			b.Fatalf("Reset: %v", err)
+			b.Fatalf("newMachine: %v", err)
 		}
 		for frame := 0; frame < frames; frame++ {
 			if _, err := machine.StepFrame(); err != nil {

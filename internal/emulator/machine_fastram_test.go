@@ -4,38 +4,41 @@ import (
 	"testing"
 
 	"github.com/jenska/gost/internal/assets"
+	"github.com/jenska/gost/internal/devices"
 	cpu "github.com/jenska/m68kemu"
 )
 
-func TestRomAliasIsIsolated(t *testing.T) {
-	const k256 = 256 * 1024
+func TestRomMirrorRanges(t *testing.T) {
 	const k192 = 192 * 1024
+	const k256 = 256 * 1024
 
 	cases := []struct {
-		name   string
-		base   uint32
-		length uint32
-		want   bool
+		name    string
+		length  uint32
+		base    uint32
+		wantEnd uint32
 	}{
-		{"emutos 256K at E00000", 0xE00000, k256, true},
-		{"tos 1.x 192K at FC0000", 0xFC0000, k192, true},
-		{"256K at FC0000 reaches I/O", 0xFC0000, k256, false},
-		{"reaches cartridge probe", 0xF90000, k256, false},
-		{"below ROM space", 0x000000, k256, false},
-		{"zero length", 0xE00000, 0, false},
+		{"192K at E00000", k192, 0xE00000, 0xE2FFFF},
+		{"192K at FC0000", k192, 0xFC0000, 0xFEFFFF},
+		{"256K at E00000", k256, 0xE00000, 0xE3FFFF},
+		{"256K at FC0000 stops before I/O", k256, 0xFC0000, 0xFF7FFF},
+		{"2M at E00000 stops before cartridge", 2048 * 1024, 0xE00000, 0xF9FFFF},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := romAliasIsIsolated(tc.base, tc.length); got != tc.want {
-				t.Fatalf("romAliasIsIsolated(%06x, %d) = %v, want %v", tc.base, tc.length, got, tc.want)
+			rom := devices.NewROM(make([]byte, tc.length), tc.base)
+			start, end := romMirrors(rom, true)[0].AddressRange()
+			if start != tc.base || end != tc.wantEnd {
+				t.Fatalf("range = %06x-%06x, want %06x-%06x", start, end, tc.base, tc.wantEnd)
 			}
 		})
 	}
 }
 
 func hasFastRegionAt(m *Machine, address uint32) bool {
-	for _, r := range m.fastRegions {
-		if address >= r.Base && uint64(address) < uint64(r.Base)+uint64(len(r.Mem)) {
+	for _, mirror := range m.romMirrors {
+		start, end := mirror.AddressRange()
+		if mem, _ := mirror.Memory(); len(mem) > 0 && address >= start && address <= end {
 			return true
 		}
 	}
@@ -49,11 +52,12 @@ func TestFastRegionsCoverRomEntry(t *testing.T) {
 		t.Fatalf("Reset: %v", err)
 	}
 	if !hasFastRegionAt(m, m.Registers().PC) {
-		t.Fatalf("no fast region covers reset PC %06x; regions=%+v", m.Registers().PC, m.fastRegions)
+		t.Fatalf("no fast region covers reset PC %06x", m.Registers().PC)
 	}
-	for _, r := range m.fastRegions {
-		if !r.ReadOnly {
-			t.Fatalf("fast region at %06x is not read-only", r.Base)
+	for _, mirror := range m.romMirrors {
+		if _, readOnly := mirror.Memory(); !readOnly {
+			start, _ := mirror.AddressRange()
+			t.Fatalf("fast region at %06x is not read-only", start)
 		}
 	}
 }
@@ -76,13 +80,9 @@ func TestFastRegionCycleCountMatchesBus(t *testing.T) {
 	}
 
 	run := func(disable bool) uint64 {
-		m, err := NewMachine(DefaultConfig(), loopROM(prog))
+		m, err := newMachine(DefaultConfig(), loopROM(prog), nil, machineOptions{noFastMemory: disable})
 		if err != nil {
-			t.Fatalf("NewMachine: %v", err)
-		}
-		m.disableFastMemory = disable
-		if err := m.Reset(); err != nil {
-			t.Fatalf("Reset: %v", err)
+			t.Fatalf("newMachine: %v", err)
 		}
 		if !disable && !hasFastRegionAt(m, m.Registers().PC) {
 			t.Fatalf("expected a ROM fast region over the PC")
@@ -103,13 +103,9 @@ func TestFastRegionCycleCountMatchesBus(t *testing.T) {
 // the ROM fast region is used or every fetch goes through the bus.
 func TestFastRegionBootParity(t *testing.T) {
 	run := func(disable bool) (uint64, uint32, uint16) {
-		m, err := NewMachine(DefaultConfig(), assets.DefaultROM())
+		m, err := newMachine(DefaultConfig(), assets.DefaultROM(), nil, machineOptions{noFastMemory: disable})
 		if err != nil {
-			t.Fatalf("NewMachine: %v", err)
-		}
-		m.disableFastMemory = disable
-		if err := m.Reset(); err != nil {
-			t.Fatalf("Reset: %v", err)
+			t.Fatalf("newMachine: %v", err)
 		}
 		for frame := 0; frame < 45; frame++ {
 			if _, err := m.StepFrame(); err != nil {

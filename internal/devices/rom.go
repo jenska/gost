@@ -82,12 +82,6 @@ func (r *ROM) Bytes() []byte {
 	return append([]byte(nil), r.data...)
 }
 
-// Image returns the live ROM backing bytes. The contents are immutable, so the
-// slice is safe to hand to a read-only fast-memory region.
-func (r *ROM) Image() []byte {
-	return r.data
-}
-
 // Aliases returns the base addresses at which the ROM image is mapped.
 func (r *ROM) Aliases() []uint32 {
 	return append([]uint32(nil), r.aliases...)
@@ -95,6 +89,48 @@ func (r *ROM) Aliases() []uint32 {
 
 func (r *ROM) Slice(address uint32, size cpu.Size) (uint32, error) {
 	return r.Read(size, address)
+}
+
+// ROMMirror maps the ROM image once at base, cut short where another device
+// takes over the address space. It implements cpu.MemoryDevice, so with direct
+// access the CPU reads the image without going through the bus.
+type ROMMirror struct {
+	image  *ROM
+	base   uint32
+	direct bool
+}
+
+// Mirror returns a view of the ROM at base that ends before limit. Without
+// direct access every read goes through the bus.
+func (r *ROM) Mirror(base, limit uint32, direct bool) *ROMMirror {
+	length := min(uint32(len(r.data)), limit-base)
+	return &ROMMirror{image: &ROM{data: r.data[:length]}, base: base, direct: direct}
+}
+
+func (m *ROMMirror) AddressRange() (uint32, uint32) {
+	return m.base, m.base + uint32(len(m.image.data)) - 1
+}
+
+func (m *ROMMirror) Read(size cpu.Size, address uint32) (uint32, error) {
+	return m.image.readAtOffset(size, address-m.base)
+}
+
+func (m *ROMMirror) Peek(size cpu.Size, address uint32) (uint32, error) {
+	return m.Read(size, address)
+}
+
+func (m *ROMMirror) Write(cpu.Size, uint32, uint32) error {
+	return nil
+}
+
+func (m *ROMMirror) Reset() {}
+
+// Memory hands the CPU the read-only image, or nothing without direct access.
+func (m *ROMMirror) Memory() ([]byte, bool) {
+	if !m.direct {
+		return nil, true
+	}
+	return m.image.data, true
 }
 
 // OverlayROM exposes the reset vectors at low memory during reset.

@@ -27,7 +27,7 @@ func TestDebugPDATS321FloppyTraffic(t *testing.T) {
 	}
 
 	var traffic int
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if addr < 0xFF8600 || addr >= 0xFF8610 {
 			return
@@ -37,7 +37,7 @@ func TestDebugPDATS321FloppyTraffic(t *testing.T) {
 		fmt.Printf("%s addr=%06x size=%d value=%08x pc=%06x sr=%04x\n",
 			traceAccessKind(info.Write), addr, info.Size, info.Value, regs.PC&0xFFFFFF, regs.SR)
 	})
-	defer machine.cpu.SetBusTracer(nil)
+	defer setBusTracer(machine.cpu, nil)
 
 	for frame := range 400 {
 		if _, err := machine.StepFrame(); err != nil {
@@ -255,7 +255,7 @@ func TestDebugPDATS321AltAFDCTraffic(t *testing.T) {
 		return (addr >= 0xFF8604 && addr <= 0xFF860F) || addr == 0xFFFA01
 	}
 
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		if info.InstructionFetch || !logControl(info) {
 			return
 		}
@@ -267,7 +267,7 @@ func TestDebugPDATS321AltAFDCTraffic(t *testing.T) {
 		fmt.Printf("%s addr=%06x size=%d value=%08x pc=%06x sr=%04x\n",
 			kind, info.Address&0xFFFFFF, info.Size, info.Value, regs.PC&0xFFFFFF, regs.SR)
 	})
-	defer machine.cpu.SetBusTracer(nil)
+	defer setBusTracer(machine.cpu, nil)
 
 	machine.PushKey(0x38, true)
 	machine.PushKey(0x1E, true)
@@ -289,7 +289,7 @@ func TestDebugACSITrafficAtBoot(t *testing.T) {
 	var lastControl uint16
 	var acsiWrites int
 	var acsiStatusReads int
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if addr < 0xFF8600 || addr >= 0xFF8610 {
 			return
@@ -312,7 +312,7 @@ func TestDebugACSITrafficAtBoot(t *testing.T) {
 			return
 		}
 	})
-	defer machine.cpu.SetBusTracer(nil)
+	defer setBusTracer(machine.cpu, nil)
 
 	for frame := range 600 {
 		if _, err := machine.StepFrame(); err != nil {

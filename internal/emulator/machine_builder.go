@@ -23,6 +23,10 @@ type machineOptions struct {
 	// noBlitter leaves the blitter off the bus, so TOS falls back to its
 	// software blit routines.
 	noBlitter bool
+	// noFastMemory sends every ROM access through the bus instead of letting
+	// the CPU read the image directly. Used by benchmarks and by anyone
+	// debugging a suspected direct-memory fault.
+	noFastMemory bool
 }
 
 func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts machineOptions) (*Machine, error) {
@@ -108,10 +112,11 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 		busDevices = append(busDevices, megaRTC)
 	}
 
-	busDevices = append(busDevices,
-		newOpenBusRegion(romImage),
-		rom,
-	)
+	mirrors := romMirrors(rom, !opts.noFastMemory)
+	busDevices = append(busDevices, newOpenBusRegion(romImage))
+	for _, mirror := range mirrors {
+		busDevices = append(busDevices, mirror)
+	}
 	bus := cpu.NewBus(busDevices...)
 	blitter.SetBus(bus)
 	// RAM and ROM accesses cost the plain 68000 bus cycle: the ST interleaves
@@ -120,7 +125,7 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 
 	// WithDeferredReset keeps construction from resetting the CPU against a bus
 	// that is not fully described yet; machine.Reset below is the single reset
-	// path and is also what installs the ROM fast-memory window.
+	// path.
 	// WithCycleRounding(4) models the GLUE/MMU granting the CPU the bus only on
 	// 4-cycle boundaries: an instruction listed at 10 cycles takes 12 on an ST.
 	processor, err := cpu.NewCPU(bus, cpu.WithDeferredReset(), cpu.WithCycleRounding(4))
@@ -135,6 +140,7 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 		cpu:          processor,
 		ram:          ram,
 		rom:          rom,
+		romMirrors:   mirrors,
 		overlayROM:   overlayROM,
 		memoryConfig: memoryConfig,
 		shifter:      shifter,
@@ -175,7 +181,7 @@ func newCartridgeROM(image []byte) (cpu.Device, error) {
 	if len(image) == 0 {
 		return devices.NewFixedValueRegion(
 			0xFFFFFFFF,
-			devices.AddressRange{Start: 0xFA0000, End: 0xFA0010},
+			devices.AddressRange{Start: cartridgeBase, End: cartridgeBase + 0x10},
 		), nil
 	}
 
@@ -227,7 +233,7 @@ func newMonsterProbeRegion() *devices.BusErrorRegion {
 func newOpenBusRegion(romImage []byte) *devices.OpenBus {
 	return devices.NewOpenBus(
 		devices.AddressRange{Start: secondaryROMAlias + uint32(len(romImage)), End: defaultROMHighAlias},
-		devices.AddressRange{Start: 0xFF8000, End: 0x1000000},
+		devices.AddressRange{Start: ioBase, End: 0x1000000},
 	)
 }
 

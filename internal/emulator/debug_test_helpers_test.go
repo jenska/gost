@@ -56,3 +56,24 @@ func dumpMFPState(t *testing.T, machine *Machine, label string) {
 		readByte(0xFFFA25),
 	)
 }
+
+// setTracer installs the instruction trace callback, keeping the other hooks.
+func setTracer(c *cpu.CPU, fn cpu.TraceCallback) {
+	h := c.Hooks()
+	h.Trace = fn
+	c.SetHooks(h)
+}
+
+// setBusTracer installs the bus access callback, keeping the other hooks.
+func setBusTracer(c *cpu.CPU, fn cpu.BusAccessCallback) {
+	h := c.Hooks()
+	h.Bus = fn
+	c.SetHooks(h)
+}
+
+// setExceptionTracer installs the exception callback, keeping the other hooks.
+func setExceptionTracer(c *cpu.CPU, fn cpu.ExceptionCallback) {
+	h := c.Hooks()
+	h.Exception = fn
+	c.SetHooks(h)
+}

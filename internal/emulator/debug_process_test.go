@@ -49,7 +49,7 @@ func TestDebugLateTrapStackBanks(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if (pc >= 0xE12868 && pc <= 0xE128C4) ||
 			(pc >= 0xE1298C && pc <= 0xE129AE) ||
@@ -72,7 +72,7 @@ func TestDebugLateTrapStackBanks(t *testing.T) {
 			))
 		}
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if (addr >= 0x00649C && addr < 0x006520) ||
 			(addr >= 0x007400 && addr < 0x007430) ||
@@ -91,7 +91,7 @@ func TestDebugLateTrapStackBanks(t *testing.T) {
 			))
 		}
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		pushHistory(fmt.Sprintf("exception vector=%d pc=%06x newpc=%06x opcode=%04x sr=%04x newsr=%04x",
 			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR))
 		if info.Vector == 4 && info.PC&0xFFFFFF == 0x00000A {
@@ -127,7 +127,7 @@ func TestDebugLowMemProcessPointerWrites(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if (pc >= 0xE12690 && pc <= 0xE129CC) ||
 			(pc >= 0xE12B80 && pc <= 0xE12BA6) ||
@@ -147,7 +147,7 @@ func TestDebugLowMemProcessPointerWrites(t *testing.T) {
 			))
 		}
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if addr != 0x00649C && addr != 0x0064A0 {
 			return
@@ -196,7 +196,7 @@ func TestDebugProcessPointerProducer(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if (pc >= 0xE12698 && pc <= 0xE126FC) ||
 			(pc >= 0xE12974 && pc <= 0xE129AE) ||
@@ -220,7 +220,7 @@ func TestDebugProcessPointerProducer(t *testing.T) {
 			))
 		}
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if addr != 0x00649C && addr != 0x0064A0 {
 			return
@@ -284,7 +284,7 @@ func TestDebugProcessDescriptorInitialization(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if (addr >= 0x004620 && addr < 0x004680) ||
 			addr == 0x000420 ||
@@ -368,7 +368,7 @@ func TestDebugAltRAMProbeAccesses(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if (pc >= 0xE02000 && pc <= 0xE02400) ||
 			(pc >= 0xE13288 && pc <= 0xE1333C) {
@@ -386,7 +386,7 @@ func TestDebugAltRAMProbeAccesses(t *testing.T) {
 			))
 		}
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if (addr >= 0x400000 && addr < 0x400040) ||
 			(addr >= 0xFA0000 && addr < 0xFA0010) {
@@ -401,7 +401,7 @@ func TestDebugAltRAMProbeAccesses(t *testing.T) {
 			))
 		}
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		pushHistory(fmt.Sprintf("exception vector=%d pc=%06x newpc=%06x opcode=%04x fault_valid=%t fault=%06x",
 			info.Vector,
 			info.PC&0xFFFFFF,
@@ -445,7 +445,7 @@ func TestDebugAltRAMDescriptorCaller(t *testing.T) {
 	var snapshotRegs cpu.Registers
 	var snapshotStack [8]uint32
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if (pc >= 0xE00060 && pc <= 0xE02220) || (pc >= 0xE13288 && pc <= 0xE132C4) {
 			pushHistory(fmt.Sprintf("pc=%06x sr=%04x a7=%08x d0=%08x d1=%08x d2=%08x d3=%08x ins=%s",

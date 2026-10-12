@@ -45,11 +45,13 @@
   built-in clock), while `st` now loads the 520 ST with a colour monitor
   instead of a monochrome one. Saved profiles no longer store a preset name.
 
-- Fetches and TOS-vector reads from the boot ROM now bypass the bus via a
-  read-only flat memory window (`m68kemu` `SetFastMemory`), cutting an EmuTOS
-  boot benchmark by ~8%. Wait-state accounting is unchanged, so cycle counts,
+- Fetches and TOS-vector reads from the boot ROM now bypass the bus: each ROM
+  alias is a `devices.ROMMirror`, an `m68kemu` `MemoryDevice` cut short before
+  the cartridge port and the hardware registers, cutting an EmuTOS boot
+  benchmark by ~8%. Wait-state accounting is unchanged, so cycle counts,
   register state, and the debug-trace suite are byte-for-byte identical to the
-  bus path; `machine.disableFastMemory` forces every access back through the bus.
+  bus path; the `noFastMemory` machine option forces every access back through
+  the bus.
 - `EnableTrace` installs CPU observation callbacks through the single
   `m68kemu` `SetHooks` call instead of separate setters.
 - `Machine.RequestInterrupt` and `devices.Interrupt.Vector` now take a plain
@@ -110,6 +112,11 @@
   runners never call, so the shipped binary never actually used it.
 
 ### Dependencies
+
+- `github.com/jenska/m68kemu` v1.6.2 → v1.7.0: `NewCPU` returns `*CPU`;
+  `SetFastMemory`/`FastRegion` gave way to `MemoryDevice` plus `Bus.Remap`, and
+  the separate tracer setters to `SetHooks`. `github.com/jenska/ym2149`
+  v1.1.0 → v1.3.0, `github.com/jenska/m68kdasm` v1.4.0 → v1.4.1
 
 - `github.com/jenska/m68kemu` v1.6.0 → v1.6.1: `MOVEP` had its size and
   direction swapped (TOS and games use it for the MFP and video registers),

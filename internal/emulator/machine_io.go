@@ -14,6 +14,10 @@ const (
 	defaultROMHighAlias = 0xFC0000
 	// secondaryROMAlias is the lower EmuTOS/TOS mirror used by real ST layouts.
 	secondaryROMAlias = 0xE00000
+	// cartridgeBase is the start of the cartridge port.
+	cartridgeBase = 0xFA0000
+	// ioBase is the start of the memory-mapped hardware registers.
+	ioBase = 0xFF8000
 	// stepQuantumCycles bounds how far devices can drift between CPU dispatches.
 	stepQuantumCycles = 512
 	// guestMouseXAddr and guestMouseYAddr are EmuTOS desktop mouse variables used
@@ -39,7 +43,7 @@ type (
 	Machine struct {
 		cfg           *config.Config
 		bus           *cpu.Bus
-		cpu           cpu.CPU
+		cpu           *cpu.CPU
 		ram           *devices.RAM
 		rom           *devices.ROM
 		overlayROM    *devices.OverlayROM
@@ -61,12 +65,8 @@ type (
 		cpuCycleDebt uint64
 		traceWriter  io.Writer
 		frameCounter uint64
-		// fastRegions is the reusable buffer of flat-memory regions handed to the
-		// CPU via SetFastMemory (installed once per reset, ROM mirrors only).
-		fastRegions []cpu.FastRegion
-		// disableFastMemory forces every access back through the bus. Used by
-		// benchmarks and by anyone debugging a suspected fast-region fault.
-		disableFastMemory bool
+		// romMirrors map the ROM image at each of its aliases.
+		romMirrors []*devices.ROMMirror
 	}
 )
 

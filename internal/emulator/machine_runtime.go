@@ -15,50 +15,31 @@ func (m *Machine) Reset() error {
 	m.cpuCycleCarry = 0
 	m.cpuCycleDebt = 0
 	m.frameCounter = 0
-	if err := m.cpu.Reset(); err != nil {
-		return err
-	}
-	m.installFastMemory()
-	return nil
+	return m.cpu.Reset()
 }
 
-// installFastMemory hands the CPU a read-only flat window over each isolated ROM
-// mirror, letting instruction fetches and TOS-vector reads bypass the bus.
-// EmuTOS executes entirely from ROM, so this covers the bulk of the fetch
-// traffic. The ST's GLUE acknowledges ROM accesses immediately, so neither the
-// bus nor the fast region adds wait states to them.
-func (m *Machine) installFastMemory() {
-	m.fastRegions = m.fastRegions[:0]
-	if !m.disableFastMemory {
-		image := m.rom.Image()
-		for _, base := range m.rom.Aliases() {
-			if !romAliasIsIsolated(base, uint32(len(image))) {
-				continue
-			}
-			m.fastRegions = append(m.fastRegions, cpu.FastRegion{
-				Base: base, Mem: image, ReadOnly: true,
-			})
-		}
+// romMirrors maps the ROM image at each of its aliases, each cut short where
+// another device takes over (see romAliasLimit). With direct access the CPU
+// reads the image without going through the bus; EmuTOS executes entirely from
+// ROM, so this covers the bulk of the fetch traffic. The ST's GLUE acknowledges
+// ROM accesses immediately, so neither path adds wait states.
+func romMirrors(rom *devices.ROM, direct bool) []*devices.ROMMirror {
+	var mirrors []*devices.ROMMirror
+	for _, base := range rom.Aliases() {
+		mirrors = append(mirrors, rom.Mirror(base, romAliasLimit(base), direct))
 	}
-	m.cpu.SetFastMemory(m.fastRegions...)
+	return mirrors
 }
 
-// romAliasIsIsolated reports whether a ROM mirror of the given length at base is
-// backed only by ROM across its whole span - i.e. it does not reach into the
-// cartridge probe window or the hardware register area, where other bus devices
-// must win. Only isolated mirrors are safe to serve from a flat fast region.
-func romAliasIsIsolated(base, length uint32) bool {
-	end := uint64(base) + uint64(length) // exclusive; may exceed the 24-bit space
-	if base < secondaryROMAlias || length == 0 {
-		return false
+// romAliasLimit returns where a ROM alias at base must end: before the
+// cartridge port when it starts below it, and before the hardware registers.
+// The mirrors have an address range, so the bus prefers them over the devices
+// that only implement Contains, whatever their order on the bus.
+func romAliasLimit(base uint32) uint32 {
+	if base < cartridgeBase {
+		return cartridgeBase
 	}
-	if base < 0xFA0010 && end > 0xFA0000 { // cartridge / RTC probe region
-		return false
-	}
-	if end > 0xFF8000 { // memory-mapped I/O
-		return false
-	}
-	return true
+	return ioBase
 }
 
 func (m *Machine) StepFrame() (bool, error) {

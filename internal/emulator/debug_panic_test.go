@@ -83,7 +83,7 @@ func TestDebugFirstLateMFPInterrupt(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		switch addr {
 		case 0xFFFA09, 0xFFFA0D, 0xFFFA11, 0xFFFA15, 0xFFFA17, 0xFFFA1D, 0xFFFA23, 0xFFFA25:
@@ -93,7 +93,7 @@ func TestDebugFirstLateMFPInterrupt(t *testing.T) {
 		}
 	})
 	var hit *cpu.ExceptionInfo
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		if info.Vector == 68 || info.Vector == 69 {
 			copied := info
 			hit = &copied
@@ -142,7 +142,7 @@ func TestDebugFirstVector68Interrupt(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		switch addr {
 		case 0xFFFA09, 0xFFFA0D, 0xFFFA11, 0xFFFA15, 0xFFFA17, 0xFFFA1D, 0xFFFA23, 0xFFFA25:
@@ -152,7 +152,7 @@ func TestDebugFirstVector68Interrupt(t *testing.T) {
 		}
 	})
 	var hit *cpu.ExceptionInfo
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		if info.Vector == 68 {
 			copied := info
 			hit = &copied
@@ -194,7 +194,7 @@ func TestDebugTraceLowRAMExecution(t *testing.T) {
 
 	var hits []string
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if pc < 0x22f0 || pc > 0x2320 {
 			return
@@ -202,7 +202,7 @@ func TestDebugTraceLowRAMExecution(t *testing.T) {
 		hits = append(hits, fmt.Sprintf("pc=%06x sr=%04x d0=%08x a0=%08x a1=%08x ins=%s",
 			pc, info.SR, uint32(info.Registers.D[0]), info.Registers.A[0], info.Registers.A[1], machine.decodeTraceInstruction(info)))
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if !info.InstructionFetch || addr < 0x22f0 || addr > 0x2320 {
 			return
@@ -275,7 +275,7 @@ func TestDebugWritesNear2300(t *testing.T) {
 
 	counts := map[uint32]int{}
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if !info.Write || addr < 0x2200 || addr >= 0x2400 {
 			return
@@ -334,11 +334,11 @@ func TestDebugFirstPanicRecordSet(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pushHistory(fmt.Sprintf("pc=%06x sr=%04x d0=%08x a0=%08x a1=%08x a7=%08x ins=%s",
 			info.PC&0xFFFFFF, info.SR, uint32(info.Registers.D[0]), info.Registers.A[0], info.Registers.A[1], info.Registers.A[7], machine.decodeTraceInstruction(info)))
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		pushHistory(fmt.Sprintf("exception vector=%d pc=%06x newpc=%06x opcode=%04x sr=%04x newsr=%04x",
 			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR))
 	})
@@ -382,7 +382,7 @@ func TestDebugPanicWindowBytes(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if pc < 0xE02BD0 || pc > 0xE09450 {
 			return
@@ -421,15 +421,15 @@ func TestDebugPanicTriggerPoint(t *testing.T) {
 
 	triggered := false
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pushHistory(fmt.Sprintf("pc=%06x bytes=%x sr=%04x a7=%08x ins=%s",
 			info.PC&0xFFFFFF, info.Bytes, info.SR, info.Registers.A[7], machine.decodeTraceInstruction(info)))
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		pushHistory(fmt.Sprintf("exception vector=%d pc=%06x newpc=%06x opcode=%04x sr=%04x newsr=%04x",
 			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR))
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if !info.Write {
 			return
@@ -674,7 +674,7 @@ func TestDebugTraceIllegalVector(t *testing.T) {
 	var hit bool
 	var caught cpu.ExceptionInfo
 	machine.EnableTrace("", nil)
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		if info.Vector != 4 {
 			return
 		}
@@ -725,11 +725,11 @@ func TestDebugTraceLateIllegalHistory(t *testing.T) {
 	var hit bool
 	var caught cpu.ExceptionInfo
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pushHistory(fmt.Sprintf("pc=%06x bytes=%x sr=%04x d0=%08x d1=%08x a0=%08x a1=%08x a7=%08x ins=%s",
 			info.PC&0xFFFFFF, info.Bytes, info.SR, uint32(info.Registers.D[0]), uint32(info.Registers.D[1]), info.Registers.A[0], info.Registers.A[1], info.Registers.A[7], machine.decodeTraceInstruction(info)))
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		if info.Vector != 4 {
 			return
 		}
@@ -851,14 +851,14 @@ func TestDebugLateIllegalStackWindow(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if (pc >= 0xE03CF0 && pc <= 0xE03D10) || (pc >= 0xE00800 && pc <= 0xE00920) {
 			pushHistory(fmt.Sprintf("pc=%06x bytes=%x sr=%04x a7=%08x ins=%s",
 				pc, info.Bytes, info.SR, info.Registers.A[7], machine.decodeTraceInstruction(info)))
 		}
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if addr < 0x2220 || addr >= 0x2240 {
 			return
@@ -867,7 +867,7 @@ func TestDebugLateIllegalStackWindow(t *testing.T) {
 		pushHistory(fmt.Sprintf("%s %06x size=%d value=%08x pc=%06x a7=%08x",
 			traceAccessKind(info.Write), addr, info.Size, info.Value, regs.PC&0xFFFFFF, regs.A[7]))
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		pushHistory(fmt.Sprintf("exception vector=%d pc=%06x newpc=%06x opcode=%04x sr=%04x newsr=%04x",
 			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR))
 	})
@@ -907,14 +907,14 @@ func TestDebugIRQReturnStackWindow(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if (pc >= 0xE00750 && pc <= 0xE00850) || (pc >= 0xE00900 && pc <= 0xE00920) {
 			pushHistory(fmt.Sprintf("pc=%06x bytes=%x sr=%04x a7=%08x ins=%s",
 				pc, info.Bytes, info.SR, info.Registers.A[7], machine.decodeTraceInstruction(info)))
 		}
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if addr < 0x0e00 || addr >= 0x0e40 {
 			return
@@ -923,7 +923,7 @@ func TestDebugIRQReturnStackWindow(t *testing.T) {
 		pushHistory(fmt.Sprintf("%s %06x size=%d value=%08x pc=%06x a7=%08x",
 			traceAccessKind(info.Write), addr, info.Size, info.Value, regs.PC&0xFFFFFF, regs.A[7]))
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		pushHistory(fmt.Sprintf("exception vector=%d pc=%06x newpc=%06x opcode=%04x sr=%04x newsr=%04x",
 			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR))
 	})
@@ -963,14 +963,14 @@ func TestDebugLateVBLTimerCStackWindow(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if (pc >= 0xE0075E && pc <= 0xE00840) || (pc >= 0xE13C20 && pc <= 0xE13D60) {
 			pushHistory(fmt.Sprintf("pc=%06x bytes=%x sr=%04x a7=%08x ins=%s",
 				pc, info.Bytes, info.SR, info.Registers.A[7], machine.decodeTraceInstruction(info)))
 		}
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if (addr >= 0x000740 && addr < 0x000780) ||
 			(addr >= 0x0007440 && addr < 0x0007480) ||
@@ -982,7 +982,7 @@ func TestDebugLateVBLTimerCStackWindow(t *testing.T) {
 				traceAccessKind(info.Write), addr, info.Size, info.Value, regs.PC&0xFFFFFF, regs.A[7]))
 		}
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		pushHistory(fmt.Sprintf("exception vector=%d pc=%06x newpc=%06x opcode=%04x sr=%04x newsr=%04x",
 			info.Vector, info.PC&0xFFFFFF, info.NewPC&0xFFFFFF, info.Opcode, info.SR, info.NewSR))
 		if info.Vector == 4 && info.PC&0xFFFFFF == 0x00000A {
@@ -1063,7 +1063,7 @@ func TestDebugLateIllegalInstructionSite(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if pc >= 0xE24040 && pc <= 0xE240A0 {
 			pushHistory(fmt.Sprintf(
@@ -1082,7 +1082,7 @@ func TestDebugLateIllegalInstructionSite(t *testing.T) {
 		}
 	})
 	var found *cpu.ExceptionInfo
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		if info.Vector == 4 && info.PC&0xFFFFFF == 0xE24088 {
 			captured := info
 			found = &captured
@@ -1124,7 +1124,7 @@ func TestDebugLateAddressErrorSite(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		if pc >= 0xE25680 && pc <= 0xE256E0 {
 			pushHistory(fmt.Sprintf(
@@ -1145,7 +1145,7 @@ func TestDebugLateAddressErrorSite(t *testing.T) {
 		}
 	})
 	var found *cpu.ExceptionInfo
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		if info.Vector == 3 && info.PC&0xFFFFFF == 0xE256B8 {
 			captured := info
 			found = &captured

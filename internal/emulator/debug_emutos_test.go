@@ -144,12 +144,12 @@ func TestBundledEmuTOSKeypressProducesAudioSamples(t *testing.T) {
 	var timerCExceptions int
 	var aciaExceptions int
 	var keyclickHookHits int
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		if info.PC == keyclickHook {
 			keyclickHookHits++
 		}
 	})
-	machine.cpu.SetExceptionTracer(func(info cpu.ExceptionInfo) {
+	setExceptionTracer(machine.cpu, func(info cpu.ExceptionInfo) {
 		switch info.Vector {
 		case 0x45:
 			timerCExceptions++
@@ -157,7 +157,7 @@ func TestBundledEmuTOSKeypressProducesAudioSamples(t *testing.T) {
 			aciaExceptions++
 		}
 	})
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		if !info.Write {
 			return
 		}
@@ -185,8 +185,8 @@ func TestBundledEmuTOSKeypressProducesAudioSamples(t *testing.T) {
 			break
 		}
 	}
-	machine.cpu.SetBusTracer(nil)
-	machine.cpu.SetTracer(nil)
+	setBusTracer(machine.cpu, nil)
+	setTracer(machine.cpu, nil)
 
 	if len(psgWrites) == 0 {
 		status, err := machine.bus.Read(cpu.Byte, 0xFFFC00)
@@ -254,7 +254,7 @@ func TestBundledEmuTOSUsesBlitterDuringDesktopBoot(t *testing.T) {
 
 	var statusWrites int
 	var busyStarts int
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if info.InstructionFetch || !info.Write || addr != 0xFF8A3C {
 			return
@@ -264,7 +264,7 @@ func TestBundledEmuTOSUsesBlitterDuringDesktopBoot(t *testing.T) {
 			busyStarts++
 		}
 	})
-	defer machine.cpu.SetBusTracer(nil)
+	defer setBusTracer(machine.cpu, nil)
 
 	stepFrames(t, machine, 400)
 

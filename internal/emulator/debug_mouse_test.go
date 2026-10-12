@@ -25,7 +25,7 @@ func TestDebugIKBDTrafficAfterDesktop(t *testing.T) {
 	fmt.Printf("desktop reached pc=%06x sr=%04x\n", machine.Registers().PC&0xFFFFFF, machine.Registers().SR)
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		if addr < 0xFFFC00 || addr >= 0xFFFC04 || info.InstructionFetch {
 			return
@@ -76,7 +76,7 @@ func TestDebugIKBDMouseHandlerState(t *testing.T) {
 	dumpDisassemblyRange(t, machine, 0xE00DD8, 0x60, "ikbd-packet-parser")
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		addr := info.Address & 0xFFFFFF
 		pc := machine.cpu.Registers().PC & 0xFFFFFF
 		if pc < 0xE00D80 || pc > 0xE00EC0 {
@@ -120,7 +120,7 @@ func TestDebugIKBDMouseCallbackState(t *testing.T) {
 	before := append([]byte(nil), machine.FrameBuffer()...)
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		pc := machine.cpu.Registers().PC & 0xFFFFFF
 		if pc < 0xE16878 || pc > 0xE16920 {
 			return
@@ -176,7 +176,7 @@ func TestDebugIKBDMouseDrawRoutine(t *testing.T) {
 	dumpDisassemblyRange(t, machine, 0xE1ED90, 0x80, "ikbd-mouse-draw")
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		pc := machine.cpu.Registers().PC & 0xFFFFFF
 		if pc < 0xE1ED90 || pc > 0xE1EE40 {
 			return
@@ -238,7 +238,7 @@ func TestDebugIKBDMouseDrawPipeline(t *testing.T) {
 	dumpDisassemblyRange(t, machine, 0xE24662, 0x80, "ikbd-mouse-plotter")
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		pc := machine.cpu.Registers().PC & 0xFFFFFF
 		inRange := (pc >= 0xE1FA24 && pc <= 0xE1FB20) || (pc >= 0xE24662 && pc <= 0xE24740)
 		if !inRange || info.InstructionFetch {
@@ -291,7 +291,7 @@ func TestDebugIKBDMouseDrawQueueConsumer(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		if info.InstructionFetch {
 			return
 		}
@@ -393,7 +393,7 @@ func TestDebugMouseVBLExecution(t *testing.T) {
 	var vblHits int
 	var slotHits int
 	machine.EnableTrace("", nil)
-	machine.cpu.SetTracer(func(info cpu.TraceInfo) {
+	setTracer(machine.cpu, func(info cpu.TraceInfo) {
 		pc := info.PC & 0xFFFFFF
 		switch pc {
 		case vblVector & 0xFFFFFF:
@@ -491,7 +491,7 @@ func TestDebugLateVBLStateWrites(t *testing.T) {
 	}
 
 	machine.EnableTrace("", nil)
-	machine.cpu.SetBusTracer(func(info cpu.BusAccessInfo) {
+	setBusTracer(machine.cpu, func(info cpu.BusAccessInfo) {
 		if !info.Write || info.InstructionFetch {
 			return
 		}
