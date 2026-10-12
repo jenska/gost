@@ -9,8 +9,8 @@ import (
 func TestBusErrorRegionFaultsInConfiguredRange(t *testing.T) {
 	region := NewBusErrorRegion(AddressRange{Start: 0xFFFE00, End: 0xFFFE10})
 
-	if !region.Contains(0xFFFE00) || !region.Contains(0xFFFE0F) || region.Contains(0xFFFE10) {
-		t.Fatalf("unexpected range match behavior")
+	if start, end := region.AddressRange(); start != 0xFFFE00 || end != 0xFFFE0F {
+		t.Fatalf("unexpected range %06x-%06x", start, end)
 	}
 
 	if _, err := region.Read(cpu.Byte, 0xFFFE00); err == nil {

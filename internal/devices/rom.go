@@ -91,8 +91,7 @@ func (r *ROM) Slice(address uint32, size cpu.Size) (uint32, error) {
 	return r.Read(size, address)
 }
 
-// ROMMirror maps the ROM image once at base, cut short where another device
-// takes over the address space. It implements cpu.MemoryDevice, so with direct
+// ROMMirror maps the ROM image once at base, cut short at a limit. It implements cpu.MemoryDevice, so with direct
 // access the CPU reads the image without going through the bus.
 type ROMMirror struct {
 	image  *ROM
@@ -142,6 +141,12 @@ type OverlayROM struct {
 
 func NewOverlayROM(rom *ROM, ram *RAM) *OverlayROM {
 	return &OverlayROM{rom: rom, ram: ram, enabled: true}
+}
+
+// AddressRange covers the reset vectors; Contains drops out once the overlay is
+// disabled, and the bus then falls through to RAM.
+func (o *OverlayROM) AddressRange() (uint32, uint32) {
+	return 0, 7
 }
 
 func (o *OverlayROM) Contains(address uint32) bool {
@@ -223,6 +228,8 @@ type MemoryConfig struct {
 	mmuBank0Size uint32
 	mmuBank1Size uint32
 	linearBanks  bool
+	// onLayoutChange runs after the bank configuration changes.
+	onLayoutChange func()
 }
 
 // SetLinearBankTranslation selects the STE GST MCU's bank folding: when the
@@ -252,8 +259,20 @@ func NewMemoryConfig(overlay *OverlayROM, ramSize uint32) *MemoryConfig {
 	return m
 }
 
-func (m *MemoryConfig) Contains(address uint32) bool {
-	return address >= memoryConfigBase && address < memoryConfigBase+2
+func (m *MemoryConfig) AddressRange() (uint32, uint32) {
+	return memoryConfigBase, memoryConfigBase + 1
+}
+
+// OnLayoutChange registers fn to run whenever the bank configuration changes,
+// so the bus can rebuild its RAM mapping.
+func (m *MemoryConfig) OnLayoutChange(fn func()) {
+	m.onLayoutChange = fn
+}
+
+// identity reports whether every logical address maps to the same physical
+// offset: the configured banks match the installed ones.
+func (m *MemoryConfig) identity() bool {
+	return m.mmuBank0Size == m.ramBank0Size && m.mmuBank1Size == m.ramBank1Size
 }
 
 func (m *MemoryConfig) Read(size cpu.Size, address uint32) (uint32, error) {
@@ -332,9 +351,13 @@ func (m *MemoryConfig) ResolveAddress(address uint32) (uint32, MemoryAddressStat
 }
 
 func (m *MemoryConfig) setValue(value byte) {
+	changed := value != m.value
 	m.value = value
 	m.mmuBank0Size = mmuBankSize((value >> 2) & 0x03)
 	m.mmuBank1Size = mmuBankSize(value & 0x03)
+	if changed && m.onLayoutChange != nil {
+		m.onLayoutChange()
+	}
 }
 
 func mmuBankSize(code byte) uint32 {

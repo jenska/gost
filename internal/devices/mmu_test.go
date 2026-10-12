@@ -191,10 +191,11 @@ func TestRAMMirrorDoesNotClaimCartridgeROMOrIOWindows(t *testing.T) {
 	config := NewMemoryConfig(overlay, ram.Size())
 	ram.SetMemoryConfig(config)
 
-	for _, address := range []uint32{0x400000, 0xFA0000, 0xFC0000, 0xFF8000} {
-		if ram.Contains(address) {
-			t.Fatalf("RAM mirror incorrectly claims %06x", address)
-		}
+	if start, end := ram.AddressRange(); start != 0 || end != 512*1024-1 {
+		t.Fatalf("RAM claims %06x-%06x", start, end)
+	}
+	if start, end := ram.HighMirror().AddressRange(); start != 0x700000 || end != 0x7FFFFF {
+		t.Fatalf("RAM mirror claims %06x-%06x", start, end)
 	}
 }
 
@@ -285,5 +286,40 @@ func TestShifterSTEExposesLowAddressRegisters(t *testing.T) {
 	}
 	if !shifter.Contains(0xFF8265) {
 		t.Fatalf("STE shifter should expose fine-scroll register")
+	}
+}
+
+func TestRAMDirectMemoryFollowsMMULayout(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	overlay := NewOverlayROM(NewROM(make([]byte, 16), 0xFC0000), ram)
+	config := NewMemoryConfig(overlay, ram.Size())
+	ram.SetMemoryConfig(config)
+	changes := 0
+	config.OnLayoutChange(func() { changes++ })
+
+	if mem, _ := ram.Memory(); len(mem) != len(ram.Bytes()) {
+		t.Fatalf("power-on layout should expose RAM directly")
+	}
+
+	// TOS probes with 2MB+2MB banks: the logical space outgrows the installed
+	// RAM and must go through translation.
+	if err := config.Write(m68kemu.Byte, memoryConfigBase+1, 0x0A); err != nil {
+		t.Fatalf("write probe config: %v", err)
+	}
+	if mem, _ := ram.Memory(); mem != nil {
+		t.Fatalf("probe layout must not expose RAM directly")
+	}
+	if _, end := ram.AddressRange(); end != 4*1024*1024-1 {
+		t.Fatalf("probe layout range ends at %06x, want 3fffff", end)
+	}
+
+	if err := config.Write(m68kemu.Byte, memoryConfigBase+1, 0x05); err != nil {
+		t.Fatalf("write sized config: %v", err)
+	}
+	if mem, _ := ram.Memory(); len(mem) != len(ram.Bytes()) {
+		t.Fatalf("sized layout should expose RAM directly again")
+	}
+	if changes != 2 {
+		t.Fatalf("layout changes = %d, want 2", changes)
 	}
 }

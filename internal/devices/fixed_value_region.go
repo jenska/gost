@@ -2,26 +2,14 @@ package devices
 
 import cpu "github.com/jenska/m68kemu"
 
-// FixedValueRegion models absent hardware windows that return a stable value.
+// FixedValueRegion models an absent hardware window that returns a stable value.
 type FixedValueRegion struct {
-	ranges []AddressRange
-	value  uint32
+	window
+	value uint32
 }
 
-func NewFixedValueRegion(value uint32, ranges ...AddressRange) *FixedValueRegion {
-	return &FixedValueRegion{
-		ranges: append([]AddressRange(nil), ranges...),
-		value:  value,
-	}
-}
-
-func (r *FixedValueRegion) Contains(address uint32) bool {
-	for _, candidate := range r.ranges {
-		if address >= candidate.Start && address < candidate.End {
-			return true
-		}
-	}
-	return false
+func NewFixedValueRegion(value uint32, r AddressRange) *FixedValueRegion {
+	return &FixedValueRegion{window: window(r), value: value}
 }
 
 func (r *FixedValueRegion) Read(size cpu.Size, address uint32) (uint32, error) {

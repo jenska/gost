@@ -43,12 +43,30 @@ func (r *RAM) SetMemoryConfig(mmu *MemoryConfig) {
 	r.mmu = mmu
 }
 
-func (r *RAM) Contains(address uint32) bool {
+// AddressRange covers the logical memory the MMU decodes, which can be larger
+// than the installed RAM while TOS probes for memory.
+func (r *RAM) AddressRange() (uint32, uint32) {
 	limit := uint32(len(r.data))
 	if r.mmu != nil {
 		limit = r.mmu.LogicalSize()
 	}
-	return address >= r.base && (address < r.base+limit || r.isMirroredAddress(address))
+	return r.base, r.base + limit - 1
+}
+
+// Memory hands the CPU the backing store while the MMU maps it one to one,
+// which is the case after cold reset and once TOS has sized memory. Otherwise
+// every access goes through Read and Write, which translate each byte.
+func (r *RAM) Memory() ([]byte, bool) {
+	if r.mmu != nil && (!r.mmu.identity() || r.mmu.LogicalSize() != uint32(len(r.data))) {
+		return nil, false
+	}
+	return r.data, false
+}
+
+// HighMirror returns the device that answers in the high window where early ST
+// RAM decoding exposes the installed DRAM again.
+func (r *RAM) HighMirror() *RAMHighMirror {
+	return &RAMHighMirror{ram: r}
 }
 
 func (r *RAM) Read(size cpu.Size, address uint32) (uint32, error) {
@@ -257,3 +275,26 @@ func (r *RAM) isMirroredAddress(address uint32) bool {
 		address >= stRAMHighMirrorStart &&
 		address < stRAMHighMirrorEnd
 }
+
+// RAMHighMirror answers for RAM in the window from $700000 to $7FFFFF.
+type RAMHighMirror struct {
+	ram *RAM
+}
+
+func (m *RAMHighMirror) AddressRange() (uint32, uint32) {
+	return stRAMHighMirrorStart, stRAMHighMirrorEnd - 1
+}
+
+func (m *RAMHighMirror) Read(size cpu.Size, address uint32) (uint32, error) {
+	return m.ram.Read(size, address)
+}
+
+func (m *RAMHighMirror) Peek(size cpu.Size, address uint32) (uint32, error) {
+	return m.ram.Read(size, address)
+}
+
+func (m *RAMHighMirror) Write(size cpu.Size, address uint32, value uint32) error {
+	return m.ram.Write(size, address, value)
+}
+
+func (m *RAMHighMirror) Reset() {}

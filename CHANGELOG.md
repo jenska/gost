@@ -46,12 +46,18 @@
   instead of a monochrome one. Saved profiles no longer store a preset name.
 
 - Fetches and TOS-vector reads from the boot ROM now bypass the bus: each ROM
-  alias is a `devices.ROMMirror`, an `m68kemu` `MemoryDevice` cut short before
-  the cartridge port and the hardware registers, cutting an EmuTOS boot
-  benchmark by ~8%. Wait-state accounting is unchanged, so cycle counts,
-  register state, and the debug-trace suite are byte-for-byte identical to the
-  bus path; the `noFastMemory` machine option forces every access back through
-  the bus.
+  alias is a `devices.ROMMirror`, an `m68kemu` `MemoryDevice`, cutting an
+  EmuTOS boot benchmark by ~8%. Wait-state accounting is unchanged, so cycle
+  counts, register state, and the debug-trace suite are byte-for-byte identical
+  to the bus path; the `noFastMemory` machine option forces ROM accesses back
+  through the bus.
+- ST RAM is read and written directly by the CPU too, whenever the MMU maps it
+  one to one (after cold reset and once TOS has sized memory). A bank change
+  remaps the bus; during TOS's memory probe every access still goes through the
+  MMU translation. The `$700000` high RAM mirror is its own bus device.
+- Every bus device now has an address range, so the order on the bus decides
+  which device answers an address. `OpenBus`, `BusErrorRegion` and
+  `FixedValueRegion` take a single range; the open-bus holes are two devices.
 - `EnableTrace` installs CPU observation callbacks through the single
   `m68kemu` `SetHooks` call instead of separate setters.
 - `Machine.RequestInterrupt` and `devices.Interrupt.Vector` now take a plain

@@ -8,25 +8,22 @@ type AddressRange struct {
 	End   uint32
 }
 
-// OpenBus absorbs reads and writes in intentionally unmapped holes.
+// window is the decode of a device that claims a single address range.
+type window AddressRange
+
+// AddressRange returns the inclusive bounds the bus maps the device at.
+func (w window) AddressRange() (uint32, uint32) {
+	return w.Start, w.End - 1
+}
+
+// OpenBus absorbs reads and writes in an intentionally unmapped hole.
 type OpenBus struct {
-	ranges []AddressRange
+	window
 }
 
-// NewOpenBus creates a device that claims the supplied unmapped address ranges.
-func NewOpenBus(ranges ...AddressRange) *OpenBus {
-	return &OpenBus{ranges: append([]AddressRange(nil), ranges...)}
-}
-
-// Contains reports whether the address falls inside one of the configured open
-// bus holes.
-func (o *OpenBus) Contains(address uint32) bool {
-	for _, r := range o.ranges {
-		if address >= r.Start && address < r.End {
-			return true
-		}
-	}
-	return false
+// NewOpenBus creates a device that claims the supplied unmapped address range.
+func NewOpenBus(r AddressRange) *OpenBus {
+	return &OpenBus{window(r)}
 }
 
 // Read models an unmapped bus read by returning zero for all access sizes.

@@ -21,8 +21,8 @@ func TestRomMirrorRanges(t *testing.T) {
 		{"192K at E00000", k192, 0xE00000, 0xE2FFFF},
 		{"192K at FC0000", k192, 0xFC0000, 0xFEFFFF},
 		{"256K at E00000", k256, 0xE00000, 0xE3FFFF},
-		{"256K at FC0000 stops before I/O", k256, 0xFC0000, 0xFF7FFF},
-		{"2M at E00000 stops before cartridge", 2048 * 1024, 0xE00000, 0xF9FFFF},
+		{"256K at FC0000", k256, 0xFC0000, 0xFFFFFF},
+		{"512K at FC0000 stops at the address space end", 2 * k256, 0xFC0000, 0xFFFFFF},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

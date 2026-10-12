@@ -9,8 +9,8 @@ import (
 func TestFixedValueRegionReturnsConfiguredValue(t *testing.T) {
 	region := NewFixedValueRegion(0xFFFFFFFF, AddressRange{Start: 0xFA0000, End: 0xFA0010})
 
-	if !region.Contains(0xFA0004) {
-		t.Fatalf("expected address to be covered by fixed value region")
+	if start, end := region.AddressRange(); start != 0xFA0000 || end != 0xFA000F {
+		t.Fatalf("unexpected range %06x-%06x", start, end)
 	}
 
 	value, err := region.Read(cpu.Byte, 0xFA0000)

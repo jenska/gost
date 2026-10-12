@@ -2,23 +2,14 @@ package devices
 
 import cpu "github.com/jenska/m68kemu"
 
-// BusErrorRegion models unmapped probe windows that must fault instead of
+// BusErrorRegion models an unmapped probe window that must fault instead of
 // reading as generic open bus.
 type BusErrorRegion struct {
-	ranges []AddressRange
+	window
 }
 
-func NewBusErrorRegion(ranges ...AddressRange) *BusErrorRegion {
-	return &BusErrorRegion{ranges: append([]AddressRange(nil), ranges...)}
-}
-
-func (r *BusErrorRegion) Contains(address uint32) bool {
-	for _, candidate := range r.ranges {
-		if address >= candidate.Start && address < candidate.End {
-			return true
-		}
-	}
-	return false
+func NewBusErrorRegion(r AddressRange) *BusErrorRegion {
+	return &BusErrorRegion{window(r)}
 }
 
 func (r *BusErrorRegion) Read(_ cpu.Size, address uint32) (uint32, error) {

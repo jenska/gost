@@ -234,6 +234,11 @@ func (s *Shifter) frameCycles() uint64 {
 	return s.cfg.FrameCycles()
 }
 
+// AddressRange bounds the shifter registers; Contains decodes them sparsely.
+func (s *Shifter) AddressRange() (uint32, uint32) {
+	return shifterRegBaseHigh - 1, shifterRegFineScroll
+}
+
 func (s *Shifter) Contains(address uint32) bool {
 	if isPaletteAddress(address) {
 		return true

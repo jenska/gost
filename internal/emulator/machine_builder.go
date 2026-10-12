@@ -88,6 +88,7 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 	busDevices := []cpu.Device{
 		overlayROM,
 		ram,
+		ram.HighMirror(),
 		memoryConfig,
 		// $FF8006 is a system-control address EmuTOS pokes at startup; GoST does
 		// not model it, so a scratch word answers the probe. GLUE itself (below)
@@ -113,11 +114,14 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 	}
 
 	mirrors := romMirrors(rom, !opts.noFastMemory)
-	busDevices = append(busDevices, newOpenBusRegion(romImage))
+	busDevices = append(busDevices, openBusRegions(romImage)...)
 	for _, mirror := range mirrors {
 		busDevices = append(busDevices, mirror)
 	}
 	bus := cpu.NewBus(busDevices...)
+	// RAM is read directly only while the MMU maps it one to one, and its range
+	// follows the configured banks, so the bus remaps on every bank change.
+	memoryConfig.OnLayoutChange(bus.Remap)
 	blitter.SetBus(bus)
 	// RAM and ROM accesses cost the plain 68000 bus cycle: the ST interleaves
 	// CPU and video accesses, so there is no base wait state. Only I/O devices
@@ -230,11 +234,11 @@ func newMonsterProbeRegion() *devices.BusErrorRegion {
 	)
 }
 
-func newOpenBusRegion(romImage []byte) *devices.OpenBus {
-	return devices.NewOpenBus(
-		devices.AddressRange{Start: secondaryROMAlias + uint32(len(romImage)), End: defaultROMHighAlias},
-		devices.AddressRange{Start: ioBase, End: 0x1000000},
-	)
+func openBusRegions(romImage []byte) []cpu.Device {
+	return []cpu.Device{
+		devices.NewOpenBus(devices.AddressRange{Start: secondaryROMAlias + uint32(len(romImage)), End: defaultROMHighAlias}),
+		devices.NewOpenBus(devices.AddressRange{Start: ioBase, End: addressSpaceEnd}),
+	}
 }
 
 // blitterDevice is the blitter, or a bus-error window at its registers when

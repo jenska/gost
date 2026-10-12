@@ -18,6 +18,8 @@ const (
 	cartridgeBase = 0xFA0000
 	// ioBase is the start of the memory-mapped hardware registers.
 	ioBase = 0xFF8000
+	// addressSpaceEnd is the end of the 68000's 24-bit address space.
+	addressSpaceEnd = 0x1000000
 	// stepQuantumCycles bounds how far devices can drift between CPU dispatches.
 	stepQuantumCycles = 512
 	// guestMouseXAddr and guestMouseYAddr are EmuTOS desktop mouse variables used

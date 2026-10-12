@@ -18,28 +18,18 @@ func (m *Machine) Reset() error {
 	return m.cpu.Reset()
 }
 
-// romMirrors maps the ROM image at each of its aliases, each cut short where
-// another device takes over (see romAliasLimit). With direct access the CPU
-// reads the image without going through the bus; EmuTOS executes entirely from
-// ROM, so this covers the bulk of the fetch traffic. The ST's GLUE acknowledges
-// ROM accesses immediately, so neither path adds wait states.
+// romMirrors maps the ROM image at each of its aliases, cut short at the end of
+// the 24-bit address space. The cartridge port and the hardware registers come
+// earlier on the bus, so they win where an alias overlaps them. With direct
+// access the CPU reads the image without going through the bus; EmuTOS executes
+// entirely from ROM, so this covers the bulk of the fetch traffic. The ST's
+// GLUE acknowledges ROM accesses immediately, so neither path adds wait states.
 func romMirrors(rom *devices.ROM, direct bool) []*devices.ROMMirror {
 	var mirrors []*devices.ROMMirror
 	for _, base := range rom.Aliases() {
-		mirrors = append(mirrors, rom.Mirror(base, romAliasLimit(base), direct))
+		mirrors = append(mirrors, rom.Mirror(base, addressSpaceEnd, direct))
 	}
 	return mirrors
-}
-
-// romAliasLimit returns where a ROM alias at base must end: before the
-// cartridge port when it starts below it, and before the hardware registers.
-// The mirrors have an address range, so the bus prefers them over the devices
-// that only implement Contains, whatever their order on the bus.
-func romAliasLimit(base uint32) uint32 {
-	if base < cartridgeBase {
-		return cartridgeBase
-	}
-	return ioBase
 }
 
 func (m *Machine) StepFrame() (bool, error) {
