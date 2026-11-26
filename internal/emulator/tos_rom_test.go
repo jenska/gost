@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jenska/gost/internal/config"
 )
@@ -146,6 +147,19 @@ func TestRealTOSBootsToDesktop(t *testing.T) {
 	}
 }
 
+// tosBootClockStart is the IKBD time of day every real-TOS boot starts from.
+//
+// TOS 2.05's IKBD byte writer ($E0189E) waits for a Timer C reload: it spins
+// until $FFFA23 drops below $BE, samples it, then spins until it reads higher
+// than the sample. If Timer C reloads between the guard read and the sample,
+// the sample is the reload value $C0 and the second loop never ends. The
+// emulated 68901 shows $01 then $C0 across a reload exactly like the chip, so
+// whether a boot loses this race depends only on the cycle phase TOS reaches
+// it at, which the time of day it read at boot shifts. With the host clock,
+// start seconds :52-:59 lost it; on emulated time, :51-:58 do. A fixed start
+// that advances with emulated time makes every run identical.
+var tosBootClockStart = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+
 // bootToDesktopAndOpenAbout boots img to the desktop and opens the About box.
 func bootToDesktopAndOpenAbout(t *testing.T, img tosImage, color bool, opts machineOptions) *Machine {
 	t.Helper()
@@ -157,6 +171,11 @@ func bootToDesktopAndOpenAbout(t *testing.T, img tosImage, color bool, opts mach
 	if err != nil {
 		t.Fatalf("create machine: %v", err)
 	}
+	// Pin the IKBD time of day and run it on emulated time. TOS reads it at
+	// boot, and the value shifts the phase of everything after it; left on
+	// the host clock, TOS 2.05 sometimes hangs in its IKBD send routine (see
+	// tosBootClockStart).
+	m.acia.SetIKBDEmulatedClock(tosBootClockStart, uint64(cfg.ClockHz))
 	if img.target.bootFloppy {
 		if err := m.InsertFloppy(0, blankFloppy()); err != nil {
 			t.Fatalf("insert floppy: %v", err)

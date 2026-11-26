@@ -84,6 +84,15 @@
 
 ### Fixed
 
+- The real-TOS regression suite no longer depends on the host clock. TOS 2.05
+  in colour hung on a white screen when the suite started in the last ~8
+  seconds of a minute: the time of day TOS reads from the IKBD at boot shifts
+  the cycle phase of the rest of the boot, and at those phases TOS 2.05's IKBD
+  byte writer lost a race in its Timer C delay loop (the timer reloads between
+  its guard read and its sample of `$FFFA23`, so it waits for a value above
+  `$C0` forever). The IKBD and MFP behave as the hardware does; the suite now
+  pins the IKBD clock to a fixed start that advances with emulated cycles
+  (`IKBD.SetEmulatedClock`, `ACIA.SetIKBDEmulatedClock`).
 - The CPU ran 16-34% faster than a real 8 MHz ST: `RunCycles` finishes the
   current instruction past its budget, and that overshoot was never charged
   back, so the CPU gained part of an instruction on every device quantum. The
