@@ -67,11 +67,44 @@ type IKBD struct {
 	now        func() time.Time
 	clockBase  time.Time
 	clockSetAt time.Time
+	// emulatedClockHz, when non-zero, makes the time of day advance with
+	// emulated cycles from emulatedStart instead of following the host clock.
+	emulatedClockHz uint64
+	emulatedStart   time.Time
+	emulatedCycles  uint64
 }
 
 // NewIKBD constructs an IKBD in its default power-on state.
 func NewIKBD() *IKBD {
 	return &IKBD{now: time.Now}
+}
+
+// SetEmulatedClock makes the time of day start at start and advance with the
+// emulated cycles passed to AdvanceClock, at clockHz cycles per second, instead
+// of following the host clock. Runs then report the same time regardless of
+// when or how fast they execute.
+func (i *IKBD) SetEmulatedClock(start time.Time, clockHz uint64) {
+	i.emulatedClockHz = clockHz
+	i.emulatedStart = start
+	i.emulatedCycles = 0
+	i.now = i.emulatedNow
+	now := i.nowTime()
+	i.clockBase = now
+	i.clockSetAt = now
+}
+
+// AdvanceClock moves an emulated time of day on by cycles. It does nothing
+// while the IKBD follows the host clock.
+func (i *IKBD) AdvanceClock(cycles uint64) {
+	if i.emulatedClockHz != 0 {
+		i.emulatedCycles += cycles
+	}
+}
+
+func (i *IKBD) emulatedNow() time.Time {
+	secs := i.emulatedCycles / i.emulatedClockHz
+	frac := i.emulatedCycles % i.emulatedClockHz
+	return i.emulatedStart.Add(time.Duration(secs)*time.Second + time.Duration(frac*uint64(time.Second)/i.emulatedClockHz))
 }
 
 // Reset clears queued data and restores the controller state to defaults.
@@ -270,6 +303,11 @@ func ikbdCommandExtraBytes(cmd byte) int {
 func (i *IKBD) nowTime() time.Time {
 	if i.now == nil {
 		i.now = time.Now
+	}
+	if i.emulatedClockHz != 0 {
+		// An emulated clock keeps its start's zone so the reported hour does
+		// not depend on the host's.
+		return i.now().Truncate(time.Second)
 	}
 	return i.now().Local().Truncate(time.Second)
 }

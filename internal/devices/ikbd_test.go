@@ -1,6 +1,7 @@
 package devices
 
 import (
+	"bytes"
 	"testing"
 	"time"
 )
@@ -242,4 +243,68 @@ func newTestIKBD(now time.Time) *IKBD {
 	ikbd := NewIKBD()
 	ikbd.now = func() time.Time { return now }
 	return ikbd
+}
+
+func readIKBDClock(t *testing.T, ikbd *IKBD) []byte {
+	t.Helper()
+	ikbd.HandleCommand(ikbdCmdInterrogateClock)
+	got := make([]byte, 7)
+	for idx := range got {
+		b, err := ikbd.ReadByte()
+		if err != nil {
+			t.Fatalf("read clock byte %d: %v", idx, err)
+		}
+		got[idx] = b
+	}
+	return got
+}
+
+func TestIKBDEmulatedClockAdvancesWithCyclesNotHostTime(t *testing.T) {
+	const hz = 8_000_000
+	ikbd := NewIKBD()
+	ikbd.now = func() time.Time { t.Fatal("emulated clock consulted the host clock"); return time.Time{} }
+	ikbd.SetEmulatedClock(time.Date(2026, time.December, 31, 23, 59, 58, 0, time.UTC), hz)
+
+	if got, want := readIKBDClock(t, ikbd), []byte{0xFC, 0x26, 0x12, 0x31, 0x23, 0x59, 0x58}; !bytes.Equal(got, want) {
+		t.Fatalf("start clock = % x, want % x", got, want)
+	}
+	ikbd.AdvanceClock(hz - 1)
+	if got, want := readIKBDClock(t, ikbd), []byte{0xFC, 0x26, 0x12, 0x31, 0x23, 0x59, 0x58}; !bytes.Equal(got, want) {
+		t.Fatalf("clock just under 1 s later = % x, want % x", got, want)
+	}
+	// Two seconds in, the clock rolls over the minute, hour, day and year.
+	ikbd.AdvanceClock(hz + 1)
+	if got, want := readIKBDClock(t, ikbd), []byte{0xFC, 0x27, 0x01, 0x01, 0x00, 0x00, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("clock after rollover = % x, want % x", got, want)
+	}
+
+	// A keyboard reset keeps the emulated clock running from where it was.
+	ikbd.HandleCommand(ikbdCmdReset)
+	ikbd.HandleCommand(0x01)
+	if b, _ := ikbd.ReadByte(); b != ikbdReplySelfTestOK {
+		t.Fatalf("reset reply = %02x, want %02x", b, ikbdReplySelfTestOK)
+	}
+	ikbd.AdvanceClock(3 * hz)
+	if got, want := readIKBDClock(t, ikbd), []byte{0xFC, 0x27, 0x01, 0x01, 0x00, 0x00, 0x03}; !bytes.Equal(got, want) {
+		t.Fatalf("clock after reset = % x, want % x", got, want)
+	}
+
+	// A clock set by the guest keeps ticking on emulated time.
+	for _, b := range []byte{ikbdCmdSetClock, 0x92, 0x02, 0x28, 0x10, 0x00, 0x55} {
+		ikbd.HandleCommand(b)
+	}
+	ikbd.AdvanceClock(5 * hz)
+	if got, want := readIKBDClock(t, ikbd), []byte{0xFC, 0x92, 0x02, 0x28, 0x10, 0x01, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("clock after set = % x, want % x", got, want)
+	}
+}
+
+func TestACIAAdvancesEmulatedIKBDClock(t *testing.T) {
+	const hz = 8_000_000
+	acia := NewACIA(func(bool) {})
+	acia.SetIKBDEmulatedClock(time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC), hz)
+	acia.Advance(7 * hz)
+	if got, want := readIKBDClock(t, acia.ikbd), []byte{0xFC, 0x26, 0x01, 0x01, 0x12, 0x00, 0x07}; !bytes.Equal(got, want) {
+		t.Fatalf("clock after 7 s of ACIA time = % x, want % x", got, want)
+	}
 }

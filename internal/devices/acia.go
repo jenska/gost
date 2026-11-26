@@ -1,6 +1,8 @@
 package devices
 
 import (
+	"time"
+
 	cpu "github.com/jenska/m68kemu"
 )
 
@@ -47,6 +49,12 @@ func NewACIA(aciaIRQ func(bool)) *ACIA {
 	a := &ACIA{ikbd: NewIKBD(), midi: NewMIDI(), aciaIRQ: aciaIRQ}
 	a.Reset()
 	return a
+}
+
+// SetIKBDEmulatedClock pins the IKBD's time of day to start and advances it
+// with emulated time at clockHz; see IKBD.SetEmulatedClock.
+func (a *ACIA) SetIKBDEmulatedClock(start time.Time, clockHz uint64) {
+	a.ikbd.SetEmulatedClock(start, clockHz)
 }
 
 // Contains reports whether the given address is serviced by the ACIA.
@@ -122,6 +130,7 @@ func (a *ACIA) Write(size cpu.Size, address uint32, value uint32) error {
 // Advance moves each channel's serial line on by cycles, receiving bytes from
 // the attached IKBD and MIDI endpoints at their baud rates.
 func (a *ACIA) Advance(cycles uint64) {
+	a.ikbd.AdvanceClock(cycles)
 	for channel := range uint32(aciaChannelCt) {
 		a.advanceReceive(channel, cycles)
 	}
