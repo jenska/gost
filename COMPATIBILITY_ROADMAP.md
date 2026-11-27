@@ -110,10 +110,9 @@ type Shifter struct {
     synchronisation, YM wait states charged once per instruction
   - Impact: Code with tight raster or timer timing can drift by a few cycles
   
-- ❌ Line-to-line / dynamically-updated screen base changes
-  - Current: Per-frame base handling is covered and STE low-address support exists
-  - Required: Per-scanline and more dynamic base-address updates
-  - Impact: Mid-screen scrolling effects fail
+- ✅ Line-to-line / dynamically-updated screen base changes
+  - Current: Base latched per frame, live video counter readback, STE mid-frame counter and line offset writes resolved at the CPU cycle of the access, mid-line palette changes rendered per pixel
+  - Remaining approximation: writes land at the end of the accessing instruction, and the display is assumed to show a pixel in the cycle it is fetched (no shifter pipeline delay)
   
 - ⚠️ Fine scroll (ST) / Horizontal scroll (STE)
   - Current: STE fine scroll, line offset, and extended palette paths are implemented and tested
@@ -139,7 +138,7 @@ type Shifter struct {
 - ✅ Screen base changes per frame
 - ✅ Mid-frame palette/blanking behaviors
 - ✅ STF wait-state coverage (RAM/ROM zero-wait, I/O delays)
-- ❌ Mid-frame base changes
+- ✅ Mid-frame base changes (next-frame latch, STE counter writes, live readback)
 - ❌ Cycle-precise contention/timing validation
 
 **Files Affected:**
@@ -520,11 +519,12 @@ internal/emulator/
   - Impact: Better CPU/shifter timing, graphics stability
   - Tests: Cycle count validation per scanline
   
-- **Implement mid-frame screen base changes**
-  - Files: [internal/devices/shifter.go](internal/devices/shifter.go)
-  - Effort: 3-4 days
-  - Impact: Scrolling effects work
-  - Tests: Base address tracking, render validation
+- ✅ **Mid-frame screen base / video counter behaviour landed**
+  - Files: [internal/devices/shifter.go](internal/devices/shifter.go), [internal/devices/shifter_ste.go](internal/devices/shifter_ste.go)
+  - Delivered: screen base latched between frames; live video counter readback (`$FF8209` readable on ST); STE mid-frame counter writes split the screen; displayed lines on the HBL/Timer B raster, with each line taking the registers written before its fetch starts
+  - Tests: next-frame base latch, STE split screen (border and mid-fetch writes), ST counter write-protection, raster readback, Timer B-style palette split
+  - Delivered (follow-up): shifter register accesses resolve at the CPU's cycle via a machine frame clock; mid-line palette changes; STE line offset applied at the end of the line being fetched; MFP Timer B event count on display-end edges; STE horizontal-scroll prefetch (8/4/2 bytes per line) and high-resolution scroll rendering
+  - Tests: CPU-timed mid-line palette write at machine level, frame clock counter readback, mid-fetch line offset, prefetch strides per resolution, high-resolution scroll, Timer B display-end edge
 
 #### 1.3 GPIP Edge Detection (AER/DDR)
 - ✅ **Data direction register (DDR) enforcement landed**

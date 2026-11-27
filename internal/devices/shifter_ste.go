@@ -50,20 +50,25 @@ func (steShifterModel) screenBase(s *Shifter) uint32 {
 	return uint32(s.baseHigh)<<16 | uint32(s.baseMid)<<8 | uint32(s.baseLow)
 }
 
-func (steShifterModel) screenBaseFromState(state shifterLineState) uint32 {
-	return uint32(state.baseHigh)<<16 | uint32(state.baseMid)<<8 | uint32(state.baseLow)
-}
-
-func (steShifterModel) sameScreenBase(a, b shifterLineState) bool {
-	return a.baseHigh == b.baseHigh && a.baseMid == b.baseMid && a.baseLow == b.baseLow
-}
-
-func (steShifterModel) lineStrideBytes(state shifterLineState, mode byte) uint32 {
-	base := uint32(160)
-	if mode == 2 {
-		base = 80
+// lineFetchBytes includes the extra word per bitplane the STE prefetches for
+// a line whenever horizontal scrolling is on, so the pixels shifted in at the
+// right edge have data: 8 bytes in low, 4 in medium and 2 in high resolution.
+func (steShifterModel) lineFetchBytes(state shifterLineState, mode byte) uint32 {
+	fetch, prefetch := uint32(160), uint32(8)
+	switch mode {
+	case 1:
+		prefetch = 4
+	case 2:
+		fetch, prefetch = 80, 2
 	}
-	return base + uint32(state.lineOffset)*2
+	if state.fineScroll&0x0F != 0 {
+		fetch += prefetch
+	}
+	return fetch
+}
+
+func (m steShifterModel) lineStrideBytes(state shifterLineState, mode byte) uint32 {
+	return m.lineFetchBytes(state, mode) + uint32(state.lineOffset)*2
 }
 
 func (steShifterModel) fineScroll(state shifterLineState) int {
@@ -83,8 +88,6 @@ func (steShifterModel) paletteColorChannels(colorValue uint16) (r, g, b byte) {
 
 func (steShifterModel) readByte(s *Shifter, address uint32) (byte, bool) {
 	switch address {
-	case shifterRegVideoAddrLow:
-		return byte(s.currentVideoAddress()), true
 	case shifterRegLineOffset:
 		return s.lineOffset, true
 	case shifterRegFineScroll:
@@ -98,11 +101,20 @@ func (steShifterModel) readByte(s *Shifter, address uint32) (byte, bool) {
 
 func (steShifterModel) writeByte(s *Shifter, address uint32, value byte) bool {
 	switch address {
+	case shifterRegVideoAddrHigh:
+		s.writeVideoCounterByte(16, value)
+		return true
+	case shifterRegVideoAddrMid:
+		s.writeVideoCounterByte(8, value)
+		return true
+	case shifterRegVideoAddrLow:
+		s.writeVideoCounterByte(0, value)
+		return true
 	case shifterRegBaseLow:
 		s.baseLow = value
 		return true
 	case shifterRegLineOffset:
-		s.lineOffset = value
+		s.setLineOffset(value)
 		return true
 	case shifterRegFineScroll:
 		s.fineScroll = value & 0x0F

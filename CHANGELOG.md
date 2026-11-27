@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.4.1 - 2026-11-27
+
 ### Added
 
 - `--fast-floppy` (config key `fast-floppy`, "Floppy" in the configuration
@@ -36,6 +38,29 @@
   Ebiten game loop without a main-thread AppKit call.
 
 ### Changed
+
+- The shifter now follows the video counter the way real hardware does. A write
+  to the screen base (`$FF8201/03`, and `$FF820D` on the STE) shows from the
+  next frame instead of the following scanline, because the counter is only
+  reloaded from the base between frames. On the STE the video counter
+  (`$FF8205/07/09`) is writable mid-frame, so writing it in an HBL or Timer B
+  handler splits the screen from the next line on. Reading the counter returns
+  the live raster position, and `$FF8209` is now readable on the ST as well.
+  The displayed lines sit on the same raster as HBL and Timer B, and a line
+  takes the palette and registers written before its fetch starts, so Timer B
+  raster effects land on the line they target instead of one line late.
+- Shifter register accesses take effect at the CPU cycle they happen on rather
+  than at the end of the up-to-512-cycle step the machine runs the CPU in. A
+  palette write made while a line is shown changes the colour from that pixel
+  on, so pictures that rewrite the palette along each line (Spectrum 512 style)
+  display. An STE line offset (`$FF820F`) written during a line's fetch applies
+  at that line's end.
+- MFP Timer B in event-count mode now counts at the end of each displayed
+  line's display period, as on real hardware, instead of at the line boundary.
+- With STE horizontal scrolling on (`$FF8265` non-zero), the shifter fetches
+  one extra word per bitplane each line (8, 4 or 2 bytes in low, medium and
+  high resolution), as the hardware does, so scrolled lines advance the video
+  counter correctly. High-resolution scrolling is now drawn too.
 
 - `--preset` and the `preset` config key now take the launcher's machine IDs
   (`520st`, `1040stf`, `1040ste`, `megast1`, `megast2`, `megast4`, `megaste`);
@@ -127,6 +152,15 @@
   runners never call, so the shipped binary never actually used it.
 
 ### Dependencies
+
+- `github.com/jenska/m68kemu` v1.7.0 → v1.9.0 (MC68030/MC68040 MMUs, the
+  MC68040 and its FPU, CALLM/RTM). Its breaking changes (the memory-mapped FPU
+  interface moved to `fpu/cir`, `FPU.Coprocessor` returns `*fpu.Coprocessor`,
+  the `Version` constant is gone) do not touch the 68000 core GoST uses, so no
+  code changed. `github.com/jenska/m68kdasm` v1.4.1 → v1.4.2,
+  `github.com/hajimehoshi/ebiten/v2` v2.10.4 → v2.10.6,
+  `github.com/ebitengine/purego` v0.11.1 → v0.11.3, `golang.org/x/image`
+  v0.46.0 → v0.48.0 and the indirect `golang.org/x` modules
 
 - `github.com/jenska/m68kemu` v1.6.2 → v1.7.0: `NewCPU` returns `*CPU`;
   `SetFastMemory`/`FastRegion` gave way to `MemoryDevice` plus `Bus.Remap`, and

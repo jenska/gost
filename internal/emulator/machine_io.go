@@ -65,8 +65,11 @@ type (
 		cpuCycleCarry uint64
 		// cpuCycleDebt is how far the CPU ran past its last budget; see runCPU.
 		cpuCycleDebt uint64
-		traceWriter  io.Writer
-		frameCounter uint64
+		// frameStartCPUCycles is the CPU cycle count at which the current
+		// frame began; see shifterFrameClock.
+		frameStartCPUCycles uint64
+		traceWriter         io.Writer
+		frameCounter        uint64
 		// romMirrors map the ROM image at each of its aliases.
 		romMirrors []*devices.ROMMirror
 	}

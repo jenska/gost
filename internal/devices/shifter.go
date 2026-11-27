@@ -2,6 +2,7 @@ package devices
 
 import (
 	"runtime"
+	"sort"
 	"time"
 
 	"github.com/jenska/gost/internal/config"
@@ -46,8 +47,9 @@ const (
 type shifterModel interface {
 	containsRegister(address uint32) bool
 	screenBase(s *Shifter) uint32
-	screenBaseFromState(state shifterLineState) uint32
-	sameScreenBase(a, b shifterLineState) bool
+	// lineFetchBytes is the number of bytes fetched across a line's fetch
+	// window; lineStrideBytes adds the STE line offset applied after it.
+	lineFetchBytes(state shifterLineState, mode byte) uint32
 	lineStrideBytes(state shifterLineState, mode byte) uint32
 	fineScroll(state shifterLineState) int
 	paletteMask() uint16
@@ -129,9 +131,6 @@ func init() {
 }
 
 type shifterLineState struct {
-	baseHigh   byte
-	baseMid    byte
-	baseLow    byte
 	lineOffset byte
 	fineScroll byte
 	palette    [paletteRegisterCt]uint16
@@ -164,24 +163,35 @@ type ShifterDebugStats struct {
 }
 
 type Shifter struct {
-	cfg              *config.Config
-	ram              *RAM
-	model            shifterModel
-	baseHigh         byte
-	baseMid          byte
-	baseLow          byte
-	lineOffset       byte
-	fineScroll       byte
-	syncMode         byte
-	resolution       byte
-	palette          [paletteRegisterCt]uint16
-	framebuffer      []byte
-	width            int
-	height           int
-	videoCounter     uint32
-	frameCyclePos    uint64
-	frameResolution  byte
-	frameActive      bool
+	cfg             *config.Config
+	ram             *RAM
+	model           shifterModel
+	baseHigh        byte
+	baseMid         byte
+	baseLow         byte
+	lineOffset      byte
+	fineScroll      byte
+	syncMode        byte
+	resolution      byte
+	palette         [paletteRegisterCt]uint16
+	framebuffer     []byte
+	width           int
+	height          int
+	videoCounter    uint32
+	frameCyclePos   uint64
+	frameResolution byte
+	frameActive     bool
+	frameScanlines  uint64
+	// fetchLine is the next displayed line whose fetch has not started, and
+	// nextFetch the video counter value that line will start from.
+	fetchLine int
+	nextFetch uint32
+	// frameClock reports the CPU's position in the frame in machine cycles,
+	// so register accesses resolve at the cycle they happen; scheduledPos is
+	// how far AdvanceFrame has taken the frame.
+	frameClock       func() uint64
+	scheduledPos     uint64
+	paletteEvents    []shifterPaletteEvent
 	lineStates       []shifterLineState
 	lineAddrs        []uint32
 	renderStats      []shifterRenderStats
@@ -264,6 +274,11 @@ func (s *Shifter) Reset() {
 	s.frameCyclePos = 0
 	s.frameResolution = 0
 	s.frameActive = false
+	s.frameScanlines = 0
+	s.fetchLine = 0
+	s.nextFetch = 0
+	s.scheduledPos = 0
+	s.paletteEvents = s.paletteEvents[:0]
 	s.lineStates = s.lineStates[:0]
 	s.lineAddrs = s.lineAddrs[:0]
 	s.renderStats = s.renderStats[:0]
@@ -285,6 +300,7 @@ func (s *Shifter) Reset() {
 }
 
 func (s *Shifter) Read(size cpu.Size, address uint32) (uint32, error) {
+	s.syncToClock()
 	switch size {
 	case cpu.Byte:
 		return uint32(s.readByte(address)), nil
@@ -308,6 +324,7 @@ func (s *Shifter) Peek(size cpu.Size, address uint32) (uint32, error) {
 }
 
 func (s *Shifter) Write(size cpu.Size, address uint32, value uint32) error {
+	s.syncToClock()
 	switch size {
 	case cpu.Byte:
 		s.writeByte(address, byte(value))
@@ -395,14 +412,20 @@ func (s *Shifter) BeginFrame() {
 	} else {
 		s.lineStates = s.lineStates[:lineCount]
 	}
-	if lineCount > 0 {
-		// New lines inherit the current register/palette state until
-		// AdvanceFrame snapshots a new state boundary.
-		state := s.snapshotLineState()
-		for i := range s.lineStates {
-			s.lineStates[i] = state
-		}
+	if cap(s.lineAddrs) < lineCount {
+		s.lineAddrs = make([]uint32, lineCount)
+	} else {
+		s.lineAddrs = s.lineAddrs[:lineCount]
 	}
+	// The displayed lines are the first ones after VBL, on the raster the GLUE
+	// (HBL) and the MFP Timer B event counter run on.
+	s.frameScanlines = max(VideoTimingFor(s.cfg).Scanlines, uint64(lineCount))
+	// The video counter is reloaded from the screen base only between frames,
+	// so a base write made during a frame shows from the next frame on.
+	s.fetchLine = 0
+	s.nextFetch = s.model.screenBase(s)
+	s.scheduledPos = 0
+	s.paletteEvents = s.paletteEvents[:0]
 
 	slotCount := lineCount * shifterRasterSegments
 	if cap(s.slotSyncModes) < slotCount {
@@ -415,22 +438,42 @@ func (s *Shifter) BeginFrame() {
 	}
 }
 
+// SetFrameClock gives the shifter the CPU's current position in the frame,
+// in machine cycles since BeginFrame. Register accesses then take effect at
+// that cycle rather than at the end of the step AdvanceFrame is called for.
+func (s *Shifter) SetFrameClock(clock func() uint64) {
+	s.frameClock = clock
+}
+
 func (s *Shifter) AdvanceFrame(cycles uint64) {
-	if !s.frameActive || len(s.lineStates) == 0 || cycles == 0 {
+	s.scheduledPos += cycles
+	s.advanceTo(s.scheduledPos)
+}
+
+// syncToClock brings the raster up to the CPU's position before a register
+// access.
+func (s *Shifter) syncToClock() {
+	if s.frameActive && s.frameClock != nil {
+		s.advanceTo(s.frameClock())
+	}
+}
+
+// advanceTo moves the raster forward to frame cycle pos.
+func (s *Shifter) advanceTo(pos uint64) {
+	pos = min(pos, s.frameCycles())
+	if !s.frameActive || len(s.lineStates) == 0 || pos <= s.frameCyclePos {
 		return
 	}
-	frameCycles := s.frameCycles()
 	prevPos := s.frameCyclePos
-	prevLine := s.frameLineIndex(prevPos)
-	s.frameCyclePos += cycles
-	if s.frameCyclePos > frameCycles {
-		s.frameCyclePos = frameCycles
-	}
-	nextLine := s.frameLineIndex(s.frameCyclePos)
-	// Snapshot state transitions per scanline so mid-frame register writes
-	// affect only the lines rendered after the write.
-	for line := prevLine + 1; line <= nextLine && line < len(s.lineStates); line++ {
-		s.lineStates[line] = s.snapshotLineState()
+	s.frameCyclePos = pos
+	// A line takes the registers and the video counter as they are when its
+	// fetch starts, so a write made in the border before it (where HBL and
+	// Timer B handlers run) shows on that line and later writes on the next.
+	for s.fetchLine < len(s.lineStates) {
+		if start, _ := s.lineFetchWindow(s.fetchLine); start >= s.frameCyclePos {
+			break
+		}
+		s.startLineFetch()
 	}
 
 	if len(s.slotSyncModes) == 0 {
@@ -451,10 +494,7 @@ func (s *Shifter) EndFrame() bool {
 	if !s.frameActive {
 		return false
 	}
-	frameCycles := s.frameCycles()
-	if s.frameCyclePos < frameCycles {
-		s.AdvanceFrame(frameCycles - s.frameCyclePos)
-	}
+	s.advanceTo(s.frameCycles())
 
 	var renderStart time.Time
 	if s.debugEnabled {
@@ -495,6 +535,15 @@ func dimensionsForResolution(resolution byte) (int, int) {
 	}
 }
 
+// shifterPaletteEvent is a palette write made while line was shown: pixels
+// from x on use value for colour index.
+type shifterPaletteEvent struct {
+	line  int32
+	x     int32
+	index uint8
+	value uint16
+}
+
 type shifterRenderStats struct {
 	pixelsDrawn uint64
 	videoWords  uint64
@@ -515,6 +564,7 @@ type shifterRenderJob struct {
 	model       shifterModel
 	states      []shifterLineState
 	lineAddrs   []uint32
+	events      []shifterPaletteEvent
 	stats       []shifterRenderStats
 	videoData   []byte
 	videoLen    uint32
@@ -533,7 +583,10 @@ type shifterRenderTask struct {
 
 func (s *Shifter) renderFrame() {
 	mode := s.frameResolution & 3
-	s.prepareRenderLineAddrs(mode)
+	// Lines the frame never reached (no frame timing) take the current state.
+	for s.fetchLine < len(s.lineStates) {
+		s.startLineFetch()
+	}
 	workers := shifterRenderWorkers(s.height, mode)
 	if cap(s.renderStats) < workers {
 		s.renderStats = make([]shifterRenderStats, workers)
@@ -553,6 +606,7 @@ func (s *Shifter) renderFrame() {
 		model:       s.model,
 		states:      s.lineStates,
 		lineAddrs:   s.lineAddrs,
+		events:      s.paletteEvents,
 		stats:       s.renderStats,
 		videoData:   videoData,
 		videoLen:    uint32(len(videoData)),
@@ -573,36 +627,9 @@ func (s *Shifter) renderFrame() {
 		s.frameReadFaults += stats.readFaults
 	}
 	if len(s.lineAddrs) > 0 {
-		last := len(s.lineAddrs) - 1
-		s.videoCounter = s.lineAddrs[last] + s.model.lineStrideBytes(s.lineStates[last], mode)
+		s.videoCounter = s.nextFetch
 	}
 	s.applyBlankSegments()
-}
-
-func (s *Shifter) prepareRenderLineAddrs(mode byte) {
-	lineCount := len(s.lineStates)
-	if cap(s.lineAddrs) < lineCount {
-		s.lineAddrs = make([]uint32, lineCount)
-	} else {
-		s.lineAddrs = s.lineAddrs[:lineCount]
-	}
-	if lineCount == 0 {
-		return
-	}
-
-	model := s.model
-	var prevState shifterLineState
-	for y := range lineCount {
-		lineState := s.lineStates[y]
-		if y == 0 {
-			s.lineAddrs[y] = model.screenBaseFromState(lineState)
-		} else if model.sameScreenBase(prevState, lineState) {
-			s.lineAddrs[y] = s.lineAddrs[y-1] + model.lineStrideBytes(prevState, mode)
-		} else {
-			s.lineAddrs[y] = model.screenBaseFromState(lineState)
-		}
-		prevState = lineState
-	}
 }
 
 func (s *Shifter) renderParallel(job shifterRenderJob, workers int) shifterRenderStats {
@@ -668,7 +695,35 @@ func shifterRenderWorkers(height int, mode byte) int {
 	return workers
 }
 
+// renderRange draws lines [startY, endY). Runs of plain lines go through the
+// per-mode fast paths; a line with mid-line palette changes, or a scrolled
+// monochrome line, is drawn pixel by pixel.
 func (j shifterRenderJob) renderRange(startY, endY int) shifterRenderStats {
+	var stats shifterRenderStats
+	event := sort.Search(len(j.events), func(i int) bool { return int(j.events[i].line) >= startY })
+	runStart := startY
+	for y := startY; y < endY; y++ {
+		eventEnd := event
+		for eventEnd < len(j.events) && int(j.events[eventEnd].line) == y {
+			eventEnd++
+		}
+		scrolledMono := j.mode == 2 && j.model.fineScroll(j.states[y]) != 0
+		if eventEnd == event && !scrolledMono {
+			continue
+		}
+		stats.add(j.renderFastRange(runStart, y))
+		stats.add(j.renderLinePixels(y, j.events[event:eventEnd]))
+		event = eventEnd
+		runStart = y + 1
+	}
+	stats.add(j.renderFastRange(runStart, endY))
+	return stats
+}
+
+func (j shifterRenderJob) renderFastRange(startY, endY int) shifterRenderStats {
+	if startY >= endY {
+		return shifterRenderStats{}
+	}
 	switch j.mode {
 	case 0:
 		return j.renderLowRange(startY, endY)
@@ -677,6 +732,91 @@ func (j shifterRenderJob) renderRange(startY, endY int) shifterRenderStats {
 	default:
 		return j.renderHighRange(startY, endY)
 	}
+}
+
+func (stats *shifterRenderStats) add(other shifterRenderStats) {
+	stats.pixelsDrawn += other.pixelsDrawn
+	stats.videoWords += other.videoWords
+	stats.readFaults += other.readFaults
+}
+
+// renderLinePixels draws line y one pixel at a time, applying the palette
+// writes made while it was shown at the pixels they happened at.
+func (j shifterRenderJob) renderLinePixels(y int, events []shifterPaletteEvent) shifterRenderStats {
+	var stats shifterRenderStats
+	var indices [640]byte
+	state := j.states[y]
+	planes := 4 >> j.mode
+	scroll := j.model.fineScroll(state)
+	for group := range j.width/16 + (scroll+15)/16 {
+		offset := j.lineAddrs[y] + uint32(group*planes*2)
+		var words [4]uint16
+		ok := true
+		for plane := 0; plane < planes && ok; plane++ {
+			words[plane], ok = j.videoWord(offset+uint32(plane*2), &stats)
+		}
+		if !ok {
+			continue
+		}
+		for bit := range 16 {
+			x := group*16 + bit - scroll
+			if x < 0 || x >= j.width {
+				continue
+			}
+			var index byte
+			for plane := range planes {
+				if words[plane]&(0x8000>>bit) != 0 {
+					index |= 1 << plane
+				}
+			}
+			indices[x] = index
+		}
+	}
+
+	var palette shifterPaletteRGB
+	if j.mode == 2 {
+		palette.reds[0], palette.greens[0], palette.blues[0] = 0xFF, 0xFF, 0xFF
+	} else {
+		for i := range paletteRegisterCt {
+			palette.reds[i], palette.greens[i], palette.blues[i] = j.model.paletteColorChannels(state.palette[i])
+		}
+	}
+	row := j.framebuffer[y*j.width*4 : (y+1)*j.width*4]
+	for x := range j.width {
+		for len(events) > 0 && int(events[0].x) <= x {
+			if j.mode != 2 {
+				e := events[0]
+				palette.reds[e.index], palette.greens[e.index], palette.blues[e.index] = j.model.paletteColorChannels(e.value)
+			}
+			events = events[1:]
+		}
+		index := indices[x]
+		row[x*4] = palette.reds[index]
+		row[x*4+1] = palette.greens[index]
+		row[x*4+2] = palette.blues[index]
+		row[x*4+3] = 0xFF
+	}
+	if j.debug {
+		stats.pixelsDrawn += uint64(j.width)
+	}
+	return stats
+}
+
+// videoWord reads one big-endian word of video memory.
+func (j shifterRenderJob) videoWord(address uint32, stats *shifterRenderStats) (uint16, bool) {
+	if !j.linearVideo {
+		return j.readVideoWord(address, stats)
+	}
+	if j.videoLen < 2 || address > j.videoLen-2 {
+		if j.debug {
+			stats.readFaults++
+		}
+		return 0, false
+	}
+	if j.debug {
+		stats.videoWords++
+	}
+	return uint16(j.videoData[address])<<8 | uint16(j.videoData[address+1]), true
 }
 
 func (j shifterRenderJob) renderLowRange(startY, endY int) shifterRenderStats {
@@ -951,6 +1091,8 @@ func (s *Shifter) readByte(address uint32) byte {
 		return byte(s.currentVideoAddress() >> 16)
 	case shifterRegVideoAddrMid:
 		return byte(s.currentVideoAddress() >> 8)
+	case shifterRegVideoAddrLow:
+		return byte(s.currentVideoAddress())
 	case shifterRegSyncMode:
 		return s.syncMode
 	case shifterRegResolution:
@@ -994,22 +1136,132 @@ func (s *Shifter) writeByte(address uint32, value byte) {
 				current = (current & 0xFF00) | uint16(value)
 			}
 			s.palette[index] = current & s.model.paletteMask()
+			s.recordPaletteChange(int(index))
 		}
 	}
 }
 
 func (s *Shifter) currentVideoAddress() uint32 {
+	if s.frameActive {
+		return s.liveVideoCounter()
+	}
 	if s.videoCounter != 0 {
 		return s.videoCounter
 	}
 	return s.ScreenBase()
 }
 
+// lineInFetch reports the displayed line whose fetch window contains the
+// current frame position, with that window.
+func (s *Shifter) lineInFetch() (line int, start, end uint64, ok bool) {
+	line = s.fetchLine - 1
+	if !s.frameActive || line < 0 {
+		return 0, 0, 0, false
+	}
+	start, end = s.lineFetchWindow(line)
+	if s.frameCyclePos >= end {
+		return 0, 0, 0, false
+	}
+	return line, start, end, true
+}
+
+// liveVideoCounter is the video counter at the current frame position: inside
+// a line's fetch window it walks through that line, elsewhere it holds the
+// address the next line starts from.
+func (s *Shifter) liveVideoCounter() uint32 {
+	line, start, end, ok := s.lineInFetch()
+	if !ok {
+		return s.nextFetch
+	}
+	// Derived from nextFetch rather than the line's start address so that it
+	// follows a counter write made during this line's fetch.
+	stride := s.model.lineStrideBytes(s.lineStates[line], s.frameResolution)
+	return s.nextFetch - stride + s.lineBytesFetched(line, start, end)
+}
+
+// writeVideoCounterByte replaces one byte of the video counter (writable on
+// the STE only). Inside a line's fetch window the shifter carries on from the
+// new address, so the next line starts where that leaves off; outside one the
+// next line starts at the new address. Between frames the counter is reloaded
+// from the screen base before the next frame's first fetch.
+func (s *Shifter) writeVideoCounterByte(shift uint, value byte) {
+	counter := s.currentVideoAddress()
+	counter = (counter&^(0xFF<<shift) | uint32(value)<<shift) &^ 1
+	if !s.frameActive {
+		s.videoCounter = counter
+		return
+	}
+	if line, start, end, ok := s.lineInFetch(); ok {
+		stride := s.model.lineStrideBytes(s.lineStates[line], s.frameResolution)
+		s.nextFetch = counter + stride - s.lineBytesFetched(line, start, end)
+		return
+	}
+	s.nextFetch = counter
+}
+
+// setLineOffset writes the STE line offset. The shifter adds it to the video
+// counter when a line's fetch ends, so a write during the fetch already
+// applies to that line.
+func (s *Shifter) setLineOffset(value byte) {
+	if line, _, _, ok := s.lineInFetch(); ok {
+		s.nextFetch += (uint32(value) - uint32(s.lineStates[line].lineOffset)) * 2
+		s.lineStates[line].lineOffset = value
+	}
+	s.lineOffset = value
+}
+
+// recordPaletteChange notes a palette write made while a line is shown, so
+// the rest of that line is drawn with the new colour. A write outside a fetch
+// window reaches the next line through its register snapshot.
+func (s *Shifter) recordPaletteChange(index int) {
+	line, start, end, ok := s.lineInFetch()
+	if !ok {
+		return
+	}
+	s.paletteEvents = append(s.paletteEvents, shifterPaletteEvent{
+		line:  int32(line),
+		x:     int32((s.frameCyclePos - start) * uint64(s.width) / (end - start)),
+		index: uint8(index),
+		value: s.palette[index],
+	})
+}
+
+// startLineFetch begins the fetch of the next displayed line from the current
+// registers and video counter.
+func (s *Shifter) startLineFetch() {
+	line := s.fetchLine
+	s.lineStates[line] = s.snapshotLineState()
+	s.lineAddrs[line] = s.nextFetch
+	s.nextFetch += s.model.lineStrideBytes(s.lineStates[line], s.frameResolution)
+	s.fetchLine++
+}
+
+// lineBytesFetched is how far the fetch of a line has got at the current
+// frame position, given the line's fetch window.
+func (s *Shifter) lineBytesFetched(line int, start, end uint64) uint32 {
+	fetch := s.model.lineFetchBytes(s.lineStates[line], s.frameResolution)
+	elapsed := min(s.frameCyclePos, end) - min(s.frameCyclePos, start)
+	return uint32(elapsed*uint64(fetch)/(end-start)) &^ 1
+}
+
+// rasterTiming is the raster the current frame runs on.
+func (s *Shifter) rasterTiming() VideoTiming {
+	return VideoTiming{FrameCycles: s.frameCycles(), Scanlines: s.frameScanlines, Mono: s.frameResolution == 2}
+}
+
+// lineStartCycle is the frame cycle at which raster line line begins.
+func (s *Shifter) lineStartCycle(line int) uint64 {
+	return s.rasterTiming().LineStartCycle(uint64(line))
+}
+
+// lineFetchWindow is the span of frame cycles in which the shifter fetches a
+// displayed line.
+func (s *Shifter) lineFetchWindow(line int) (start, end uint64) {
+	return s.rasterTiming().DisplayWindow(uint64(line))
+}
+
 func (s *Shifter) snapshotLineState() shifterLineState {
 	return shifterLineState{
-		baseHigh:   s.baseHigh,
-		baseMid:    s.baseMid,
-		baseLow:    s.baseLow,
 		lineOffset: s.lineOffset,
 		fineScroll: s.fineScroll,
 		palette:    s.palette,
@@ -1023,24 +1275,28 @@ func (s *Shifter) lineState(line int) shifterLineState {
 	return s.lineStates[line]
 }
 
-func (s *Shifter) frameLineIndex(cycles uint64) int {
-	return frameIndex(cycles, s.frameCycles(), len(s.lineStates))
-}
-
+// frameSlotIndex maps a frame cycle position to the raster segment of the
+// displayed line it falls in; positions after the last displayed line map to
+// len(s.slotSyncModes).
 func (s *Shifter) frameSlotIndex(cycles uint64) int {
-	return frameIndex(cycles, s.frameCycles(), len(s.slotSyncModes))
-}
-
-func frameIndex(cycles, frameCycles uint64, count int) int {
-	// Map frame cycle position to a [0,count] segment index.
-	if count == 0 || frameCycles == 0 {
+	frameCycles := s.frameCycles()
+	if frameCycles == 0 || s.frameScanlines == 0 {
 		return 0
 	}
-	index := int(cycles * uint64(count) / frameCycles)
-	if index > count {
-		return count
+	line := int(cycles * s.frameScanlines / frameCycles)
+	if s.lineStartCycle(line+1) <= cycles {
+		line++
 	}
-	return index
+	if line >= len(s.lineStates) {
+		return len(s.slotSyncModes)
+	}
+	start := s.lineStartCycle(line)
+	length := s.lineStartCycle(line+1) - start
+	segment := 0
+	if length > 0 {
+		segment = min(int((cycles-start)*shifterRasterSegments/length), shifterRasterSegments-1)
+	}
+	return line*shifterRasterSegments + segment
 }
 
 func (s *Shifter) slotSyncMode(line, segment uint32) byte {

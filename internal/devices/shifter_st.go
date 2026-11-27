@@ -29,6 +29,8 @@ func (stShifterModel) containsRegister(address uint32) bool {
 		shifterRegVideoAddrHigh,
 		shifterRegVideoAddrMid - 1,
 		shifterRegVideoAddrMid,
+		shifterRegVideoAddrLow - 1,
+		shifterRegVideoAddrLow,
 		shifterRegSyncMode,
 		shifterRegResolution:
 		return true
@@ -41,19 +43,15 @@ func (stShifterModel) screenBase(s *Shifter) uint32 {
 	return uint32(s.baseHigh)<<16 | uint32(s.baseMid)<<8
 }
 
-func (stShifterModel) screenBaseFromState(state shifterLineState) uint32 {
-	return uint32(state.baseHigh)<<16 | uint32(state.baseMid)<<8
-}
-
-func (stShifterModel) sameScreenBase(a, b shifterLineState) bool {
-	return a.baseHigh == b.baseHigh && a.baseMid == b.baseMid
-}
-
-func (stShifterModel) lineStrideBytes(_ shifterLineState, mode byte) uint32 {
+func (stShifterModel) lineFetchBytes(_ shifterLineState, mode byte) uint32 {
 	if mode == 2 {
 		return 80
 	}
 	return 160
+}
+
+func (m stShifterModel) lineStrideBytes(state shifterLineState, mode byte) uint32 {
+	return m.lineFetchBytes(state, mode)
 }
 
 func (stShifterModel) fineScroll(shifterLineState) int {

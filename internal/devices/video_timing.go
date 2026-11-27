@@ -20,6 +20,7 @@ type VideoTiming struct {
 	FrameCycles uint64 // machine cycles per display frame (>= 1)
 	Scanlines   uint64 // total scanlines per frame
 	ActiveLines uint64 // displayed scanlines per frame (<= Scanlines)
+	Mono        bool   // monochrome raster
 }
 
 // VideoTimingFor returns the raster timing for cfg, substituting the config
@@ -44,6 +45,7 @@ func VideoTimingFor(cfg *config.Config) VideoTiming {
 	}
 	switch {
 	case mono:
+		t.Mono = true
 		t.Scanlines = VideoMonoScanlines
 		t.ActiveLines = VideoMonoActiveLines
 		return t
@@ -54,4 +56,25 @@ func VideoTimingFor(cfg *config.Config) VideoTiming {
 	}
 	t.ActiveLines = min(VideoActiveLines, t.Scanlines)
 	return t
+}
+
+// LineStartCycle is the frame cycle at which scanline line begins.
+func (t VideoTiming) LineStartCycle(line uint64) uint64 {
+	if t.Scanlines == 0 {
+		return 0
+	}
+	return line * t.FrameCycles / t.Scanlines
+}
+
+// DisplayWindow is the span of frame cycles in which the shifter fetches and
+// shows displayed line line (display enable high). A colour line shows 320 of
+// its 512 cycles after a 56-cycle left border; a monochrome line shows the
+// first 160 of its 224. The window scales with the configured frame timing.
+func (t VideoTiming) DisplayWindow(line uint64) (start, end uint64) {
+	lineStart := t.LineStartCycle(line)
+	length := t.LineStartCycle(line+1) - lineStart
+	if t.Mono {
+		return lineStart, lineStart + length*160/224
+	}
+	return lineStart + length*56/512, lineStart + length*376/512
 }

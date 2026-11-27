@@ -34,6 +34,9 @@ func romMirrors(rom *devices.ROM, direct bool) []*devices.ROMMirror {
 
 func (m *Machine) StepFrame() (bool, error) {
 	m.shifter.BeginFrame()
+	// The CPU may already have run past the previous frame's end; those
+	// cycles belong to this frame.
+	m.frameStartCPUCycles = m.cpu.Cycles() - m.cpuCycleDebt
 	remainingHardwareCycles := m.frameCycles
 	for remainingHardwareCycles > 0 {
 		quantum := m.nextStepQuantum(remainingHardwareCycles)
@@ -51,6 +54,22 @@ func (m *Machine) StepFrame() (bool, error) {
 		m.traceShifterFrame(rendered)
 	}
 	return rendered, nil
+}
+
+// shifterFrameClock is the CPU's position in the current frame in machine
+// cycles. m68kemu charges an instruction's cycles before running it, so during
+// a register access this is the end of the accessing instruction, which is
+// where a 68000 write lands.
+func (m *Machine) shifterFrameClock() uint64 {
+	cycles := m.cpu.Cycles()
+	if cycles < m.frameStartCPUCycles {
+		return 0
+	}
+	elapsed := cycles - m.frameStartCPUCycles
+	if m.cfg.CPUClockHz == 0 || m.cfg.CPUClockHz == m.cfg.ClockHz {
+		return elapsed
+	}
+	return elapsed * m.cfg.ClockHz / m.cfg.CPUClockHz
 }
 
 // runCPU gives the CPU budget cycles. RunCycles only stops on an instruction

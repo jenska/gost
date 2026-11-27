@@ -88,11 +88,12 @@ type MFP struct {
 	serialTxCycles uint64
 	clockRemainder uint64
 
-	eventCountFrameCycles uint64
-	eventCountScanlines   uint64
-	eventCountActiveLines uint64
-	eventCountCycle       uint64
-	eventCountNextLine    uint64
+	// Event-count timers count display-enable falling edges, one at the end
+	// of each displayed line. eventCountNextLine is the 1-based number of the
+	// next such edge in the frame.
+	eventCountTiming   VideoTiming
+	eventCountCycle    uint64
+	eventCountNextLine uint64
 }
 
 func NewMFP(cfg *config.Config) *MFP {
@@ -445,44 +446,29 @@ func (m *MFP) timerCurrentValue(index int) byte {
 }
 
 func (m *MFP) configureEventCountTiming() {
-	timing := VideoTimingFor(m.cfg)
-	m.eventCountFrameCycles = timing.FrameCycles
-	m.eventCountScanlines = timing.Scanlines
-	m.eventCountActiveLines = timing.ActiveLines
+	m.eventCountTiming = VideoTimingFor(m.cfg)
 }
 
 func (m *MFP) advanceEventCountTimers(cycles uint64) {
-	if m.eventCountFrameCycles == 0 || m.eventCountScanlines == 0 {
+	t := m.eventCountTiming
+	if t.FrameCycles == 0 || t.Scanlines == 0 {
 		return
 	}
+	m.eventCountCycle += cycles
 	for {
-		next := m.eventCountNextLineCycle()
-		if m.eventCountCycle < next {
-			step := next - m.eventCountCycle
-			if step > cycles {
-				m.eventCountCycle += cycles
+		if m.eventCountNextLine <= t.ActiveLines {
+			if m.eventCountCycle < m.eventCountEdgeCycle() {
 				return
 			}
-			m.eventCountCycle += step
-			cycles -= step
-		}
-
-		if m.eventCountNextLine >= m.eventCountScanlines {
-			m.eventCountCycle -= m.eventCountFrameCycles
-			m.eventCountNextLine = 1
-			if cycles == 0 {
-				return
-			}
+			m.pulseEventCountTimers()
+			m.eventCountNextLine++
 			continue
 		}
-
-		if m.eventCountNextLine <= m.eventCountActiveLines {
-			m.pulseEventCountTimers()
-		}
-		m.eventCountNextLine++
-		if cycles == 0 {
+		if m.eventCountCycle < t.FrameCycles {
 			return
 		}
+		m.eventCountCycle -= t.FrameCycles
+		m.eventCountNextLine = 1
 	}
 }
 
@@ -502,26 +488,22 @@ func (m *MFP) pulseEventCountTimers() {
 }
 
 func (m *MFP) nextEventCountCycles() (uint64, bool) {
-	if !m.hasEnabledEventCountTimer() || m.eventCountFrameCycles == 0 || m.eventCountScanlines == 0 {
+	t := m.eventCountTiming
+	if !m.hasEnabledEventCountTimer() || t.FrameCycles == 0 || t.Scanlines == 0 {
 		return 0, false
 	}
-	if m.eventCountNextLine <= m.eventCountActiveLines {
-		next := m.eventCountNextLineCycle()
+	if m.eventCountNextLine <= t.ActiveLines {
+		next := m.eventCountEdgeCycle()
 		if m.eventCountCycle >= next {
 			return 1, true
 		}
 		return next - m.eventCountCycle, true
 	}
-
-	firstLine := m.eventCountFrameCycles / m.eventCountScanlines
-	if firstLine == 0 {
-		firstLine = 1
+	if m.eventCountCycle >= t.FrameCycles {
+		return 1, true
 	}
-	cyclesToFrameEnd := m.eventCountFrameCycles - m.eventCountCycle
-	if m.eventCountCycle >= m.eventCountFrameCycles {
-		cyclesToFrameEnd = 1
-	}
-	return cyclesToFrameEnd + firstLine, true
+	_, firstEdge := t.DisplayWindow(0)
+	return t.FrameCycles - m.eventCountCycle + max(firstEdge, 1), true
 }
 
 func (m *MFP) hasEnabledEventCountTimer() bool {
@@ -534,15 +516,14 @@ func (m *MFP) hasEnabledEventCountTimer() bool {
 	return false
 }
 
-func (m *MFP) eventCountNextLineCycle() uint64 {
+// eventCountEdgeCycle is the frame cycle of the next display-enable falling
+// edge: the end of the display window of the line it closes.
+func (m *MFP) eventCountEdgeCycle() uint64 {
 	if m.eventCountNextLine == 0 {
 		m.eventCountNextLine = 1
 	}
-	cycle := m.eventCountNextLine * m.eventCountFrameCycles / m.eventCountScanlines
-	if cycle == 0 {
-		return 1
-	}
-	return cycle
+	_, end := m.eventCountTiming.DisplayWindow(m.eventCountNextLine - 1)
+	return max(end, 1)
 }
 
 func (m *MFP) raiseChannel(channel int) {

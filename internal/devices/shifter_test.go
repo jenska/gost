@@ -446,57 +446,355 @@ func TestShifterMidFramePaletteChangeAffectsSubsequentScanlines(t *testing.T) {
 	}
 }
 
-func TestShifterMidFrameScreenBaseChangeAffectsSubsequentScanlines(t *testing.T) {
+func TestShifterMidFrameScreenBaseWriteShowsFromNextFrame(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewSTShifter(testShifterConfig(16000), ram)
+	shifter := newSplitScreenShifter(t, NewSTShifter, ram)
 
-	const secondFrameBase = 0x008000
-	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, 0x00); err != nil {
+	shifter.BeginFrame()
+	shifter.AdvanceFrame(shifter.frameCycles() / 4)
+	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, (splitScreenSecondBase>>16)&0xFF); err != nil {
+		t.Fatalf("write switched base high: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, (splitScreenSecondBase>>8)&0xFF); err != nil {
+		t.Fatalf("write switched base mid: %v", err)
+	}
+	shifter.AdvanceFrame(shifter.frameCycles())
+	if !shifter.EndFrame() {
+		t.Fatalf("expected end-frame render to report changes")
+	}
+	fb := shifter.FrameBuffer()
+	assertLowResPixel(t, fb, 20, 255, 0, 0, "upper line of the frame the base was written in")
+	assertLowResPixel(t, fb, 180, 255, 0, 0, "lower line of the frame the base was written in")
+
+	shifter.BeginFrame()
+	shifter.AdvanceFrame(shifter.frameCycles())
+	if !shifter.EndFrame() {
+		t.Fatalf("expected second frame to render")
+	}
+	fb = shifter.FrameBuffer()
+	assertLowResPixel(t, fb, 0, 0, 255, 0, "first line of the next frame")
+	assertLowResPixel(t, fb, 180, 0, 255, 0, "lower line of the next frame")
+}
+
+func TestShifterSTEVideoCounterWriteSplitsScreen(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := newSplitScreenShifter(t, NewSTEShifter, ram)
+
+	shifter.BeginFrame()
+	// Load the counter in the border before line 100, as an HBL or Timer B
+	// handler would.
+	shifter.AdvanceFrame(shifter.lineStartCycle(100))
+	writeVideoCounter(t, shifter, splitScreenSecondBase)
+	shifter.AdvanceFrame(shifter.frameCycles())
+	if !shifter.EndFrame() {
+		t.Fatalf("expected end-frame render to report changes")
+	}
+	fb := shifter.FrameBuffer()
+	assertLowResPixel(t, fb, 99, 255, 0, 0, "line before the counter write")
+	assertLowResPixel(t, fb, 100, 0, 255, 0, "line after the counter write")
+	assertLowResPixel(t, fb, 199, 0, 255, 0, "last line")
+	if got, want := shifter.lineAddrs[101], uint32(splitScreenSecondBase+160); got != want {
+		t.Fatalf("line after the split starts at %06x, want %06x", got, want)
+	}
+
+	// The next frame starts from the screen base again.
+	shifter.BeginFrame()
+	shifter.AdvanceFrame(shifter.frameCycles())
+	shifter.EndFrame()
+	assertLowResPixel(t, shifter.FrameBuffer(), 180, 255, 0, 0, "next frame")
+}
+
+func TestShifterSTEVideoCounterWriteDuringFetchContinuesFromNewAddress(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := newSplitScreenShifter(t, NewSTEShifter, ram)
+
+	shifter.BeginFrame()
+	start, end := shifter.lineFetchWindow(50)
+	shifter.AdvanceFrame((start + end) / 2)
+	fetched := shifter.lineBytesFetched(50, start, end)
+	if fetched == 0 || fetched >= 160 {
+		t.Fatalf("expected a partly fetched line, got %d bytes", fetched)
+	}
+	writeVideoCounter(t, shifter, splitScreenSecondBase)
+	shifter.AdvanceFrame(shifter.frameCycles())
+	shifter.EndFrame()
+
+	if got, want := shifter.lineAddrs[50], uint32(50*160); got != want {
+		t.Fatalf("line 50 starts at %06x, want %06x", got, want)
+	}
+	if got, want := shifter.lineAddrs[51], splitScreenSecondBase+160-fetched; got != want {
+		t.Fatalf("line 51 starts at %06x, want %06x", got, want)
+	}
+}
+
+func TestShifterSTIgnoresVideoCounterWrites(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := newSplitScreenShifter(t, NewSTShifter, ram)
+
+	shifter.BeginFrame()
+	shifter.AdvanceFrame(shifter.lineStartCycle(100))
+	writeVideoCounter(t, shifter, splitScreenSecondBase)
+	if got, want := readVideoCounter(t, shifter), uint32(100*160); got != want {
+		t.Fatalf("video counter after ST write: got %06x want %06x", got, want)
+	}
+	shifter.AdvanceFrame(shifter.frameCycles())
+	shifter.EndFrame()
+	assertLowResPixel(t, shifter.FrameBuffer(), 180, 255, 0, 0, "line after ignored write")
+}
+
+func TestShifterVideoCounterReadbackTracksRaster(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := newSplitScreenShifter(t, NewSTShifter, ram)
+	const base = 0x010000
+	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, base>>16); err != nil {
 		t.Fatalf("write base high: %v", err)
 	}
-	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, 0x00); err != nil {
-		t.Fatalf("write base mid: %v", err)
+
+	shifter.BeginFrame()
+	if got := readVideoCounter(t, shifter); got != base {
+		t.Fatalf("counter at frame start: got %06x want %06x", got, base)
 	}
-	if err := shifter.Write(cpu.Word, paletteBase+2, 0x0700); err != nil {
+	shifter.AdvanceFrame(shifter.lineStartCycle(100))
+	if got, want := readVideoCounter(t, shifter), uint32(base+100*160); got != want {
+		t.Fatalf("counter before line 100: got %06x want %06x", got, want)
+	}
+
+	start, end := shifter.lineFetchWindow(100)
+	shifter.AdvanceFrame((start+end)/2 - shifter.frameCyclePos)
+	mid := readVideoCounter(t, shifter)
+	if mid <= base+100*160 || mid >= base+101*160 || mid&1 != 0 {
+		t.Fatalf("counter inside line 100 fetch: got %06x, want an even address within the line", mid)
+	}
+
+	shifter.AdvanceFrame(end - shifter.frameCyclePos)
+	if got, want := readVideoCounter(t, shifter), uint32(base+101*160); got != want {
+		t.Fatalf("counter after line 100 fetch: got %06x want %06x", got, want)
+	}
+
+	shifter.AdvanceFrame(shifter.lineStartCycle(250) - shifter.frameCyclePos)
+	if got, want := readVideoCounter(t, shifter), uint32(base+200*160); got != want {
+		t.Fatalf("counter in the lower border: got %06x want %06x", got, want)
+	}
+}
+
+func TestShifterLineTakesRegistersWrittenBeforeItsFetch(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := newSplitScreenShifter(t, NewSTShifter, ram)
+
+	shifter.BeginFrame()
+	shifter.AdvanceFrame(shifter.lineStartCycle(100))
+	if err := shifter.Write(cpu.Word, paletteBase+2, 0x0007); err != nil {
+		t.Fatalf("write palette: %v", err)
+	}
+	shifter.AdvanceFrame(shifter.frameCycles())
+	shifter.EndFrame()
+
+	fb := shifter.FrameBuffer()
+	assertLowResPixel(t, fb, 99, 255, 0, 0, "line before the palette write")
+	assertLowResPixel(t, fb, 100, 0, 0, 255, "line after the palette write")
+}
+
+func TestShifterFrameClockPlacesPaletteWriteWithinLine(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := newSplitScreenShifter(t, NewSTShifter, ram)
+	var now uint64
+	shifter.SetFrameClock(func() uint64 { return now })
+
+	// One AdvanceFrame step covers the whole frame, as a CPU quantum would
+	// cover several lines; the clock places the write in the middle of line 10.
+	shifter.BeginFrame()
+	start, end := shifter.lineFetchWindow(10)
+	now = (start + end) / 2
+	if err := shifter.Write(cpu.Word, paletteBase+2, 0x000F); err != nil {
+		t.Fatalf("write palette: %v", err)
+	}
+	shifter.AdvanceFrame(shifter.frameCycles())
+	shifter.EndFrame()
+
+	fb := shifter.FrameBuffer()
+	pixel := func(x, y int) []byte { return fb[(y*320+x)*4 : (y*320+x)*4+3] }
+	if got := pixel(100, 10); got[0] != 255 || got[2] != 0 {
+		t.Fatalf("left half of line 10: got %v, want red", got)
+	}
+	if got := pixel(220, 10); got[0] != 0 || got[2] != 255 {
+		t.Fatalf("right half of line 10: got %v, want blue", got)
+	}
+	if got := pixel(0, 11); got[0] != 0 || got[2] != 255 {
+		t.Fatalf("line 11: got %v, want blue", got)
+	}
+	if got := pixel(319, 9); got[0] != 255 || got[2] != 0 {
+		t.Fatalf("line 9: got %v, want red", got)
+	}
+}
+
+func TestShifterFrameClockResolvesVideoCounterAtAccessCycle(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := newSplitScreenShifter(t, NewSTShifter, ram)
+	var now uint64
+	shifter.SetFrameClock(func() uint64 { return now })
+
+	shifter.BeginFrame()
+	_, end := shifter.lineFetchWindow(41)
+	now = end
+	if got, want := readVideoCounter(t, shifter), uint32(42*160); got != want {
+		t.Fatalf("counter after line 41: got %06x want %06x", got, want)
+	}
+	if shifter.frameCyclePos != now {
+		t.Fatalf("raster at %d, want the access cycle %d", shifter.frameCyclePos, now)
+	}
+	// AdvanceFrame never moves the raster back behind the CPU.
+	shifter.AdvanceFrame(10)
+	if shifter.frameCyclePos != now {
+		t.Fatalf("raster moved to %d after a short AdvanceFrame, want %d", shifter.frameCyclePos, now)
+	}
+}
+
+func TestShifterSTELineOffsetWriteDuringFetchAppliesToThatLine(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	shifter := newSplitScreenShifter(t, NewSTEShifter, ram)
+
+	shifter.BeginFrame()
+	start, end := shifter.lineFetchWindow(20)
+	shifter.AdvanceFrame((start + end) / 2)
+	if err := shifter.Write(cpu.Byte, shifterRegLineOffset, 4); err != nil {
+		t.Fatalf("write line offset: %v", err)
+	}
+	shifter.AdvanceFrame(shifter.frameCycles())
+	shifter.EndFrame()
+
+	if got, want := shifter.lineAddrs[20], uint32(20*160); got != want {
+		t.Fatalf("line 20 starts at %06x, want %06x", got, want)
+	}
+	if got, want := shifter.lineAddrs[21], uint32(21*160+8); got != want {
+		t.Fatalf("line 21 starts at %06x, want %06x", got, want)
+	}
+	if got, want := shifter.lineAddrs[22], uint32(22*160+16); got != want {
+		t.Fatalf("line 22 starts at %06x, want %06x", got, want)
+	}
+}
+
+func TestShifterSTEHorizontalScrollPrefetchesOneWordPerPlane(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		resolution uint32
+		stride     uint32
+	}{{"low", 0, 168}, {"medium", 1, 164}, {"high", 2, 82}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ram := NewRAM(0, 1024*1024)
+			shifter := NewSTEShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
+			if err := shifter.Write(cpu.Byte, shifterRegResolution, tc.resolution); err != nil {
+				t.Fatalf("write resolution: %v", err)
+			}
+			if err := shifter.Write(cpu.Byte, shifterRegFineScroll, 3); err != nil {
+				t.Fatalf("write fine scroll: %v", err)
+			}
+			shifter.BeginFrame()
+			shifter.AdvanceFrame(shifter.frameCycles())
+			shifter.EndFrame()
+			if got := shifter.lineAddrs[1]; got != tc.stride {
+				t.Fatalf("line 1 starts at %d, want %d", got, tc.stride)
+			}
+			if got, want := shifter.videoCounter, uint32(len(shifter.lineAddrs))*tc.stride; got != want {
+				t.Fatalf("counter after frame: got %d want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestShifterSTEHighResolutionHorizontalScrollShiftsPixels(t *testing.T) {
+	ram := NewRAM(0, 1024*1024)
+	cfg := testShifterConfig(defaultShifterClockHz / defaultShifterFrameHz)
+	cfg.ColorMonitor = false
+	shifter := NewSTEShifter(cfg, ram)
+	if err := shifter.Write(cpu.Byte, shifterRegResolution, 2); err != nil {
+		t.Fatalf("write resolution: %v", err)
+	}
+	if err := shifter.Write(cpu.Byte, shifterRegFineScroll, 4); err != nil {
+		t.Fatalf("write fine scroll: %v", err)
+	}
+	// First word of line 0: only pixel 4 set, which a scroll of 4 moves to x=0.
+	if err := ram.LoadAt(0, []byte{0x08, 0x00}); err != nil {
+		t.Fatalf("seed line: %v", err)
+	}
+	shifter.BeginFrame()
+	shifter.AdvanceFrame(shifter.frameCycles())
+	shifter.EndFrame()
+
+	fb := shifter.FrameBuffer()
+	if got := fb[0]; got != 0 {
+		t.Fatalf("pixel 0: got %d, want black", got)
+	}
+	if got := fb[4*4]; got != 0xFF {
+		t.Fatalf("pixel 4: got %d, want white", got)
+	}
+}
+
+const splitScreenSecondBase = 0x008000
+
+// newSplitScreenShifter returns a shifter on real 50 Hz frame timing, showing a
+// solid red frame at address 0 and a solid green one at splitScreenSecondBase.
+func newSplitScreenShifter(t *testing.T, newShifter func(*config.Config, *RAM) *Shifter, ram *RAM) *Shifter {
+	t.Helper()
+	shifter := newShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
+	if err := shifter.Write(cpu.Word, paletteBase+2, 0x0F00); err != nil {
 		t.Fatalf("write red palette: %v", err)
 	}
-	if err := shifter.Write(cpu.Word, paletteBase+4, 0x0070); err != nil {
+	if err := shifter.Write(cpu.Word, paletteBase+4, 0x00F0); err != nil {
 		t.Fatalf("write green palette: %v", err)
 	}
 	if err := ram.LoadAt(0, solidIndex1LowResFrame()); err != nil {
 		t.Fatalf("seed first frame: %v", err)
 	}
-	if err := ram.LoadAt(secondFrameBase, solidIndex2LowResFrame()); err != nil {
+	if err := ram.LoadAt(splitScreenSecondBase, solidIndex2LowResFrame()); err != nil {
 		t.Fatalf("seed second frame: %v", err)
 	}
+	return shifter
+}
 
-	shifter.BeginFrame()
-	shifter.AdvanceFrame(shifter.frameCycles() / 2)
-	if err := shifter.Write(cpu.Byte, shifterRegBaseHigh, (secondFrameBase>>16)&0xFF); err != nil {
-		t.Fatalf("write switched base high: %v", err)
+func writeVideoCounter(t *testing.T, shifter *Shifter, address uint32) {
+	t.Helper()
+	for _, reg := range []struct {
+		addr  uint32
+		shift uint
+	}{{shifterRegVideoAddrHigh, 16}, {shifterRegVideoAddrMid, 8}, {shifterRegVideoAddrLow, 0}} {
+		if err := shifter.Write(cpu.Byte, reg.addr, (address>>reg.shift)&0xFF); err != nil {
+			t.Fatalf("write video counter %06x: %v", reg.addr, err)
+		}
 	}
-	if err := shifter.Write(cpu.Byte, shifterRegBaseMid, (secondFrameBase>>8)&0xFF); err != nil {
-		t.Fatalf("write switched base mid: %v", err)
-	}
-	shifter.AdvanceFrame(shifter.frameCycles() - shifter.frameCycles()/2)
-	if !shifter.EndFrame() {
-		t.Fatalf("expected end-frame render to report changes")
-	}
+}
 
-	fb := shifter.FrameBuffer()
-	top := fb[(20*320+0)*4 : (20*320+0)*4+4]
-	if top[0] != 255 || top[1] != 0 || top[2] != 0 {
-		t.Fatalf("expected upper scanlines to use original base, got %v", top)
+func readVideoCounter(t *testing.T, shifter *Shifter) uint32 {
+	t.Helper()
+	var counter uint32
+	for _, addr := range []uint32{shifterRegVideoAddrHigh, shifterRegVideoAddrMid, shifterRegVideoAddrLow} {
+		value, err := shifter.Read(cpu.Byte, addr)
+		if err != nil {
+			t.Fatalf("read video counter %06x: %v", addr, err)
+		}
+		counter = counter<<8 | value
 	}
-	bottom := fb[(180*320+0)*4 : (180*320+0)*4+4]
-	if bottom[0] != 0 || bottom[1] != 255 || bottom[2] != 0 {
-		t.Fatalf("expected lower scanlines to use switched base, got %v", bottom)
+	return counter
+}
+
+func assertLowResPixel(t *testing.T, fb []byte, line int, r, g, b byte, what string) {
+	t.Helper()
+	offset := line * 320 * 4
+	if got := fb[offset : offset+3]; got[0] != r || got[1] != g || got[2] != b {
+		t.Fatalf("%s (line %d): got %v want [%d %d %d]", what, line, got, r, g, b)
 	}
+}
+
+// rasterSegmentCycle is the first frame cycle inside the given raster segment
+// of a displayed line.
+func rasterSegmentCycle(shifter *Shifter, line, segment int) uint64 {
+	start := shifter.lineStartCycle(line)
+	length := shifter.lineStartCycle(line+1) - start
+	return start + (length*uint64(segment)+shifterRasterSegments-1)/shifterRasterSegments
 }
 
 func TestShifterMidFrameBlankSegmentsCreateHorizontalBorderBand(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewSTShifter(testShifterConfig(16000), ram)
+	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
 
 	if err := shifter.Write(cpu.Word, paletteBase, 0x0000); err != nil {
 		t.Fatalf("write border palette: %v", err)
@@ -508,21 +806,14 @@ func TestShifterMidFrameBlankSegmentsCreateHorizontalBorderBand(t *testing.T) {
 		t.Fatalf("seed video frame: %v", err)
 	}
 
-	lineCycles := shifter.frameCycles() / 200
-	if lineCycles == 0 {
-		lineCycles = 1
-	}
-	segCycles := lineCycles / shifterRasterSegments
-	if segCycles == 0 {
-		segCycles = 1
-	}
-
+	// A sync mode write applies to the raster segments the frame then advances
+	// through: blank during segments 2 and 3 of the first line.
 	shifter.BeginFrame()
-	shifter.AdvanceFrame(segCycles * 2)
+	shifter.AdvanceFrame(rasterSegmentCycle(shifter, 0, 1))
 	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, shifterSyncBlankDisplayBit); err != nil {
 		t.Fatalf("blank display segment: %v", err)
 	}
-	shifter.AdvanceFrame(segCycles * 2)
+	shifter.AdvanceFrame(rasterSegmentCycle(shifter, 0, 3) - shifter.frameCyclePos)
 	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, 0x00); err != nil {
 		t.Fatalf("re-enable display segment: %v", err)
 	}
@@ -553,7 +844,7 @@ func TestShifterMidFrameBlankSegmentsCreateHorizontalBorderBand(t *testing.T) {
 
 func TestShifterFineBlankPulseAffectsOnlyNarrowHorizontalSpan(t *testing.T) {
 	ram := NewRAM(0, 1024*1024)
-	shifter := NewSTShifter(testShifterConfig(16000), ram)
+	shifter := NewSTShifter(testShifterConfig(defaultShifterClockHz/defaultShifterFrameHz), ram)
 
 	if err := shifter.Write(cpu.Word, paletteBase, 0x0000); err != nil {
 		t.Fatalf("write border palette: %v", err)
@@ -565,21 +856,13 @@ func TestShifterFineBlankPulseAffectsOnlyNarrowHorizontalSpan(t *testing.T) {
 		t.Fatalf("seed video frame: %v", err)
 	}
 
-	lineCycles := shifter.frameCycles() / 200
-	if lineCycles == 0 {
-		lineCycles = 1
-	}
-	segCycles := lineCycles / shifterRasterSegments
-	if segCycles == 0 {
-		segCycles = 1
-	}
-
+	// Blank for raster segment 1 of the first line only.
 	shifter.BeginFrame()
-	shifter.AdvanceFrame(segCycles)
+	shifter.AdvanceFrame(1)
 	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, shifterSyncBlankDisplayBit); err != nil {
 		t.Fatalf("blank display segment: %v", err)
 	}
-	shifter.AdvanceFrame(segCycles)
+	shifter.AdvanceFrame(rasterSegmentCycle(shifter, 0, 1) - shifter.frameCyclePos)
 	if err := shifter.Write(cpu.Byte, shifterRegSyncMode, 0x00); err != nil {
 		t.Fatalf("re-enable display segment: %v", err)
 	}

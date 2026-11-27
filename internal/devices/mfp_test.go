@@ -941,3 +941,42 @@ func configureTimedUSART(t *testing.T, mfp *MFP) {
 		t.Fatalf("enable transmitter: %v", err)
 	}
 }
+
+func TestMFPTimerBEventCountsAtEndOfEachDisplayedLine(t *testing.T) {
+	cfg := &config.Config{ClockHz: 8_000_000, FrameHz: 50, ColorMonitor: true}
+	mfp := NewMFP(cfg)
+	if err := mfp.Write(1, mfpBase+mfpIERA, 0x01); err != nil {
+		t.Fatalf("write interrupt enable: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTBDR, 1); err != nil {
+		t.Fatalf("write timer b data: %v", err)
+	}
+	if err := mfp.Write(1, mfpBase+mfpTBCR, 0x08); err != nil {
+		t.Fatalf("write timer b event-count control: %v", err)
+	}
+	timerBPending := func() bool {
+		value, err := mfp.Read(1, mfpBase+mfpIPRA)
+		if err != nil {
+			t.Fatalf("read pending register: %v", err)
+		}
+		return value&0x01 != 0
+	}
+
+	// Line 0 shows from about cycle 56 to 376 of its ~512; Timer B counts
+	// the end.
+	_, displayEnd := VideoTimingFor(cfg).DisplayWindow(0)
+	if displayEnd < 370 || displayEnd > 376 {
+		t.Fatalf("display end of line 0 = %d, want about 376", displayEnd)
+	}
+	if next, ok := mfp.NextEventCycles(); !ok || next != displayEnd {
+		t.Fatalf("next event = %d (%v), want %d", next, ok, displayEnd)
+	}
+	mfp.Advance(displayEnd - 1)
+	if timerBPending() {
+		t.Fatalf("timer b fired before the end of line 0's display")
+	}
+	mfp.Advance(1)
+	if !timerBPending() {
+		t.Fatalf("timer b did not fire at the end of line 0's display")
+	}
+}

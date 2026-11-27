@@ -162,6 +162,8 @@ func newMachine(cfg *config.Config, romImage []byte, cartridgeImage []byte, opts
 		traceWriter:  io.Discard,
 	}
 
+	shifter.SetFrameClock(machine.shifterFrameClock)
+
 	if err := machine.Reset(); err != nil {
 		return nil, err
 	}
